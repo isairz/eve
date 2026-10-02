@@ -15,8 +15,7 @@ import {
   hydrateSandboxAttachments,
   moveToolResultFilesToUserMessages,
 } from "#harness/attachment-staging.js";
-import { activeTurnId } from "#harness/active-turn-id.js";
-import { advanceStep, emitStreamContent } from "#harness/emission.js";
+import { emitStreamContent } from "#harness/emission.js";
 import { FINAL_OUTPUT_TOOL_NAME } from "#harness/final-output.js";
 import type { GenerationSteering } from "#harness/generation-steering.js";
 import { interruptStreamOnFailure } from "#harness/interruptible-stream.js";
@@ -33,6 +32,7 @@ import {
 } from "#harness/prompt-cache.js";
 import { estimateRequestEnvelope } from "#harness/request-envelope.js";
 import { summarizeKnownError } from "#harness/semantic-errors/index.js";
+import { activeTurnId } from "#harness/session-machine/view.js";
 import type { Step } from "#harness/step/context.js";
 import {
   compactPrompt,
@@ -55,7 +55,7 @@ import {
   setTurnUsageState,
   type TokenUsageDelta,
 } from "#harness/turn-tag-state.js";
-import type { HarnessEmitFn, StepResult } from "#harness/types.js";
+import type { StepResult } from "#harness/types.js";
 import type { InstrumentationAttempt } from "#instrumentation/runtime.js";
 import { resolveInstalledPackageInfo } from "#internal/application/package.js";
 import { createLogger, logError } from "#internal/logging.js";
@@ -84,7 +84,7 @@ const eveVersion = resolveInstalledPackageInfo().version;
 const log = createLogger("harness.tool-loop");
 
 /** How one attempt differs from the step's first: what recovery and retries change. */
-interface ModelCallOptions {
+export interface ModelCallOptions {
   readonly disabledProviderTools?: ReadonlySet<string>;
   readonly extraSystemNote?: string;
   readonly retryReason?: "empty-response";
@@ -193,9 +193,11 @@ export class ModelCaller {
         usage: this.interruptedUsage,
       }),
     );
-    step.session = { ...step.session, history: [...this.request.history] };
-    step.moveTo(advanceStep(step.position()));
-    return { next: step.runStep, session: step.session, steered: true };
+    return {
+      next: step.runStep,
+      session: { ...step.session, history: [...this.request.history] },
+      steered: true,
+    };
   }
 
   /** The step's result counted its usage, so an interrupted call's usage no longer applies. */
@@ -252,11 +254,11 @@ export class ModelCaller {
         abortSignal: config.abortSignal,
         auth: step.ctx?.get(AuthKey) ?? null,
         emissionState: step.position(),
-        emit: step.emit,
         historyProjector: config.historyProjector,
         messages: [...prompt.messages],
         model: this.input.model,
         promptMessages: withClientContext(prompt),
+        publish: step.publish,
         requestEnvelopeTokens: this.requestEnvelopeTokens,
         resolveModel: config.resolveModel,
         runtimeIdentity: config.runtimeIdentity,
@@ -372,7 +374,7 @@ export class ModelCaller {
       const result =
         step.emit === undefined
           ? await this.generate(agent, callMessages, hooks.stepResult)
-          : await this.stream(step.emit, agent, callMessages, hooks.stepResult, tools);
+          : await this.stream(agent, callMessages, hooks.stepResult, tools);
       await attempt?.complete();
       return result;
     } catch (error) {
@@ -385,7 +387,6 @@ export class ModelCaller {
 
   /** Streams the call, publishing its content as it arrives. */
   private async stream(
-    emit: HarnessEmitFn,
     agent: ToolLoopAgent,
     messages: ModelMessage[],
     stepResultPromise: Promise<HarnessStepResult>,
@@ -402,7 +403,7 @@ export class ModelCaller {
       inlineAuthorizationResults,
       trailingInlineToolResultParts,
     } = await emitStreamContent(
-      emit,
+      step.publish,
       step.position(),
       interruptStreamOnFailure(streamResult.fullStream, generation.signal),
       {
@@ -424,7 +425,7 @@ export class ModelCaller {
     );
     const skipped = answerSkippedToolCalls(stepResult, tools.effectiveTools);
     await emitStepActions(
-      emit,
+      step.publish,
       step.position(),
       skipped.length === 0
         ? stepResult
