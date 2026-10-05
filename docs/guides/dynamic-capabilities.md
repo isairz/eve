@@ -226,6 +226,12 @@ and parks the session, so a later message can retry after the dependency
 recovers. The failed lifecycle does not rebuild the registry, so a static
 connection shadowed by the dynamic result cannot reappear as a fallback.
 
+Recovery needs another message. eve does not keep the input from the failed
+turn or replay it, so the caller must send it again once the dependency is
+back. This applies to the first message of a session too. A scheduled run
+whose resolver fails is not retried; the session stays idle until the next
+scheduled run or message arrives.
+
 eve may run the active session and turn handlers again when a parked turn
 resumes or a durable step retries. This rebuilds live auth, header, approval,
 and provided-argument callbacks without serializing them into workflow state.

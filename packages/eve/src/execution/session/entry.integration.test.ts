@@ -398,6 +398,67 @@ describe("workflowEntry integration", () => {
     });
   });
 
+  it("parks a dynamic connection failure on the first message and accepts the next message", async () => {
+    let shouldFail = true;
+    const continuationToken = "http:workflow-entry-dynamic-connection-first-failure";
+    const runtime = await createTestRuntime({
+      agent: { name: "workflow-entry-dynamic-connection-first-failure" },
+      modules: [
+        {
+          logicalPath: "connections/accounts.ts",
+          loadNamespace: async () => ({
+            default: defineDynamic({
+              events: {
+                "session.started": () => {
+                  if (shouldFail) throw new Error("account store unavailable");
+                  return null;
+                },
+              },
+            }),
+          }),
+        },
+      ],
+    });
+
+    await runtime.run(async () => {
+      const run = await start(workflowEntry, [
+        {
+          kind: "initial",
+          ownerDeploymentId: "dpl_inline",
+          input: { message: "first message" },
+          serializedContext: buildSerializedContext({
+            channelKind: "http",
+            continuationToken,
+          }),
+        },
+      ]);
+      const stream = captureTurnEvents(run);
+      const inboxToken = sessionInboxHookToken(continuationToken);
+
+      try {
+        const failedTurn = await stream.nextTurn();
+        expect(failedTurn.at(-1)?.type).toBe("session.waiting");
+        expect(filterEventsByType(failedTurn, "turn.failed")).toHaveLength(1);
+        expect(filterEventsByType(failedTurn, "session.failed")).toHaveLength(0);
+
+        await waitForHook({ runId: run.runId }, { token: inboxToken });
+        shouldFail = false;
+        await resumeHook(inboxToken, {
+          kind: "send",
+          payload: { message: "recovered message" },
+        });
+
+        const recoveredTurn = await stream.nextTurn();
+        expect(recoveredTurn.at(-1)?.type).toBe("session.waiting");
+        expect(filterEventsByType(recoveredTurn, "turn.failed")).toHaveLength(0);
+        expect(filterEventsByType(recoveredTurn, "session.failed")).toHaveLength(0);
+      } finally {
+        stream.dispose();
+        await run.cancel();
+      }
+    });
+  });
+
   it("publishes the session ID as the waiting address for an ID-only session", async () => {
     const runtime = await createTestRuntime({ agent: { name: "workflow-entry-id-only" } });
 
