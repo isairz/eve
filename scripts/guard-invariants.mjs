@@ -139,6 +139,22 @@
  *   rule 52 — Human input decides in pure rules and does I/O only in its
  *             effects and a closed allowlist of live-runtime adapters. Rules
  *             never import effects or runtime I/O dependencies.
+ *   rule 53 — Requests, approvals, authorizations, and input waits are
+ *             reported only by the session machine and human input. Outside
+ *             `harness/session-machine/` and `harness/hitl/`, nothing builds
+ *             an `input.requested`/`input.resolved`,
+ *             `authorization.required`/`authorization.completed`,
+ *             `approval.candidate`/`approval.settled`, or a `turn.waiting`
+ *             on input, with a builder or by hand. Runtime waits
+ *             (`on: "tasks"`) and events forwarded with their own data are
+ *             fine. Its cases are tested in `guard-hitl.test.mjs`.
+ *   rule 54 — Workflow bodies read checkpoints without hydrating them.
+ *             `execution/durable-session-read.ts` imports only types, and
+ *             `execution/session/active-turn.ts` never imports the store,
+ *             `session-machine/hydrate`, or `hitl/migration`: the migration
+ *             would pull human input and its schemas into the workflow
+ *             bundle. Step code hydrates through the store's reader. Its
+ *             cases are tested in `guard-hitl.test.mjs`.
  *
  * Baselines for rules with pre-existing violations live in
  * `guard-invariants-baseline.json`. Counts and allowlists in that file
@@ -150,6 +166,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { load as loadYaml } from "js-yaml";
 import { checkExtensionCapabilityContracts } from "./extension-capability-contracts.mjs";
+import { checkHumanInputBoundary, checkWorkflowCheckpointReader } from "./guard-hitl.mjs";
 
 const require = createRequire(import.meta.url);
 const extractorRequire = createRequire(require.resolve("@microsoft/api-extractor/package.json"));
@@ -261,6 +278,8 @@ function isTsLike(relPath) {
  *   rule50: Violation[];
  *   rule51: Violation[];
  *   rule52: Violation[];
+ *   rule53: Violation[];
+ *   rule54: Violation[];
  *   symlinks: string[];
  * }} state
  */
@@ -297,6 +316,8 @@ async function scanRepo(state) {
     checkRule50(posix, lines, state.rule50);
     checkRule51(posix, lines, state.rule51);
     checkRule52(posix, lines, state.rule52);
+    checkRule53(posix, lines, state.rule53);
+    checkRule54(posix, content, state.rule54);
   }
 }
 
@@ -574,6 +595,24 @@ function checkRule52(posix, lines, violations) {
         "imports runtime I/O or effects from a human-input rules module. Decide in pure rules; apply I/O in the explicitly allowlisted live-runtime adapters.",
     });
   });
+}
+
+// ---------- Rule 53: only the session machine and human input report human input ----------
+
+/** @param {string} posix @param {string[]} lines @param {Violation[]} violations */
+function checkRule53(posix, lines, violations) {
+  for (const { line, message } of checkHumanInputBoundary(posix, lines.join("\n"))) {
+    violations.push({ rule: 53, file: posix, line, message });
+  }
+}
+
+// ---------- Rule 54: workflow-side checkpoint readers never hydrate ----------
+
+/** @param {string} posix @param {string} content @param {Violation[]} violations */
+function checkRule54(posix, content, violations) {
+  for (const { line, message } of checkWorkflowCheckpointReader(posix, content)) {
+    violations.push({ rule: 54, file: posix, line, message });
+  }
 }
 
 // ---------- Rule 51: the session machine owns lifecycle ----------
@@ -1755,6 +1794,8 @@ async function main() {
     rule50: /** @type {Violation[]} */ ([]),
     rule51: /** @type {Violation[]} */ ([]),
     rule52: /** @type {Violation[]} */ ([]),
+    rule53: /** @type {Violation[]} */ ([]),
+    rule54: /** @type {Violation[]} */ ([]),
     symlinks: /** @type {string[]} */ ([]),
   };
 
@@ -1873,6 +1914,8 @@ async function main() {
   violations.push(...state.rule50);
   violations.push(...state.rule51);
   violations.push(...state.rule52);
+  violations.push(...state.rule53);
+  violations.push(...state.rule54);
 
   if (violations.length === 0) {
     process.stdout.write("[eve:guard:invariants] ok — all mechanical lints passed.\n");
