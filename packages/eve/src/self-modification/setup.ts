@@ -16,7 +16,7 @@ import {
   isGitHubOwner,
   isGitHubRepositoryName,
   isRepositoryRelativeDirectory,
-} from "./deployed/config-schema.js";
+} from "./remote/config-schema.js";
 import { renderLocalSelfModificationExtension } from "./scaffold.js";
 
 export const SELF_MODIFICATION_CONFIG_PATH = "agent/extensions/self-modification/extension.ts";
