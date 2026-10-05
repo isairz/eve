@@ -91,6 +91,46 @@ export function resolveTextInput(
   });
 }
 
+/**
+ * Turns a typed reply into responses to the only pending batch's response-policy approvals.
+ * The approval coordinator then authorizes them like a press by the person who typed.
+ * `resolveTextInput` answers the batch's other requests, and never a policy approval.
+ */
+export function resolveTypedPolicyApprovals(
+  batches: readonly Pick<SuspendedStep, "requests" | "responseAuthRequiredRequestIds">[],
+  stepInput: StepInput | undefined,
+): StepInput | undefined {
+  const [batch] = batches;
+  const text = readAnswerText(stepInput);
+  if (
+    batches.length !== 1 ||
+    batch === undefined ||
+    stepInput === undefined ||
+    text === undefined
+  ) {
+    return stepInput;
+  }
+  const policyRequestIds = new Set(batch.responseAuthRequiredRequestIds ?? []);
+  if (policyRequestIds.size === 0) return stepInput;
+  const batchRequestIds = new Set(batch.requests.map((request) => request.requestId));
+  const delivered = [
+    ...(stepInput.inputResponses ?? []),
+    ...(stepInput.attributedInputResponses ?? []).map(({ response }) => response),
+  ];
+  if (delivered.some((response) => batchRequestIds.has(response.requestId))) return stepInput;
+  const responses = resolveTextToResponses(
+    text,
+    batch.requests.filter((request) => policyRequestIds.has(request.requestId)),
+  );
+  if (responses.length === 0) return stepInput;
+  return {
+    ...stepInput,
+    context: undefined,
+    inputResponses: [...(stepInput.inputResponses ?? []), ...responses],
+    message: undefined,
+  };
+}
+
 export function canonicalize(responses: readonly InputResponse[]): readonly InputResponse[] {
   const byRequestId = new Map<string, InputResponse>();
   for (const response of responses) byRequestId.set(response.requestId, response);
