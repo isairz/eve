@@ -20,7 +20,7 @@ const toolStubsSchema = z
   )
   .max(100);
 
-/** Validates the wire contract before admitting a stubbed session. */
+/** Validates stubs before creating the session. */
 export function parseToolStubs(value: unknown): readonly ToolStub[] {
   boundStubConfiguration(value);
   const rules = toolStubsSchema.parse(parseJsonValue(value));
@@ -38,7 +38,10 @@ export function parseToolStubs(value: unknown): readonly ToolStub[] {
   return rules;
 }
 
-/** Deterministic playback; its owner supplies durable, serial call admission. */
+/**
+ * Selects stub responses and advances their sequences.
+ * The surrounding workflow orders calls and restores progress on replay.
+ */
 export class StubPlayback {
   private readonly rules;
   private readonly results = new Map<string, StubResult>();
