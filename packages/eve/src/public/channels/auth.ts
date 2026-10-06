@@ -510,7 +510,10 @@ export class ForbiddenError extends Error {
 }
 
 export interface AuthResult extends SessionAuthContext {
-  /** Server-granted permission to create stubbed sessions; denied unless explicitly true. */
+  /**
+   * Set to true to let this authenticated caller create sessions with tool stubs.
+   * Callers without this permission cannot supply stubs.
+   */
   readonly allowToolStubs?: boolean;
 }
 
@@ -867,7 +870,7 @@ const LOCAL_DEV_SESSION_AUTH_CONTEXT: SessionAuthContext = {
 const VERCEL_OIDC_AUDIENCE_PREFIX = "https://vercel.com/";
 
 /**
- * Options for the low-level {@link verifyVercelOidc} verifier.
+ * Options for verifying a Vercel OIDC token with {@link verifyVercelOidc}.
  */
 export interface VerifyVercelOidcOptions {
   /**
@@ -1091,7 +1094,10 @@ function assertVercelSubjectSegment(field: "teamSlug" | "projectName", value: st
 }
 
 export interface VercelOidcOptions extends Omit<VerifyVercelOidcOptions, "subjects"> {
-  /** Additional accepted subjects. Only explicitly granting entries permit stubs. */
+  /**
+   * Additional token subjects allowed to authenticate.
+   * To allow stubs, use { subject, allowToolStubs: true } for that subject.
+   */
   readonly subjects?: readonly (
     | string
     | {

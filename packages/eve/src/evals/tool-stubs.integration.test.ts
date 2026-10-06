@@ -49,7 +49,7 @@ it("fails a recovered eval through durable stub verification", async () => {
   }).routes!.find((route) => route.path.endsWith("/stubs"))!;
   await runtime.run(async () => {
     let run: Run<unknown> | undefined;
-    // In-memory HTTP transport; workflow execution and the status route are real.
+    // Simulate HTTP requests in memory while running the real workflow and status route.
     const originalFetch = globalThis.fetch;
     const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (request, init) => {
       const url = new URL(request instanceof Request ? request.url : String(request));
