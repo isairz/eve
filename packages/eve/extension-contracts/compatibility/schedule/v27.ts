@@ -9,7 +9,7 @@ const updates = defineChannel({
 });
 
 // Epoch 27 reads session streams with only a start index. Epoch 28 adds
-// `follow` for bounded historical reads.
+// `follow` for bounded historical reads and `predecessor` to `session.started`.
 export default defineSchedule({
   cron: "0 9 * * *",
   async run({ to, waitUntil, appAuth }) {

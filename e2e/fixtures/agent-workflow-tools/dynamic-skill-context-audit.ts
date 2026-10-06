@@ -8,6 +8,7 @@ function snapshot(ctx: DynamicResolveContext) {
     session: {
       id: ctx.session.id,
       auth: ctx.session.auth,
+      predecessor: ctx.session.predecessor ?? null,
     } satisfies Record<keyof DynamicResolveContext["session"], unknown>,
     channel: {
       kind: ctx.channel.kind ?? null,

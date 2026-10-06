@@ -1,8 +1,9 @@
 import { defineChannel, GET, POST } from "#public/channels/index.js";
 
 // Epoch 51 reads session streams with only a start index and has no
-// SessionStrandedError. Epoch 52 adds `follow` to getEventStream and throws
-// SessionStrandedError from Session.send() for stranded sessions.
+// SessionStrandedError. Epoch 52 adds `follow` to getEventStream, throws
+// SessionStrandedError from Session.send() for stranded sessions, and adds
+// `predecessor` to `session.started` events.
 export default defineChannel({
   routes: [
     GET("/stream/:sessionId", async (_request, { attachSession, describe, params }) => {

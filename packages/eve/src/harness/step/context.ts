@@ -6,7 +6,7 @@ import {
   prepareDynamicInstructionPreamble,
 } from "#context/dynamic-instruction-lifecycle.js";
 import { isDynamicModelSelectionError } from "#context/dynamic-model-lifecycle.js";
-import { ParentSessionKey, SessionCallbackKey } from "#context/keys.js";
+import { ParentSessionKey, SessionCallbackKey, SessionPredecessorKey } from "#context/keys.js";
 import { drainMemoryCommit, prepareMemoryPreamble } from "#context/memory-lifecycle.js";
 import { type HarnessModelMessage, validateHarnessModelMessages } from "#harness/messages.js";
 import {
@@ -135,7 +135,12 @@ export async function openTurn(
       turnId: activeTurnId(position),
     });
     await step.apply(
-      receive(step.view(), { message: opened.message, runtime: config.runtimeIdentity, trace }),
+      receive(step.view(), {
+        message: opened.message,
+        predecessor: ctx?.get(SessionPredecessorKey),
+        runtime: config.runtimeIdentity,
+        trace,
+      }),
       step.projectHistory([...step.session.history, ...opened.input]),
     );
   } catch (error) {

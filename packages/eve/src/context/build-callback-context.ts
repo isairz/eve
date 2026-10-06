@@ -20,6 +20,7 @@ export function buildCallbackContext(): SessionContext {
       auth: session.auth,
       turn: session.turn,
       parent: session.parent,
+      predecessor: session.predecessor,
     },
 
     getSandbox(environment?: SandboxEnvironmentIdentity): Promise<RuntimeSandboxSession> {
