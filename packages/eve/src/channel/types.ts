@@ -426,9 +426,9 @@ export interface SessionCapabilities {
  */
 export interface RunInput {
   /**
-   * @internal Authorized stub rules and playback routing supplied by the server.
-   * Local children share the root session's response sequence; remote agents do
-   * not receive this scope.
+   * @internal Set by the server after it authorizes tool stubs.
+   * Local subagents share the root session's stubs and sequence positions.
+   * Remote agents do not receive these stubs.
    */
   readonly toolStubs?: StubScope;
   readonly adapter: ChannelAdapter<any>;

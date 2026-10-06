@@ -72,7 +72,7 @@ export default eveChannel({
   360_000,
 );
 
-/** Each model delegates once and relays the actual result; eve creates the child sessions. */
+/** The mock models choose tools; eve creates the child sessions and runs their tools. */
 function delegatingAgent(tool: "researcher" | "assistant" | "lookup"): string {
   return `import { defineAgent } from "eve";
 import { mockModel } from "eve/evals";
