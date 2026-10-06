@@ -1,5 +1,5 @@
 import { asSchema } from "ai";
-import { recordToolStubFailure } from "#tool-stubs/execute.js";
+import { observeToolOutput } from "#tool-stubs/execute.js";
 
 import {
   authorizationPendingModelText,
@@ -64,25 +64,26 @@ export async function toolCallModelOutput(
   output: unknown,
   toolCallId: string | undefined,
 ): Promise<ToolModelOutputValue> {
-  try {
-    if (isAuthorizationPendingModelOutput(output)) {
-      return { type: "text", value: authorizationPendingModelText(output.connections) };
-    }
-    if (definition.toModelOutput !== undefined) {
+  return await observeToolOutput(
+    definition.name,
+    toolCallId === undefined ? [] : [{ callId: toolCallId }],
+    async () => {
+      if (isAuthorizationPendingModelOutput(output)) {
+        return { type: "text", value: authorizationPendingModelText(output.connections) };
+      }
+      if (definition.toModelOutput !== undefined) {
+        return normalizeToolModelOutput({
+          output: await definition.toModelOutput(output),
+          toolCallId,
+          toolName: definition.name,
+        });
+      }
+      if (typeof output === "string") return { type: "text", value: output };
       return normalizeToolModelOutput({
-        output: await definition.toModelOutput(output),
+        output: { type: "json", value: output ?? null },
         toolCallId,
         toolName: definition.name,
       });
-    }
-    if (typeof output === "string") return { type: "text", value: output };
-    return normalizeToolModelOutput({
-      output: { type: "json", value: output ?? null },
-      toolCallId,
-      toolName: definition.name,
-    });
-  } catch (error) {
-    await recordToolStubFailure(definition.name, toolCallId);
-    throw error;
-  }
+    },
+  );
 }

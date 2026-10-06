@@ -1,7 +1,11 @@
 import { createHook } from "#compiled/@workflow/core/index.js";
 import { claimHookOwnership, disposeHook } from "#execution/hook-ownership.js";
 import { StubPlayback } from "#tool-stubs/rules.js";
-import { publishStubFailureStep, publishStubResultStep } from "#execution/tool-stubs/steps.js";
+import {
+  failStubSessionStep,
+  publishStubFailureStep,
+  publishStubResultStep,
+} from "#execution/tool-stubs/steps.js";
 import { STUB_CONTEXT_KEY, type StubCall, type StubScope } from "#tool-stubs/types.js";
 
 export type StubRequest =
@@ -17,9 +21,16 @@ export async function withStubPlayback<T>(
   const scope = context[STUB_CONTEXT_KEY] as StubScope | undefined;
   if (scope === undefined || scope.rootSessionId !== undefined) return await run();
   context[STUB_CONTEXT_KEY] = { ...scope, rootSessionId: sessionId };
-  const playback = new StubPlayback(scope.rules);
+  let playback: StubPlayback;
+  try {
+    playback = new StubPlayback(scope.rules);
+  } catch (error) {
+    await publishStubFailureStep(
+      error instanceof Error ? error.message : "Could not compile tool stub matchers.",
+    );
+    throw error;
+  }
   const hook = createHook<StubRequest>({ token: scope.token });
-  await claimHookOwnership(hook);
   let failed = false;
   const serve = async (): Promise<never> => {
     for await (const request of hook) {
@@ -40,7 +51,16 @@ export async function withStubPlayback<T>(
     throw new Error("Tool stub playback ended before its session.");
   };
   try {
-    return await Promise.race([run(), serve()]);
+    await claimHookOwnership(hook);
+    const running = run();
+    const serving = serve().catch(async () => {
+      await publishStubFailureStep("Tool stub playback failed.");
+      // Fail the current owner through its inbox, aborting its active turn before
+      // finalization. The owner may have moved to another workflow deployment.
+      await failStubSessionStep(sessionId);
+      return await running;
+    });
+    return await Promise.race([running, serving]);
   } finally {
     await disposeHook(hook);
   }

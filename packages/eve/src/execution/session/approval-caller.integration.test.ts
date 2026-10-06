@@ -8,7 +8,7 @@ import {
 } from "#internal/testing/approval-resume.js";
 import { defineAgent } from "#public/definitions/agent.js";
 import { defineDynamic } from "#dynamic/definition.js";
-import type { Approval } from "#approval/definition.js";
+import type { Approval, ApprovalResponsePolicy } from "#approval/definition.js";
 import { workflowEntry } from "#execution/session/entry.js";
 import {
   sessionCommandHookToken,
@@ -75,6 +75,10 @@ function testUser(principalId: string) {
 const ALICE = testUser("alice");
 const BOB = testUser("bob");
 
+// Without a response policy only the requester may respond, and these tests
+// need Bob to approve Alice's calls.
+const anyoneResponds: ApprovalResponsePolicy = () => ({ status: "allowed" });
+
 /** Records `ctx.session.auth.current` for every tool that runs. */
 function recordingTool(
   name: string,
@@ -124,6 +128,7 @@ async function withChainRun(
   name: string,
   body: (run: ChainRun) => Promise<void>,
   options: {
+    readonly firstApproval?: Approval;
     readonly message?: string;
     readonly stubs?: readonly ToolStub[];
     readonly model?: MockLanguageModelV4;
@@ -155,7 +160,12 @@ async function withChainRun(
       name,
     },
     modules: [
-      recordingTool("deploy_change", seen, log, always()),
+      recordingTool(
+        "deploy_change",
+        seen,
+        log,
+        options.firstApproval ?? { request: always(), response: anyoneResponds },
+      ),
       recordingTool("read_notes", seen, log),
       recordingTool("publish_change", seen, log, secondApproval),
       ...(options.modules ?? []),
@@ -307,7 +317,7 @@ describe("approval caller", () => {
           {
             loadNamespace: async () => ({
               default: defineWorkflowTool({
-                approval: always(),
+                approval: { request: always(), response: anyoneResponds },
                 description: "Report who runs this.",
                 execute: reportCallerWorkflow as WorkflowExecuteToolDefinition["execute"],
                 inputSchema: {},
@@ -363,6 +373,7 @@ describe("approval caller", () => {
         expect(filterEventsByType(refused, "input.resolved")).toEqual([]);
         await run.approve(ALICE, "publish_change");
       },
+      { firstApproval: always() },
     );
 
     expect(seen.map((entry) => entry.caller)).toEqual(["alice", "alice", "alice"]);
@@ -422,10 +433,13 @@ describe("approval caller", () => {
           {
             loadNamespace: async () => ({
               default: defineWorkflowTool({
-                approval: ({ toolInput }) =>
-                  (toolInput as { gated?: boolean } | undefined)?.gated === true
-                    ? "user-approval"
-                    : "not-applicable",
+                approval: {
+                  request: ({ toolInput }) =>
+                    (toolInput as { gated?: boolean } | undefined)?.gated === true
+                      ? "user-approval"
+                      : "not-applicable",
+                  response: anyoneResponds,
+                },
                 description: "Report who runs this.",
                 execute: reportCallerWorkflow as WorkflowExecuteToolDefinition["execute"],
                 inputSchema: {},

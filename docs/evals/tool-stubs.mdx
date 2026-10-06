@@ -5,7 +5,7 @@ description: "Define tool responses and response sequences in your evals."
 
 Pass `stubs` when creating an eval session to replace selected tool executions with JSON responses. The same rules work against local and deployed agents, without deploying mock functions or keeping the runner connected to answer tool calls.
 
-Define both stubs and [assertions](./assertions) in your eval. Stubs specify what tools return; assertions check which tools the agent calls and what it tells the user. An unused stub does not fail an eval. Use `calledTool`, counts, and `toolOrder` to require particular calls, and response assertions or judges to check the answer.
+Stubs specify what tools return. [Assertions](./assertions) check what the agent does and tells the user. An unused stub does not fail an eval.
 
 ## Author an eval
 
@@ -20,6 +20,7 @@ export default defineEval({
           id: "tasks",
           tool: "list_tasks",
           responses: [
+            // First matching tool call.
             {
               tasks: [
                 { id: "milk", title: "Buy milk" },
@@ -27,6 +28,7 @@ export default defineEval({
                 { id: "rent", title: "Pay rent" },
               ],
             },
+            // Second and subsequent matching tool calls.
             {
               tasks: [
                 { id: "dog", title: "Walk dog" },
@@ -51,28 +53,31 @@ export default defineEval({
 
     const second = await session.send("Complete Buy milk, then list my remaining tasks.");
     second.expectOk();
-    second.calledTool("complete_task", {
-      input: { task_id: "milk" },
-      output: { success: true },
-      count: 1,
-    });
-    second.calledTool("list_tasks", { count: 1 });
+    second.calledTool("complete_task", { input: { task_id: "milk" }, count: 1 });
     second.toolOrder(["complete_task", "list_tasks"]);
-    t.judge(
-      "Does the response confirm Buy milk was completed and list only Walk dog and Pay rent as remaining?",
-      {
-        on: second.message,
-      },
-    ).gate(0.8);
+    second.messageIncludes("Walk dog");
+    second.messageIncludes("Pay rent");
   },
 });
 ```
 
-Use your agent's actual tool names and response shapes. The TypeScript client accepts the same `stubs` option on `client.sessions.create({ stubs })`.
+Use your agent's actual tool names and response shapes. The client accepts the same option on `client.sessions.create({ stubs })`.
 
-### Share stub fixtures
+These responses describe a sequence, not a simulated task database. The second `list_tasks` call returns two tasks even if `complete_task` was never called. The completion and order assertions check that the agent actually requested the write; testing a real database update requires the real tool.
 
-Stubs are plain JSON objects. `ToolStub` is their TypeScript type, and both `eve/evals` and `eve/client` re-export the same definition. These are two entry points in the `eve` package, so use the import that fits your eval or client code.
+## Stub fields
+
+| Field       | Meaning                                                                                                                                |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`        | Your session-unique rule identifier. eve uses it to track this rule's response sequence. It is neither a tool name nor a tool-call ID. |
+| `tool`      | The existing tool's name, optionally qualified by its local subagent path.                                                             |
+| `match`     | Optional input-property constraints, expressed as JSON Schema. Omit it or use `{}` to match any valid input.                           |
+| `response`  | A JSON value returned on every matching call.                                                                                          |
+| `responses` | A nonempty array of JSON values returned in sequence. Use exactly one of `response` or `responses`.                                    |
+
+Exposing rule IDs and response positions in traces is a follow-up: [AX-5157](https://linear.app/vercel/issue/AX-5157).
+
+Stubs are plain JSON and can be shared between evals:
 
 ```ts title="evals/fixtures/tasks.ts"
 import type { ToolStub } from "eve/evals";
@@ -82,11 +87,66 @@ export const taskStubs = [
 ] satisfies readonly ToolStub[];
 ```
 
-Import `taskStubs` into any eval and pass it to `t.session({ stubs: taskStubs })`. Each session has its own sequence position, even when several sessions use the same fixture.
+Pass the fixture to `t.session({ stubs: taskStubs })`. Each session has its own sequence position. `eve/client` also exports `ToolStub`. This type checks the JSON contract; it does not infer the response type from your tool definition.
+
+## Match tool arguments
+
+**Rules are evaluated from top to bottom. The first matching stub wins.** Put specific rules before an unconditional fallback:
+
+```ts
+const stubs = [
+  {
+    id: "milk",
+    tool: "complete_task",
+    match: { task_id: { const: "milk" } },
+    response: { success: true },
+  },
+  { id: "other-tasks", tool: "complete_task", response: { success: false } },
+];
+```
+
+A call for milk receives success; other valid calls receive the fallback. Reversing these rules makes the unconditional rule win every time. If no rule matches, eve executes the real tool. A selected stub failure fails the eval, even if the agent recovers; it never falls back to real execution.
+
+Every property listed in `match` must exist and satisfy its constraint. Extra top-level properties are allowed:
+
+```json
+{
+  "id": "open-tasks",
+  "tool": "search_tasks",
+  "match": {
+    "filter": {
+      "type": "object",
+      "properties": { "status": { "const": "open" } },
+      "required": ["status"]
+    },
+    "query": { "type": "string", "pattern": "milk" },
+    "tags": { "type": "array", "contains": { "const": "urgent" } }
+  },
+  "response": { "tasks": ["Buy milk"] }
+}
+```
+
+Nested properties are optional unless listed in `required`. Matching does not coerce values, apply defaults, or change arguments. The real tool schema validates input before replacement; normal approvals and output processing still apply.
+
+Constraints use a reference-free subset of JSON Schema 2020-12: types, `const`, `enum`, string and numeric bounds, `pattern`, array items/contains, object properties/required/additionalProperties, dependencies, and logical/conditional schemas. `$ref`, `format`, unknown keywords, and malformed constraints are rejected at setup. Use a `pattern` string, not a JavaScript regular-expression object.
+
+Configuration is limited to 100 rules, 20,000 JSON nodes, nesting depth 32, and approximately one million characters. The `__proto__` property name is reserved.
+
+## Sequences and session scope
+
+`response` always returns the same value. `responses` advances on each new matching call, then repeats its last value. For example, `["pending", "completed"]` returns `"pending"` once and `"completed"` thereafter. Only the selected rule advances; exhaustion never selects a later rule.
+
+Two calls within one agent turn consume two entries. Later turns continue the same sequence. Calls awaiting or denied approval do not consume entries. Each session supports up to 10,000 recorded calls.
+
+Choose the rules at session creation; they stay fixed for that session. Local subagents share playback through explicit tool paths, and deployment handoffs preserve it. An independent session starts at the first response.
+
+eve's transparent internal workflow replay preserves recorded tool results without consuming additional responses. Matcher validators are compiled when playback initializes and reused for its calls. Replay can reconstruct these in-memory validators; executable functions are never persisted or sent over the wire. A compilation failure terminates the session and fails stub verification before tools execute.
+
+Parallel calls consume responses in arrival order, which can vary. Use separate argument matchers when particular arguments must receive particular responses.
 
 ## Permit tool replacement
 
-Tool replacement is denied by default, including in development. The authenticator verifies the caller and returns an explicit grant. With [Vercel OIDC](../guides/auth-and-route-protection#verceloidc), put that grant on the subject entry:
+Tool replacement is denied by default, including in development. With [Vercel OIDC](../guides/auth-and-route-protection#verceloidc), put the permission on the eval runner's verified subject:
 
 ```ts title="agent/channels/eve.ts"
 import { vercelOidc, vercelSubject } from "eve/channels/auth";
@@ -107,135 +167,50 @@ export default eveChannel({
 });
 ```
 
-Both projects can authenticate; only the eval runner receives replacement permission. Subject strings still work for ordinary authentication. Any matching entry with `allowToolStubs: true` grants permission; other entries do not revoke it. Patterns use the existing whole-string `*` matching. `vercelSubject` defaults to production; pass `environment: "*"` to include all environments.
+Both projects can authenticate; only the eval runner receives replacement permission. `vercelSubject` defaults to production; pass `environment: "*"` to include all environments. The target's server configuration supplies the grant after token verification. Request JSON cannot grant permission, and user principals do not inherit project grants.
 
-The target's server configuration supplies the grant. The signed OIDC token establishes who is calling; request JSON cannot grant permission. Implicit current-project acceptance does not grant tool replacement. OIDC user principals (including development users and externally forwarded users) do not inherit project grants. `EVE_EVAL_AUTH_TOKEN` supplies the runner's bearer token.
+Custom authenticators can return the same `allowToolStubs: true` after verifying the caller. See [authentication and route protection](../guides/auth-and-route-protection#tool-replacement-permission) for the grant rules and a local development example.
 
-Custom authenticators can return `allowToolStubs: true` after verifying their caller. For a local-only development channel:
+Permission is checked at session creation before identity projection. Later messages and result reads use normal channel authentication. Anyone your channel admits to an existing session can use its stubs. Your application's session-access policy must provide the required isolation; an isolated eval deployment can use the same agent code.
 
-```ts title="agent/channels/eve.ts"
-import { localDev } from "eve/channels/auth";
-import { eveChannel } from "eve/channels/eve";
+## Supported tools and subagents
 
-const authenticate = localDev();
-export default eveChannel({
-  auth: async (request) => {
-    const caller = await authenticate(request);
-    return caller ? { ...caller, allowToolStubs: true } : null;
-  },
-});
-```
+Stubs replace execution of existing ordinary, dynamic, and workflow tools. They retain the real tool's input schema, approvals, output processing, and normal events. A stub does not register a new tool or make it visible to the model.
 
-The channel checks the fresh authentication result at session creation, before forwarded-principal handling or `onMessage` identity projection. The grant is not persisted or forwarded as session identity. Later messages, approvals, controls, and result reads use normal channel authentication. There is no additional creator-only rule or replacement-permission recheck.
+### Subagents
 
-Anyone your channel admits to an existing session can use its configured stubs. If mocked evals share a production deployment, your application's [session-access policy](../guides/auth-and-route-protection#what-reaches-ctxsessionauth) must provide the required isolation. An isolated eval deployment can use the same agent code.
+Stubbing a delegation tool returns its configured result without starting the subagent. Persistent tools implemented with `serve`, including the built-in `agent`, require an unconditional stub: omit `match` or use `{}`. Mixing real and mocked calls to the same persistent tool is unsupported.
 
-## Match tool arguments
-
-Each rule needs a unique `id`, a `tool` name, and exactly one of `response` or nonempty `responses`. `match` maps input properties to JSON Schema constraints. Every listed property must exist and satisfy its constraint. Extra top-level properties are allowed.
-
-```json
-{
-  "id": "open-tasks",
-  "tool": "search_tasks",
-  "match": {
-    "filter": {
-      "type": "object",
-      "properties": { "status": { "const": "open" } },
-      "required": ["status"]
-    },
-    "query": { "type": "string", "pattern": "milk" },
-    "tags": { "type": "array", "contains": { "const": "urgent" } }
-  },
-  "response": { "tasks": ["Buy milk"] }
-}
-```
-
-Nested properties are optional unless listed in `required`. Omit `match` or use `{}` for any valid input. Matching does not coerce values, apply defaults, or change tool arguments. The real tool schema validates input before replacement, and normal approvals and output processing still apply.
-
-Constraints use a reference-free subset of JSON Schema 2020-12: types, `const`, `enum`, string and numeric bounds, `pattern`, array items/contains, object properties/required/additionalProperties, dependencies, and logical/conditional schemas. `$ref`, `format`, unknown keywords, and malformed constraints are rejected at setup. No functions or regular-expression objects cross the wire; use the JSON Schema `pattern` string. Configuration is limited to 100 rules, 20,000 JSON nodes, nesting depth 32, and approximately one million characters. The `__proto__` property name is reserved.
-
-- No matching rule: execute the real tool.
-- Read rules top to bottom. The first matching rule wins. Put specific rules before a catch-all; later matches are ignored.
-- Selected stub failure: fail the eval, even if the agent recovers. Never fall back to real execution.
-
-### Multiple rules for one tool
+To let a local subagent run but replace its tools, use `/` to qualify the delegation path:
 
 ```ts
 const stubs = [
-  {
-    id: "milk",
-    tool: "complete_task",
-    match: { task_id: { const: "milk" } },
-    response: { success: true },
-  },
-  { id: "other-tasks", tool: "complete_task", response: { success: false } },
+  { id: "root-tasks", tool: "list_tasks", response: ["Root task"] },
+  { id: "research-tasks", tool: "researcher/list_tasks", response: ["Research task"] },
+  { id: "nested-tasks", tool: "researcher/assistant/list_tasks", response: [] },
 ];
 ```
 
-A call for milk receives success; other valid calls receive the fallback. Reversing these rules makes the unconditional rule win every time. Only the selected rule's sequence advances. Exhausting a sequence repeats its last value; it never falls through to a later rule. IDs identify rules independently of their order and remain unique across the session's configuration. Exposing IDs and sequence positions in traces is tracked separately in [AX-5157](https://linear.app/vercel/issue/AX-5157).
+`researcher` replaces the whole delegation; `researcher/list_tasks` replaces only that subagent's list tool. The built-in `agent` uses `agent/list_tasks`. Model-visible names stay unchanged. A root rule never implicitly matches a subagent's same-named tool.
 
-### Known matcher limitations
+Repeated subagent sessions at the same path share that rule's sequence. Different paths use different rules. Remote agents do not receive the configuration; replace their whole delegation tool instead.
 
-eve uses the existing `@cfworker/json-schema` validator without local patches. Version 4.1.1 has these [upstream defects](https://github.com/cfworker/cfworker/issues/338):
+### Connections and provider tools
+
+Use the qualified operation name, such as `linear__list_issues` or `researcher/linear__list_issues`. Put operation arguments in `match` and its JSON result in `response`.
+
+Connection authentication and discovery stay live so eve can validate the operation and its arguments. Stubs do not provide an offline connection. The framework's `connection_search` and `connection_execute` tools cannot themselves be replaced.
+
+Tools executed by the model provider, such as provider-hosted web search, have no eve executor to replace. A search tool implemented in your own agent can be stubbed.
+
+## Known matcher limitations
+
+eve reuses its existing bundled `@cfworker/json-schema` validator without local patches. Validation runs locally, without calling a Cloudflare service. Version 4.1.1 has these [upstream defects](https://github.com/cfworker/cfworker/issues/338):
 
 - Fractional `multipleOf` can reject valid negative values or accept invalid small values. The negative-value bug is also tracked in [#337](https://github.com/cfworker/cfworker/issues/337).
 - `contains` with `maxContains` can accept zero matches unless you explicitly set `minContains: 1`.
 - `const`, `enum`, and `uniqueItems` can confuse arrays with objects that have the same enumerable keys. Use explicit type constraints where possible; avoid mixed array/object uniqueness checks.
 - Nested `required` and dependency checks can treat inherited names such as `constructor` as present. Avoid those property names in these constraints.
-- Some `dependentRequired` maps with keys named `id` or `$id` throw during setup, including `{ id: [] }` and `{ $id: ["#"] }`.
+- Some `dependentRequired` maps with keys named `id` or `$id` fail compilation, including `{ id: [] }` and `{ $id: ["#"] }`. The session fails during playback initialization.
 
-Avoid these affected cases until the dependency is fixed. A false match can select the wrong stub; a missed match can execute the real tool. Setup errors reject the session. Ordinary string ID and status matching are unaffected. The regression suite retains the known failures explicitly and will flag fixes when the validator is upgraded.
-
-## Sequences and session scope
-
-- `response` returns the same value on every matching call.
-- `responses` returns the next value on each new matching call. After the last value, it keeps returning that value.
-
-For example, `responses: ["pending", "completed"]` returns `"pending"` on the first matching call and `"completed"` on the second and later calls. Two calls within one agent turn consume two entries. The sequence also continues across turns in the same session.
-
-eve's internal workflow recovery preserves previously recorded tool results without consuming additional responses. This replay is transparent to the eval runner: an already recorded tool call keeps its original response without advancing the sequence.
-
-Choose the rules when creating the session; they stay fixed for that session. Local children use the same playback owner with explicitly scoped tool paths, and deployment handoffs preserve playback. A new independent session starts at the first response. Calls awaiting or denied approval do not consume entries. A session supports up to 10,000 recorded tool calls.
-
-The responses are supplied by the eval. They do not calculate new task lists from earlier writes: another `list_tasks` call takes the next response even if `complete_task` was never called. Assert the completion call and its order when the scenario requires them. A stubbed completion checks the agent's request and handling of the result; testing a real database update requires the real tool.
-
-### Parallel tool calls
-
-One user message can lead the model to call the same tool several times in parallel, such as looking up two task lists. Local child agents can also call tools in parallel while sharing the parent's stubs. This does not require the eval runner to send multiple messages at once.
-
-Each matching call takes the next response when it reaches the shared sequence. Which parallel call arrives first can vary, and the calls may finish in a different order. Use separate `match` rules when particular arguments must receive particular responses.
-
-## Supported tools
-
-You can stub existing tools that eve executes, including ordinary tools, dynamically supplied tools with an executor, and workflow tools. For example, stubbing `list_tasks` replaces the tool's execution with your JSON response. eve still checks the tool's input, applies its approval rules, processes its output, and records its usual events and task status.
-
-### Child agents
-
-Stubbing the `agent` tool returns your configured delegation result without starting a child agent. Persistent tools implemented with `serve`, including `agent`, require an unconditional stub: omit `match` or use `{}`. Every call to that tool is mocked for the session; conditional mixing of real and mocked calls is unsupported.
-
-If a local child runs, qualify its tools with `/`:
-
-```ts
-const stubs = [
-  { id: "root-tasks", tool: "list_tasks", response: ["Root task"] },
-  { id: "research-tasks", tool: "researcher/list_tasks", response: ["Child task"] },
-  { id: "nested-tasks", tool: "researcher/assistant/list_tasks", response: [] },
-];
-```
-
-Paths follow the local delegation chain from the eval root. `researcher` replaces the whole root-level delegation tool; `researcher/list_tasks` lets that child run and replaces only its list tool. The built-in `agent` child uses `agent/list_tasks`. Model-visible tool names remain unchanged; `/` separates agent scopes in stub configuration only. A root rule never implicitly matches a child's same-named tool.
-
-Repeated child sessions at the same delegation path share that path's rule sequence. Different paths use different rules. A remote agent on another server does not receive the configuration; replace its whole delegation tool instead.
-
-### Connections
-
-Stub a connection's operation by its qualified name, such as `linear__list_issues` (or `researcher/linear__list_issues` in a local child). Put the operation's argument constraints in `match` and its JSON result in `response`.
-
-The connection must still be available and authenticated so eve can discover the operation and validate its arguments. A stub replaces the operation's execution; it does not provide an offline connection. The framework's `connection_search` and `connection_execute` tools cannot themselves be replaced.
-
-### Tool definitions and provider execution
-
-A stub uses the real tool's name, description, and input schema. Adding a stub for `list_tasks` does not register that tool or make it visible to the model; the agent must already have the tool.
-
-Tools that run inside the model provider, such as provider-hosted web search, have no eve executor to replace. A search tool implemented in your own eve agent can be stubbed.
+Avoid affected constraints until the dependency is fixed. A false match can select the wrong stub; a missed match can execute the real tool. Ordinary string ID and status matching are unaffected. Regression tests retain the known failures and flag fixes when the validator is upgraded.

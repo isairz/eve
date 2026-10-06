@@ -1,3 +1,4 @@
+import { withStubPlayback } from "#execution/tool-stubs/playback.js";
 import type { DeliverHookPayload, SessionCapabilities, TurnCaller } from "#channel/types.js";
 import type { AgentWorkflowRetentionDefinition } from "#shared/agent-definition.js";
 import {
@@ -115,22 +116,25 @@ export async function runPreparedSession(
   let result: WorkflowEntryResult = { output: "", isError: true };
   let loop: SessionLoopOutcome | undefined;
   try {
-    try {
-      loop = await runSessionLoop(boot, { cursor, handoff, inbox, progress });
-    } finally {
-      await inbox.dispose();
-    }
-    if (loop.kind === "transferred") {
-      if (boot.anchor.kind !== "self") return { output: "" };
-      result = await handoff.awaitAnchoredResult();
+    result = await withStubPlayback(boot.serializedContext, boot.sessionId, async () => {
+      try {
+        loop = await runSessionLoop(boot, { cursor, handoff, inbox, progress });
+      } finally {
+        await inbox.dispose();
+      }
+      if (loop.kind === "transferred") {
+        if (boot.anchor.kind !== "self") return { output: "" };
+        result = await handoff.awaitAnchoredResult();
+        return result;
+      }
+      result = await finalizeSession(loop.outcome, {
+        caller: progress.caller,
+        cursor,
+        sessionWritable: boot.sessionWritable,
+      });
+      progress.terminalEmitted = true;
       return result;
-    }
-    result = await finalizeSession(loop.outcome, {
-      caller: progress.caller,
-      cursor,
-      sessionWritable: boot.sessionWritable,
     });
-    progress.terminalEmitted = true;
     return result;
   } catch (error) {
     if (!progress.terminalEmitted) {
@@ -141,6 +145,7 @@ export async function runPreparedSession(
     }
     throw createSafeOuterWorkflowError();
   } finally {
+    await inbox.dispose();
     await reportResultToAnchor(boot, result, handoff, loop);
   }
 }

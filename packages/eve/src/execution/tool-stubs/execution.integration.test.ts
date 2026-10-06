@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { start } from "#internal/workflow/runtime.js";
+import { FatalError } from "#compiled/@workflow/errors/index.js";
+import { STUB_FAILURE_NAMESPACE, stubResponseNamespace } from "#tool-stubs/types.js";
+import { describe, expect, it, vi } from "vitest";
+import { getWorld, start } from "#internal/workflow/runtime.js";
 import { createTestRuntime } from "#internal/testing/app-harness.js";
 import { buildSerializedContext, handoffFollowUp } from "#internal/testing/entry-test-helpers.js";
 import { captureTurnEvents, filterEventsByType } from "#internal/testing/events.js";
@@ -7,66 +9,212 @@ import { workflowEntry } from "#execution/session/entry.js";
 import { dispatchWorkflowSessionCommand } from "#execution/workflow-runtime.js";
 import { readStubFailure } from "#execution/tool-stubs/steps.js";
 import { STUB_CONTEXT_KEY } from "#tool-stubs/types.js";
+import { defineWorkflowTool } from "#tools/workflow-definition.js";
+import { parseToolStubs } from "#tool-stubs/rules.js";
 import { defineTool } from "#tools/definition.js";
 import { createWorkflowToolRuntime } from "#internal/testing/workflow-tool-run-harness.js";
-import { failingDeployWorkflow } from "#internal/testing/workflow-tool-fixtures.js";
+import {
+  failingDeployWorkflow,
+  failingServeWorkflow,
+} from "#internal/testing/workflow-tool-fixtures.js";
 import { always } from "#tools/approval/policies.js";
 
 describe("tool replacement through the session runtime", () => {
-  it("records output conversion failures and never falls back to the live executor", async () => {
-    let liveCalls = 0;
-    const runtime = await createTestRuntime({
-      modules: [
-        {
-          logicalPath: "tools/deploy_service.ts",
-          loadNamespace: async () => ({
-            default: defineTool({
-              description: "Deploy a service.",
-              inputSchema: {
-                type: "object",
-                properties: { service: { type: "string" } },
-                required: ["service"],
-              },
-              execute: () => {
-                liveCalls++;
-                return "live";
-              },
-              toModelOutput: () => {
-                throw new Error("Invalid deployment result.");
-              },
-            }),
-          }),
+  it.each(["ordinary", "execute", "task", "serve"] as const)(
+    "records %s output conversion failures even when the agent recovers",
+    async (entryPoint) => {
+      let liveCalls = 0;
+      let projections = 0;
+      const definition = {
+        description: "Deploy a service.",
+        inputSchema: {
+          type: "object" as const,
+          properties: { service: { type: "string" as const } },
+          required: ["service"],
         },
-      ],
-    });
+        toModelOutput: () => {
+          projections++;
+          throw new Error("Invalid deployment result.");
+        },
+      };
+      const runtime = await createTestRuntime({
+        modules: [
+          {
+            logicalPath: "tools/deploy_service.ts",
+            loadNamespace: async () => ({
+              default:
+                entryPoint === "ordinary"
+                  ? defineTool({
+                      ...definition,
+                      execute: () => {
+                        liveCalls++;
+                        return "live";
+                      },
+                    })
+                  : entryPoint === "execute"
+                    ? defineWorkflowTool({ ...definition, execute: failingDeployWorkflow })
+                    : entryPoint === "task"
+                      ? defineWorkflowTool({ ...definition, task: failingDeployWorkflow })
+                      : defineWorkflowTool({ ...definition, serve: failingServeWorkflow }),
+            }),
+          },
+        ],
+      });
+      await runtime.run(async () => {
+        const run = await start(workflowEntry, [
+          {
+            kind: "initial",
+            ownerDeploymentId: "dpl_inline",
+            input: { message: 'Run deploy_service with service "api"' },
+            serializedContext: {
+              ...buildSerializedContext({ channelKind: "http" }),
+              [STUB_CONTEXT_KEY]: {
+                token: "failed-output-playback",
+                rules: [{ id: "deploy", tool: "deploy_service", response: "stubbed" }],
+              },
+            },
+          },
+        ]);
+        const stream = captureTurnEvents(run);
+        try {
+          const events = await stream.nextTurn();
+          expect(projections).toBeGreaterThan(0);
+          expect(liveCalls).toBe(0);
+          if (entryPoint === "task" || entryPoint === "serve") {
+            expect(filterEventsByType(events, "turn.failed")).toEqual([]);
+            expect(
+              filterEventsByType(events, "task.settled").map((event) => event.data),
+            ).toContainEqual(expect.objectContaining({ status: "completed", output: "stubbed" }));
+          }
+          expect(await readStubFailure(run.runId)).toBe(
+            'Stubbed tool "deploy_service" failed during output processing.',
+          );
+        } finally {
+          stream.dispose();
+          await run.cancel();
+        }
+      });
+    },
+  );
+
+  it("reports matcher compilation failure as a terminal session failure", async () => {
+    const rules = parseToolStubs([
+      {
+        id: "broken",
+        tool: "lookup",
+        match: { value: { dependentRequired: { id: [] } } },
+        response: "stub",
+      },
+    ]);
+    const runtime = await createTestRuntime();
     await runtime.run(async () => {
       const run = await start(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
-          input: { message: 'Run deploy_service with service "api"' },
+          input: {},
           serializedContext: {
             ...buildSerializedContext({ channelKind: "http" }),
-            [STUB_CONTEXT_KEY]: {
-              token: "failed-output-playback",
-              rules: [{ id: "deploy", tool: "deploy_service", response: "stubbed" }],
-            },
+            [STUB_CONTEXT_KEY]: { token: "broken-compilation", rules },
           },
         },
       ]);
+      await expect(run.returnValue).rejects.toThrow();
+      expect(await run.getReadable().getTailIndex()).toBeGreaterThanOrEqual(0);
       const stream = captureTurnEvents(run);
       try {
-        await stream.nextTurn();
-        expect(liveCalls).toBe(0);
+        const events = await stream.nextTurn();
+        expect(filterEventsByType(events, "session.failed")).toHaveLength(1);
         expect(await readStubFailure(run.runId)).toBe(
-          'Stubbed tool "deploy_service" failed during output processing.',
+          'Could not compile matcher "value" in tool stub "broken".',
         );
       } finally {
         stream.dispose();
-        await run.cancel();
       }
     });
   });
+
+  it.each([false, true])(
+    "ends the active session when playback fails (handoff: %s)",
+    async (handoff) => {
+      const runtime = await createTestRuntime({
+        modules: [
+          {
+            logicalPath: "tools/deploy_service.ts",
+            loadNamespace: async () => ({
+              default: defineTool({
+                description: "Deploy a service.",
+                inputSchema: {
+                  type: "object",
+                  properties: { service: { type: "string" } },
+                  required: ["service"],
+                },
+                execute: () => {
+                  throw new Error("Live execution must not run.");
+                },
+              }),
+            }),
+          },
+        ],
+      });
+      await runtime.run(async () => {
+        const run = await start(workflowEntry, [
+          {
+            kind: "initial",
+            ownerDeploymentId: "dpl_inline",
+            input: { message: 'Run deploy_service with service "api"' },
+            serializedContext: {
+              ...buildSerializedContext({ channelKind: "http" }),
+              [STUB_CONTEXT_KEY]: {
+                token: "failed-playback",
+                rules: [{ id: "deploy", tool: "deploy_service", response: "stubbed" }],
+              },
+            },
+          },
+        ]);
+        const stream = captureTurnEvents(run);
+        const world = await getWorld();
+        const append = world.streams.write.bind(world.streams);
+        let write: ReturnType<typeof vi.spyOn> | undefined;
+        try {
+          await stream.nextTurn();
+          write = vi.spyOn(world.streams, "write").mockImplementation(async (...args) => {
+            const namespace = Buffer.from(args[1].split("_").at(-1)!, "base64url").toString();
+            if (
+              namespace !== STUB_FAILURE_NAMESPACE &&
+              namespace.startsWith(stubResponseNamespace(""))
+            )
+              throw new FatalError("Playback transport failed.");
+            return await append(...args);
+          });
+          await dispatchWorkflowSessionCommand({
+            sessionId: run.runId,
+            command: handoff
+              ? handoffFollowUp(
+                  "dpl_successor",
+                  'Run deploy_service with service "api"',
+                  "failed-stub-handoff",
+                )
+              : { kind: "send", payload: { message: 'Run deploy_service with service "api"' } },
+          });
+          const events = await stream.nextTurn();
+          expect(filterEventsByType(events, "session.failed")).toHaveLength(1);
+          expect(filterEventsByType(events, "session.completed")).toHaveLength(0);
+          expect(await readStubFailure(run.runId)).toBe("Tool stub playback failed.");
+          expect(
+            await dispatchWorkflowSessionCommand({
+              sessionId: run.runId,
+              command: { kind: "send", payload: { message: "Hello" } },
+            }),
+          ).toMatchObject({ status: "session_not_active" });
+        } finally {
+          write?.mockRestore();
+          stream.dispose();
+          await run.cancel();
+        }
+      });
+    },
+  );
 
   it("isolates same-named root and child tools while sharing root playback", async () => {
     const runtime = await createTestRuntime({

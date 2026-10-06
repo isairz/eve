@@ -43,6 +43,7 @@ describe("tool stub authorization", () => {
       {},
       { message: "Hello", stubs: [{ id: "auth", tool: "authenticate", response: true }] },
       (input) => {
+        expect(input.audienceAuth).not.toHaveProperty("allowToolStubs");
         scope = input.toolStubs;
         return { sessionId: "created" } as never;
       },

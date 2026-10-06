@@ -68,6 +68,7 @@ export async function connectionToolStub(
 export async function recordToolStubFailure(
   tool: string,
   callId: string | undefined,
+  turnId?: string,
 ): Promise<void> {
   const context = contextStorage.getStore();
   const scope = context?.get(ToolStubsKey);
@@ -76,7 +77,23 @@ export async function recordToolStubFailure(
   await context!
     .require(ToolStubPlaybackKey)
     .fail(
-      `${session.sessionId}:${session.turn.id}:${callId}`,
+      `${session.sessionId}:${turnId ?? session.turn.id}:${callId}`,
       `Stubbed tool "${tool}" failed during output processing.`,
     );
+}
+
+/** Record before recovery: a usable model response must not hide a broken fixture. */
+export async function observeToolOutput<T>(
+  tool: string,
+  calls: readonly { readonly callId: string; readonly turnId?: string }[],
+  project: () => T | Promise<T>,
+  recover?: (error: unknown) => T,
+): Promise<T> {
+  try {
+    return await project();
+  } catch (error) {
+    for (const call of calls) await recordToolStubFailure(tool, call.callId, call.turnId);
+    if (recover !== undefined) return recover(error);
+    throw error;
+  }
 }

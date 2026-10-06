@@ -28,8 +28,8 @@ completed.toolOrder(["complete_task", "list_tasks"]);
 
 ## Contract
 
-- Fixed configuration for a root session and its local descendants. Root names are unqualified; child tools use slash-separated delegation paths such as `researcher/list_tasks`. No implicit cross-agent matching. Repeated children at the same path share playback; new roots are isolated and remote agents never receive the configuration.
-- A named input field must exist and satisfy its reference-free JSON Schema constraint. Extra top-level fields are allowed. Reject invalid or unsupported schemas during setup; matching does not coerce or mutate input.
+- Fixed configuration for a root session and its local descendants. Root names are unqualified; subagent tools use slash-separated delegation paths such as `researcher/list_tasks`. No implicit cross-agent matching. Repeated subagents at the same path share playback; new roots are isolated and remote agents never receive the configuration.
+- A named input field must exist and satisfy its reference-free JSON Schema constraint. Extra top-level fields are allowed. Reject malformed or unsupported constraints at request admission; compile matchers when playback initializes and reuse them for tool calls. A compilation error fails the session before tools execute. Matching does not coerce or mutate input.
 - Read rules top to bottom; the first match wins. Put specific rules before catch-alls. No match runs the real tool. A selected stub failure never invokes the real executor and fails the eval even if the model recovers.
 - Each rule advances per logical matching call, including several calls within a turn. Replays and retries reuse the recorded result; exhaustion repeats the last response. Unused stubs are allowed.
 - Ordinary, dynamic, workflow, and qualified connection operations retain validation, approval, output processing, and event envelopes. Persistent tools require unconditional replacement. Provider-hosted tools are outside scope.
@@ -37,9 +37,9 @@ completed.toolOrder(["complete_task", "list_tasks"]);
 
 ## Durable playback
 
-The original root workflow owns a serial request hook, per-rule positions, and a map of logical call identities to responses. Ordinary executors and workflow bodies request a decision at their existing execution boundary. Durable result streams deliver the decision; root replay reconstructs positions and deduplicates calls. The original root remains the playback owner across session handoffs. Checkpoint version 12 prevents older deployments from accepting a stubbed session and silently executing live tools. Local descendants use its opaque hook token and root id, adding their delegation path for exact tool matching. State holds playback records, never a simulated external database or user code.
+The original root workflow owns a serial request hook, per-rule positions, and a map of logical call identities to responses. Ordinary executors and workflow bodies request a decision at their existing execution boundary. Durable result streams deliver the decision; root replay reconstructs positions and deduplicates calls. The original root remains the playback owner across session handoffs. Checkpoint version 13 prevents older deployments from accepting a stubbed session and silently executing live tools. Local descendants use its opaque hook token and root id, adding their delegation path for exact tool matching. State holds playback records, never a simulated external database or user code.
 
-The first stub failure is recorded before its response is released. The eval runner reads the session's authenticated stub status before grading completion. Output conversion failures are recorded too. Parallel calls are admitted serially, without imposing a global expected call script.
+The first stub failure is recorded before its response is released. The eval runner reads the session's authenticated stub status before grading completion. Output conversion failures use one recording contract across ordinary execution, workflow execution, and task/serve projection. Queued task results retain their originating calls so delayed projection can identify the correct stub. Playback service failures interrupt the current session owner through its stable inbox, including after a handoff. Parallel calls are admitted serially, without imposing a global expected call script.
 
 ## Authorization
 
@@ -55,4 +55,4 @@ Behavior tests cover matching, first-match precedence, sequence exhaustion, conc
 
 Full stateful mocks, arbitrary functions, callback connections, per-turn reconfiguration, and mixing live and mocked calls within a persistent tool are excluded.
 
-Keep required rule IDs. Exposing them and their response positions in existing execution traces is a follow-up ([AX-5157](https://linear.app/vercel/issue/AX-5157)); typed authoring helpers are also deferred.
+Keep required rule IDs. Exposing them and their response positions in existing execution traces is a follow-up ([AX-5157](https://linear.app/vercel/issue/AX-5157)); optional tool-specific response types are [AX-5161](https://linear.app/vercel/issue/AX-5161), and the shared JSON Schema validator assessment is [AX-5162](https://linear.app/vercel/issue/AX-5162).

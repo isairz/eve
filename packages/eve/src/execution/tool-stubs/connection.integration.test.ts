@@ -109,22 +109,31 @@ describe("connection operation stubs", () => {
           const world = await getWorld();
           const append = world.streams.write.bind(world.streams);
           const failureSuffix = Buffer.from(STUB_FAILURE_NAMESPACE).toString("base64url");
-          let delayedFailure: Promise<void> | undefined;
+          const entered = Promise.withResolvers<void>();
+          const release = Promise.withResolvers<void>();
           const write = vi.spyOn(world.streams, "write").mockImplementation(async (...args) => {
-            if (args[1].endsWith(`_${failureSuffix}`) && delayedFailure === undefined) {
-              delayedFailure = new Promise((resolve) => setTimeout(resolve, 1_200));
-              await delayedFailure;
+            if (args[1].endsWith(`_${failureSuffix}`)) {
+              entered.resolve();
+              await release.promise;
             }
             return await append(...args);
           });
+          let acknowledged = false;
+          const recording = recordToolStubFailure("connection_execute", "stubbed").then(() => {
+            acknowledged = true;
+          });
           try {
-            await recordToolStubFailure("connection_execute", "stubbed");
+            await entered.promise;
+            expect(acknowledged).toBe(false);
+            expect(await readStubFailure(run.runId)).toBeUndefined();
+            release.resolve();
+            await recording;
             expect(await readStubFailure(run.runId)).toBe(
               'Stubbed tool "connection_execute" failed during output processing.',
             );
-            expect(delayedFailure).toBeDefined();
           } finally {
-            await delayedFailure;
+            release.resolve();
+            await recording;
             write.mockRestore();
           }
         });
