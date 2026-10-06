@@ -9,8 +9,9 @@ const strings = { type: "array", uniqueItems: true, items: { type: "string" } };
 const nonnegativeInteger = { type: "integer", minimum: 0 };
 const jsonType = { enum: ["array", "boolean", "integer", "null", "number", "object", "string"] };
 
-// A deliberately bounded, reference-free subset. The validator accepts unknown
-// keywords and malformed schemas, which would silently broaden a stub's match.
+// The library validates data, but does not validate the schema itself:
+// { minimun: 10 } is ignored and { minimum: "10" } is not rejected.
+// Validate our supported, reference-free subset before using it to match inputs.
 const constraintSchema = new Validator(
   {
     anyOf: [
