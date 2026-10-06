@@ -1,7 +1,7 @@
 ---
 issue: https://github.com/vercel/eve/issues/3022
 status: in-progress
-last_updated: "2026-09-30"
+last_updated: "2026-10-05"
 ---
 
 # Sessions across eve upgrades
@@ -12,18 +12,21 @@ A session is **stranded** when the code that started its Workflow run is no long
 execute it. On Vercel this is rare: old deployments keep running, and sessions hand off to the new
 one. On self-hosted Worlds, every eve upgrade strands every parked session (#2866, #3022).
 
-This doc covers three proposals. Each one stands on its own, and they can ship in any order:
+This doc proposes two tracks. They are independent, can be built in parallel, and can ship in
+either order:
 
-| Proposal                                                                                         | What it does                                                                                                                                                                                             |
-| ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [1. Deployment routing for self-hosted Postgres](#1-deployment-routing-for-self-hosted-postgres) | Old and new builds run side by side against one Postgres World, and each run's work goes to the build that started it. Sessions hand off as they do on Vercel.                                           |
-| [2. Reset stranded sessions](#2-reset-stranded-sessions)                                         | eve detects a stranded session before delivering to it. A channel message ends it cleanly and starts a fresh session that gets the old transcript as context. A send by session id gets a precise error. |
-| [3. Revive stranded sessions](#3-revive-stranded-sessions)                                       | Starts a new session on the new code, seeded with the stranded session's history, so the conversation continues.                                                                                         |
+| Track                                                                                            | What it does                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [1. Deployment routing for self-hosted Postgres](#1-deployment-routing-for-self-hosted-postgres) | Old and new builds run side by side against one Postgres World, and each run's work goes to the build that started it. Sessions hand off as they do on Vercel, so fewer sessions strand.                                                                   |
+| [2. Lazy reset and replacement](#2-lazy-reset-and-replacement-of-stranded-sessions)              | When a session strands anyway, eve preserves it without running it. The next channel message retires it and starts a replacement session, optionally carrying the old transcript. Sessions that never get another message are cleaned up at their timeout. |
 
-Routing gives self-hosted eve a way to keep sessions working across deployments, which it doesn't
-have today. It covers Postgres only. The default local World still has no such path, and supporting
-it is [deferred](#deferred-local-world). Reset defines what happens when a session strands anyway, on
-every World. Revive goes further than reset: it carries the old session's full state, not just its transcript.
+Routing reduces how often sessions strand, on Postgres only. Lazy replacement defines what happens
+when they do, on every World, including the default local World where routing is
+[deferred](#deferred-local-world). Neither depends on the other: routing changes only _which_
+owners count as retired, and replacement handles them the same way.
+
+An earlier version of this doc also proposed reviving stranded sessions from their Workflow
+checkpoints. That option is dropped; see [Considered and rejected](#considered-and-rejected).
 
 ## Status quo
 
@@ -41,8 +44,9 @@ only because Vercel keeps old deployments running and routes each run to its own
 
 **Sessions end on a timeout.** A session ends when `sessionTimeoutMs` has passed since it was
 created or last handed off. The default is 30 days, and `false` turns the timeout off. Ordinary
-messages don't extend it. At the deadline the session completes and releases its continuation
-aliases. A later post in that Slack thread starts a fresh session with no memory of the old one.
+messages don't extend it. The deadline is enforced by a timer workflow that signals the session,
+which then runs its own finalization and releases its continuation aliases. A later post in that
+Slack thread starts a fresh session with no memory of the old one.
 
 **Self-hosted Worlds can't hand off.** The World is chosen when the app is built
 (`experimental.workflow.world`, otherwise the local World), and `eve start` runs that one build.
@@ -62,20 +66,18 @@ installed eve.
 
 ## Recommendation
 
-Do proposals 1 and 2:
+Pursue both tracks in parallel:
 
 - **[Deployment routing for self-hosted Postgres](#1-deployment-routing-for-self-hosted-postgres)**,
-  so that self-hosted eve has a story for running several deployments, on Postgres. Today it has
+  so that self-hosted eve has a supported way to run several deployments, on Postgres. Today it has
   none.
-- **[Reset stranded sessions](#2-reset-stranded-sessions)**, with
-  [carried context](#carrying-context-into-the-new-session), so that when sessions do strand, the
-  fallback is better: users keep the conversation's context, callers get precise errors, operators
-  get accurate logs, and descendant runs are cleaned up. This covers every World, including the
-  local World, where routing is deferred.
+- **[Lazy reset and replacement](#2-lazy-reset-and-replacement-of-stranded-sessions)**, so that when
+  sessions do strand, the user keeps the conversation's context, callers get precise errors,
+  operators get accurate logs, and stranded runs and their descendants are cleaned up. Ship it first
+  with no carried context, then add the bounded transcript and make it the default.
 
-Hold off on [revive](#3-revive-stranded-sessions). Routing plus reset with carried context covers
-most of its benefit without its API surface and lifecycle quirks. Revisit it if users still need
-full-fidelity recovery after both ship.
+A custom hook that fetches or summarizes the previous conversation is a
+[possible later API](#custom-context-hook), once the default and the replacement metadata ship.
 
 ## 1. Deployment routing for self-hosted Postgres
 
@@ -83,7 +85,8 @@ Today no self-hosted World keeps a session working across a deployment. Every up
 parked conversation, and the only workaround is to avoid upgrading while sessions are open. Routing
 would give Postgres the same stability across deployments that Vercel has, as a supported upgrade
 path. The default local World would still not have it: an eve upgrade there strands sessions
-exactly as it does today, and reset handles them (see [Deferred: local World](#deferred-local-world)).
+exactly as it does today, and lazy replacement handles them (see
+[Deferred: local World](#deferred-local-world)).
 
 A self-hosted World that does what Vercel does gets handoff without changes to eve's session code:
 
@@ -111,7 +114,8 @@ deployment-affinity guard, which reroutes a misrouted delivery, turns on when th
 4. The operator decides how long A's workers stay up, based on their session timeout settings. A
    session's anchor stays on the build that created it until the session ends, and each handoff
    restarts the timeout. Managing this is manual. When the operator decommissions A, its remaining
-   sessions are stranded, and B [resets](#2-reset-stranded-sessions) them.
+   sessions are stranded, and B [replaces](#2-lazy-reset-and-replacement-of-stranded-sessions) them
+   lazily.
 
 No session-aware router is needed: public traffic always goes to the newest build. Scheduled tasks
 and channels that pull input must run only on the newest build, so worker-only mode turns them off.
@@ -137,183 +141,287 @@ and channels that pull input must run only on the newest build, so worker-only m
 - `eve start --worker-only`.
 - Build outputs that aren't overwritten. Container images already work. Plain hosts need
   `.eve/builds/<id>` or similar.
-- Stranded detection based on decommissioning instead of eve-version mismatch. A build that is only
-  temporarily unreachable is not stranded, because reset can't be undone.
+- Retirement evidence based on decommissioning instead of eve-version mismatch (see
+  [Retired versus unavailable](#retired-versus-unavailable-owners)). A build whose workers are only
+  temporarily down is not retired, because retirement can't be undone.
 - Commands to list and decommission builds, and an upgrade guide.
 
 Runs created before routing ships record `"postgres"`. They strand once, on the first upgrade after
-routing ships, and get reset.
+routing ships, and are replaced lazily.
 
-## 2. Reset stranded sessions
+## 2. Lazy reset and replacement of stranded sessions
 
-Some sessions strand even with routing: on the local World and single-build setups, on Postgres when
-a build is decommissioned, and on every World when the Workflow spec floor moves. Reset makes eve
-check for this before delivering a message. It doesn't let replay fail. It ends the stranded session
-through the existing `reset` operation, which the docs already describe as terminally retiring a
-session.
+Some sessions strand even with routing: on the local World and single-build setups, and on Postgres
+when a build is decommissioned. eve should detect this before delivering a message, rather than let
+replay fail, and should keep the conversation going on the new code.
+
+The proposal is **lazy**: eve does nothing to a stranded session until something touches it. At
+startup it skips the stranded run instead of replaying it, and leaves its hooks in place, so the
+channel address still points at the old session. Then one of three things happens:
+
+```text
+Confirmed retired owner → skip replay; keep hooks; refuse new work to the old run
+  ├─ channel message before the cutoff
+  │    → capture bounded transcript (optional) → retire old run
+  │    → start one replacement session → process the message as its first turn
+  ├─ explicit reset → retire, no replacement, no carried context
+  └─ cutoff reached with no message → cleanup retires the run and its descendants,
+                                      releases its hooks, starts no replacement
+```
+
+The **cutoff** is the session's lifetime start plus 30 days: its creation or latest deployment
+handoff, the same anchor as the default `sessionTimeoutMs`. A session stranded right after a handoff
+gets the lifetime it would have had healthy. After the cutoff, the next message starts an ordinary
+fresh session with no link to the old one.
+
+### Retired versus unavailable owners
+
+Replacement is irreversible, so eve acts only on owners it can prove are permanently gone. Owner
+inspection returns one of three verdicts:
+
+- **`runnable`.** Deliver normally.
+- **`retired`.** The owner's code is gone for good. Without routing, this means the run's eve
+  version differs from the running one, and only under an explicit single-build retirement policy
+  (the local World and `eve dev`). With routing, it means the owner's build was decommissioned.
+- **`unavailable`.** eve can't run the owner now but has no proof it is gone, for example a dormant
+  `eve dev` generation or a build whose workers are down. Deliveries are refused with a retryable
+  error. Nothing is ended.
+
+Ingress, the startup replay guard, and cleanup share this one verdict, so a run the guard skips is
+always refused at ingress. Vercel (`deploymentAffinity`) is not checked at all.
+
+### Replacement with and without a carried transcript
+
+When a channel message reaches a retired owner before the cutoff, eve retires the old session (owner
+and stream anchor), starts a new session at the same address, and runs the message as its first
+turn. The new session has a new id and stream, and initializes normally from the incoming request,
+with fresh auth and channel binding. Concurrent messages to the address converge on one replacement.
+
+What the replacement knows about the old conversation is set by one option:
+
+```ts
+// Proposed defineAgent option fragment; names are provisional.
+sessions: {
+  replacement: { context: "transcript" }, // or "none"
+}
+```
+
+- **`"none"`.** The replacement starts empty, like a session after a timeout. This is the first
+  milestone and its initial default: it fixes the misleading errors, the dropped in-flight turn, and
+  the orphaned runs, without changing what the model sees.
+- **`"transcript"`.** eve reads the tail of the old session's public stream and gives the new
+  session the recent user and assistant text as labeled historical context, ahead of channel
+  context and the new message. This becomes the default once its limits and tests are settled.
+
+Either way, the replacement learns where it came from, on `ctx.session.replacement` and
+`session.started.data.replacement`:
+
+```ts
+{
+  previousSessionId: "wrun_…",
+  cause: "deployment-retired",
+  context: "transcript", // or "none" / "unavailable"
+}
+```
+
+Channels can use it to tell the user the agent was upgraded. Authored hooks can record the link.
+Replacements after the cutoff, and fresh sessions after cleanup, carry no metadata.
+
+### The carried transcript
+
+**Source.** The public event stream already records the conversation: `message.received` for user
+messages and `message.completed` for assistant replies. It is eve's own versioned protocol, which
+clients already read across eve versions, so the new build reads it from storage without running
+old code. Workflow step inputs, which revive would have used, are internal and change with
+`DURABLE_SESSION_VERSION`.
+
+**Bounds.** The read is bounded before parsing: at most 2,000 tail events and 4 MiB within
+5 seconds. The projection keeps at most 40 messages, 24,000 code points, and an estimated 8,000
+model tokens, cutting the oldest message from its front. Reasoning, tool calls and results,
+attachments, approvals, and partial output are excluded.
+
+**Boundaries.** Text before the last `context.cleared` or reset is not carried. A predecessor with
+zero retention carries nothing; eve does not keep a separate recovery copy that would defeat the
+retention setting. A read that fails or can't reach the tail within its bounds reports
+`context: "unavailable"` and logs a warning; it never fails the replacement.
+
+**Successive replacements.** The structured transcript is published once on the replacement's
+`session.started`. If that session later strands too, its capture starts from that copy, so the
+carried text stays bounded without walking an unbounded predecessor chain.
+
+**What it isn't.** The transcript is text, not restored execution. History, authored state, limits,
+usage, credentials, and the sandbox all start fresh. Work in progress on the old run is lost and
+never retried. If the old agent said "I've started the deployment check," the new session must not
+treat that as evidence it finished. Old approvals authorize nothing: an input response addressed to
+the stranded session is rejected, with or without an accompanying message, and the model has to ask
+again.
+
+Channels can still add their own context on top. Slack's `threadContext`, for example, can include
+thread messages the bot never received. It isn't a framework-wide substitute: it is capped at the
+first 50 thread messages, needs Slack history permissions, and other channels may have no history
+API.
+
+### Custom context hook
+
+Some apps already keep their own conversation store or summaries, or want a model-written summary
+instead of a raw tail. A later API could let an app supply the carried context itself:
+
+```ts
+// Proposed defineAgent option fragment; not a supported API.
+sessions: {
+  replacement: {
+    async prepareContext({ previous, transcript, signal }) {
+      const summary = await loadConversationSummary(previous.sessionId, { signal });
+      return summary ? [summary] : transcript ? [transcript] : [];
+    },
+  },
+}
+```
+
+`loadConversationSummary` is app code. It could read the app's own store, call `sessions.attach()`
+with `follow: false` for a bounded read of the old stream, or summarize eve's default transcript
+with a model. eve calls the hook on the new code after the old session is retired and before the
+replacement starts. It passes safe, versioned metadata (`previous.sessionId`, cause, lifetime start)
+and the bounded default transcript, not the old session's `HookContext` or state. What the hook
+returns is carried in place of the default transcript.
+
+Before exposing it, the contract needs:
+
+- **A timeout and fallback.** The hook runs in channel ingress. On timeout or error, eve falls back
+  to the default transcript or to no context, and reports `"unavailable"`.
+- **Retries.** The hook may run more than once for one replacement if the sender retries after a
+  partial failure, so it must be idempotent.
+- **Output bounds.** eve caps what the hook returns with the same model-token budget as the
+  default.
+- **No lifecycle control.** The hook prepares context only. eve owns retirement, arbitration, and
+  cleanup; the hook can't start, cancel, or keep sessions.
+- **Boundaries.** The hook isn't called after the cutoff or after an explicit reset. Apps that read
+  their own store must respect `context.cleared` and retention themselves.
+
+Defer the hook until the default and the replacement metadata ship. `context: "none"` plus the
+metadata already lets an app look up its own history from `session.started`, at the cost of
+loading it after the first turn starts rather than before.
 
 ### What users see
 
-| Who                                     | Today                                                              | With reset                                                                                                                                                            |
-| --------------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Slack user (any channel alias)          | The bot answers with no memory of the thread                       | Same answer with no memory, unless eve carries the old transcript into the new session (see [Carrying context](#carrying-context-into-the-new-session))               |
-| HTTP or TUI client holding a session id | `session_not_active`, no reason                                    | `409 session_stranded` saying the session ended because of an upgrade, and that the next step is to start a new session. `Session.send` throws `SessionStrandedError` |
-| Operator                                | Every parked session fails at startup with `CORRUPTED_EVENT_LOG`   | No failed runs. One warning per reset naming the session and both eve versions                                                                                        |
-| Authored hooks                          | The old session fails. `session.started` fires for the new session | The old session ends without running its code, so its terminal hooks don't fire. `session.started` fires for the new session                                          |
-| Descendant runs                         | Orphaned until their own timeouts                                  | Cancelled                                                                                                                                                             |
+| Who                                     | Today                                                            | With lazy replacement                                                                                                                                                                  |
+| --------------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Slack user (any channel alias)          | The bot answers with no memory of the thread                     | Before the cutoff, the bot answers with recent conversation as context (`"transcript"`) or without (`"none"`). After the cutoff, it answers fresh, as after a timeout                  |
+| Slack user answering an old approval    | The answer goes nowhere                                          | The answer is rejected and the stranded session is kept. Channel-specific feedback is still to do                                                                                      |
+| HTTP or TUI client holding a session id | `session_not_active`, no reason                                  | `409 session_stranded` naming the cause, and the next step is to start a new session. `Session.send` throws `SessionStrandedError`. Unavailable owners get a retryable refusal instead |
+| Operator                                | Every parked session fails at startup with `CORRUPTED_EVENT_LOG` | No failed replays. One warning per retirement naming the session, the reason, and both eve versions                                                                                    |
+| Authored hooks                          | The old session fails. `session.started` fires for the new one   | The old session ends without running its code, so its terminal hooks don't fire. `session.started` fires for the replacement, with `data.replacement`                                  |
+| Descendant runs                         | Orphaned until their own timeouts                                | Cancelled when the session is retired, or by cleanup at the cutoff                                                                                                                     |
 
-By default, nothing changes for chat users: the conversation is lost either way, just as when a
-session times out. What improves is that the failure is accurate. Operators get a log line that names the cause
-instead of an error that looks like storage corruption. Clients that hold a session id learn why
-the session ended and what to do. Stray descendant runs no longer keep running.
+Fixed-id callers are never redirected to a replacement. Explicit `reset` ends a stranded session.
+`clear` refuses, because it would keep a session that can't run.
 
-### Mechanism
+### Coordination
 
-eve looks up the owner before committing a delivery, so a message is never committed to a run that
-can't execute it:
+Normal session lifecycle is serialized by the owner run's inbox. Replacement is the one case where a
+request handler acts on behalf of an owner that can't run, so the guarantees are sized to the cost
+of each failure rather than built as a general transaction:
 
-- **Channel alias.** eve cancels the stranded run and its descendants, waits for the hooks to be
-  released, and starts a new session that claims the alias. The incoming message becomes that
-  session's first turn. Concurrent messages to the same address produce one new session.
-- **Session id.** Refused, because a silent reset would leave the caller holding a dead id.
-- **Explicit `reset` and `clear`** work on stranded sessions. A stranded session can't clear in
-  place, so `clear` resets it instead.
-- **Startup** skips stranded runs instead of replaying them.
+- **Hard.** Never execute obsolete code. Never cancel or steal a newer owner's claims. One owner per
+  address, through the World's per-token hook claims.
+- **Idempotent.** Every retirement step tolerates an earlier or concurrent attempt, so a sender's
+  retry converges after a partial failure.
+- **Tolerated.** A crash between retirement and the replacement's start degrades to an ordinary
+  fresh session on retry, losing only the metadata and carried context. Duplicate terminal stream
+  events and split replacements across one session's several aliases are tolerated unless measured
+  to matter.
+- During a handoff, refuse retryably rather than report the address as unowned.
 
-### Carrying context into the new session
+### The main challenge: cleanup after the session timeout
 
-A reset doesn't have to start from nothing. Before cancelling the stranded run, eve can read the
-conversation so far and give it to the new session as **context**, not as inherited history. This
-happens inside eve, so every channel gets it without per-channel logic.
+Lazy preservation trades startup failure for a stranded run that stays `running` and keeps its
+hooks until something retires it. A message retires it. But a session that never gets another
+message has nothing to retire it: its timeout is enforced by a timer workflow that signals the
+session to finalize itself, and both the timer and the finalizer run on old code that can no longer
+execute. Without a separate path, every stranded session that goes quiet stays `running` forever,
+along with its stream anchor, its claimed aliases, and any tasks, subagents, or workflow tools it
+started. This is a regression from today, where the failed replay at least makes the run terminal.
 
-**Where the transcript comes from.** The stranded session's public event stream already records
-the conversation: `message.received` for user messages and `message.completed` for assistant
-replies. That stream is eve's own versioned protocol, which clients already read across eve
-versions. The new build reads it from storage without running the old code. Revive instead reads
-Workflow step inputs, which are an internal detail. So the stream is the more stable source, and a
-`DURABLE_SESSION_VERSION` bump doesn't affect it. eve reads the stream before cancelling the run,
-so zero-retention runs don't lose it first.
+So the core of this track is **cleanup that runs on current code, independent of user input and of
+the old timeout workflows**:
 
-**How it reaches the model.** eve builds a bounded transcript of user and assistant text from the
-tail of the stream, compacting it with the model if it's long. It injects the transcript into the
-new session's first turn, labeled as the conversation before an upgrade. This is similar to what
-Slack's `threadContext` does with thread messages. Everything else about the new session is fresh:
-history starts with this turn, and state, limits, usage, and the sandbox start over. Nothing from
-the old session can act on its own. A pending approval in the transcript is just text, so the model
-has to ask again.
+1. Page through retired owners, resolving each session's authoritative owner and lifetime start.
+2. Recheck the cutoff and any competing replacement or reset immediately before cancelling.
+3. Retire the owner, its stream anchor, and its discoverable local descendants, and release only
+   their hooks. Never cancel a runnable owner or an anchor a runnable owner still depends on.
+4. Make progress resumable and bounded per pass, so a crash or a large backlog doesn't restart from
+   scratch or block a host.
 
-**What the user sees.** The bot answers with the conversation in mind. If the new session carries
-a link to the stranded one (see [Open questions](#open-questions)), the channel can also tell the
-user what happened.
+Cleanup creates no replacements, for top-level sessions or for descendants. Message-driven
+retirement and explicit reset use the same descendant cleanup, rather than scanning the whole World
+inside ingress.
 
-**Compared with revive.**
+The hard parts:
 
-|                           | Reset with carried context                           | Revive                                                                        |
-| ------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------- |
-| What the new session gets | A transcript, as context in the first turn           | The old history, state, limits, and usage, as its own                         |
-| Source                    | Public event stream (eve protocol)                   | Workflow step inputs (internal)                                               |
-| Tool calls and results    | Not carried, apart from what the replies mention     | Carried                                                                       |
-| Session lifecycle         | Ordinary new session                                 | Continuation: `session.revived`, `revivedFrom`, `session.started` fires again |
-| New public API            | Possibly an opt-out, and the link to the old session | Policy, command, route, event, field, error                                   |
+- **Where it runs.** A persistent `eve start` host can run it at startup, periodically, and soon
+  after each retirement. Serverless hosts need a scheduled invocation or a World-owned job, not a
+  best-effort interval. Nothing runs while every host is down; overdue work is processed when one
+  returns. A cleanup workflow that itself depends on versioned code would strand at the next
+  upgrade, so cleanup state must be readable without old-code replay.
+- **Finding descendants.** Workflow stamps `$parentRunId` and `$rootRunId`, and eve stamps
+  `$eve.root` and `$eve.session`, but the portable `runs.list` API can't filter by them, and there
+  is no recursive cancel. A portable scan costs about one pass over all run records per sweep.
+  Lineage must traverse terminal intermediates, such as a finished task that started a subagent,
+  without cancelling unrelated Workflow roots. Runs from earlier releases that lack attribution can
+  only be reported, not safely cancelled. Remote agents and external jobs are outside local
+  cancellation, and cancellation never undoes side effects.
+- **Interaction with authored timeouts.** An earlier authored timeout wins. A longer or disabled
+  timeout can't extend preservation of a retired owner past 30 days. Healthy sessions are
+  unchanged.
+- **Racing replacement and reset.** Cleanup and a message-driven replacement can reach the same
+  owner at once. Both must converge on one retirement, and a message that commits after the cutoff
+  must not carry context even if cleanup hasn't run yet. Closing the check-then-cancel window
+  cleanly may need a World-level conditional cancel.
 
-The transcript loses information. The model doesn't see tool results or authored state, so it may
-need to redo lookups or ask again. In exchange, it adds almost no API, and it works the same on
-every channel and every World. For most chat agents, this may close most of the gap between reset
-and revive.
-
-Channels can still add their own context on top. For example, Slack's `threadContext` can include
-thread messages the bot never received.
-
-### Stranding reasons
-
-The stranding `reason` is `deployment-unavailable` or `world-spec-incompatible`. Without routing,
-`deployment-unavailable` means the eve version differs. With routing, it means the owner's build has
-been decommissioned.
+If cleanup proves too complex to make reliable, the fallback is **eager retirement with lazy
+replacement**: retire stranded runs at startup, keep a bounded record that maps each address to its
+predecessor, and replace lazily from that record on the next message. That avoids long-lived
+stranded runs but adds its own retention and arbitration problems for the predecessor index. Do not
+ship indefinite preservation without one or the other.
 
 ### Tradeoffs
 
-- **Reset can't be undone.** A session that has been reset can't be resumed by restoring its
-  deployment or rolling back eve. We accept this so that stranded sessions recover without anyone
-  stepping in. To keep a rollback path, pin eve before upgrading, or with routing, keep the old
+- **Retirement can't be undone.** A retired session can't be resumed by restoring its deployment or
+  rolling back eve. To keep a rollback path, pin eve before upgrading, or with routing, keep the old
   build running.
-- One extra lookup per delivery: `runs.get` on local and Postgres, `hooks.getByToken` on Vercel.
-- A stranded run that never gets another message stays `running`, because its timeout runs on the
-  old code.
+- **The transcript is lossy.** The model doesn't see tool results or authored state, so it may need
+  to redo lookups or ask again. In exchange, it adds almost no API and works the same on every
+  channel and every World.
+- One extra hook lookup per delivery on Worlds without `deploymentAffinity`. Runnable owners are
+  cached, so steady state costs no run read.
+- Cleanup adds a periodic background pass and, until a lineage query exists, scans whose cost grows
+  with the number of runs.
 
-## 3. Revive stranded sessions
+## Considered and rejected
 
-Revive takes the stranded session's history and passes it into the **new** code, which starts a new
-session with that history. The old run never executes again. The new code reads the old run's stored
-records and continues the conversation from them.
+**Revive from checkpoints.** Revive would have read the stranded run's latest Workflow step input,
+which holds the full session state, and started a new session seeded with its history, state,
+limits, and usage. It recovers more than a transcript, but:
 
-### Mechanism
+- it couples eve to Workflow internals: step inputs must be retained and hold the full state, and a
+  `DURABLE_SESSION_VERSION` bump makes older sessions unrevivable;
+- it needs a large API surface: a policy value, a command, an HTTP route, a `session.revived` event,
+  `revivedFrom`, and a revive error;
+- authors must handle lifecycle quirks: a new id, `session.started` firing again, and terminal hooks
+  that never fire;
+- pending work, approvals, descendants, credentials, and the sandbox are lost anyway, so for
+  anything but idle sessions it degrades toward a reset;
+- it adds a third migration mechanism next to handoff and legacy import.
 
-1. **Read the checkpoint.** Every session step receives the full session state as its input, and
-   the World stores step inputs. The new build reads the latest one from the stranded run:
-   history, `defineState` and extension state, limits, usage, and initiator context. It checks
-   `$eve.session_version`, a new run attribute, to confirm it can read that format. If it can't,
-   revive falls back to reset.
-2. **Cancel the stranded run** and its descendants, and wait for its hooks to be released.
-3. **Start a new session** seeded with the checkpoint. It claims the channel aliases, so the Slack
-   thread maps to it. The current build's instructions, model, and tools apply to the old history,
-   just as they do after a handoff.
-4. **Emit `session.revived`** as the new session's first event. It carries the previous session id,
-   the previous eve version, and the ids of requests that were interrupted.
-5. **Run the incoming message** as the first turn.
+Routing plus lazy replacement with a carried transcript covers most of the benefit. A custom
+context hook covers apps that need more than the default transcript.
 
-The session id changes, because the old run's hooks can only be freed by cancelling it, and a
-cancelled run's stream is closed.
-
-Revive happens automatically on channel deliveries when the agent opts in with
-`sessions: { stranded: "revive" }`. Callers that hold a session id get the same 409 as with reset,
-marked `revivable`. They call `POST /sessions/:id/revive` (or `/revive` in the TUI) and switch to
-the returned id.
-
-### What users see
-
-A Slack user gets a reply that remembers the conversation. The channel can use `session.revived` or
-`ctx.session.revivedFrom` to post something like "I was upgraded. Here's where we left off." For
-authored code it's a new session: `session.started` fires again, and once-per-conversation side
-effects such as a welcome message need a `revivedFrom` guard. The old session's terminal hooks never
-fire.
-
-### Pending work is lost
-
-A checkpoint is the session's last settled state. Anything in progress at that point belonged to
-the stranded run and can't be carried forward:
-
-- **An in-progress turn.** If the upgrade interrupted a turn, its partial work after the last
-  checkpoint is gone. A tool call may already have had side effects, but its result was never
-  recorded. The model sees an interruption record and may call the tool again.
-- **Pending approvals and questions.** The Slack buttons or prompts are still visible, but
-  answering them does nothing: their ids are listed in `session.revived`, and late answers authorize
-  nothing. The model learns the request was interrupted and has to ask again. This is deliberate:
-  an approval granted to the old run never authorizes anything in the new session.
-- **Tasks, subagents, and workflow tools.** These are cancelled, and their results are lost. The
-  model sees an interruption record and decides whether to start them again.
-- **Connection authorizations.** Tokens are not carried over, so users re-authorize.
-- **The sandbox.** It belongs to the stranded session, so files and processes in it are gone.
-- **Messages accepted after the last checkpoint.** These are lost until a planned follow-up
-  redelivers them.
-
-So revive is most useful for sessions that were idle when the upgrade happened, which is the usual
-case for long chat threads. The more a session had in progress, the closer revive gets to a reset.
-
-### Tradeoffs
-
-- **For:** it recovers the conversation with full fidelity: tool results, authored state, limits,
-  and usage, not just a transcript. It tells the user what happened, and the Slack thread keeps
-  working. On the local World and single-build setups, it's the only way to keep the full
-  conversation.
-- **Against:**
-  - **API surface:** a policy value, a command, an HTTP route, an event, `revivedFrom`, and a
-    revive error.
-  - **Lifecycle quirks** that authors must handle: a new id, `session.started` firing again, and
-    terminal hooks that never fire.
-  - **Coupling to Workflow internals:** it relies on step inputs being kept and holding the full
-    state. A `DURABLE_SESSION_VERSION` bump makes older sessions impossible to revive.
-  - **A third migration mechanism**, next to handoff and legacy import.
-  - **Fewer users** once routing ships, and once reset carries context.
+**Eager replacement.** Retiring stranded sessions at startup and creating each replacement
+immediately, idle and waiting for the next message, was also investigated. It was rejected because
+startup has no incoming request to initialize the replacement from: a Slack thread address alone
+doesn't reconstruct the installation, audience, and reply state, and current continuation sends
+don't carry the channel binding used at session creation. It would also need a World contract for
+conditionally replacing a whole alias set during recovery, which doesn't exist today.
 
 ## Deferred: local World
 
@@ -322,8 +430,8 @@ memory, and every process re-enqueues every run on startup. Separate directories
 because handoff needs shared storage. Supporting several builds would take a supervisor that owns the
 World and routes each delivery to a child process for that build, each with its own copy of eve.
 The supervisor and children would also need an RPC protocol that stays compatible across eve
-versions. Local users get reset, and revive if it ships. Postgres is the path for upgrades that keep
-conversations.
+versions. Local users get lazy replacement. Postgres is the path for upgrades that keep sessions
+running.
 
 ## Open questions
 
@@ -332,14 +440,12 @@ conversations.
 2. **Build id granularity.** Should every `eve build` get a new id, as on Vercel? Or should it change
    only when replay compatibility changes (the eve version plus a hash of the workflow code)? The
    second keeps fewer builds live for teams that release often.
-3. **Carried context.** Should carrying the transcript into the new session be on by default? How
-   large should the transcript be before it's compacted? Should it include tool call names or
-   results, or only user and assistant text?
-4. **Linking a reset session to its predecessor.** What form should the link take: a
-   `ctx.session.strandedFrom { sessionId, reason }` field, or a `session.reset` first event? It lets
-   channels tell the user that the session was reset because of an upgrade.
-5. **Stranded runs that never get another message.** Reset them eagerly at startup, or leave them
-   `running`?
-6. **Revive.** Is it worth its API surface and lifecycle quirks, given that reset with carried
-   context recovers much of the conversation without them? Are new-session semantics acceptable to
-   authors?
+3. **Cleanup on serverless and routed Worlds.** Is the in-process maintenance enough for persistent
+   hosts, and what invokes it elsewhere: a scheduled task, or a World-owned job? Does closing the
+   check-then-cancel window need a World conditional cancel?
+4. **Descendant discovery.** Is a bounded portable scan acceptable until Workflow offers a lineage
+   query or a subtree cancel?
+5. **Transcript default.** Are the proposed bounds right? Should the default switch to
+   `"transcript"` once its tests pass, and is it classified as a public-API change?
+6. **Custom context hook.** Is there demand beyond what `"none"` plus the replacement metadata
+   allows? If so, what timeout and fallback should it have?
