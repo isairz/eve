@@ -69,7 +69,10 @@ export type TaskOutcome =
  * it settled. Cancelled work never reports back.
  */
 export type TaskResult = Exclude<TaskOutcome, { readonly status: "cancelled" }> & {
-  /** Original calls, retained for output processing even when delivered in a later turn. */
+  /**
+   * Keep original call and turn IDs so output-processing failures in a later turn
+   * can be recorded against the stubbed call.
+   */
   readonly calls?: readonly TaskCall[];
 };
 
