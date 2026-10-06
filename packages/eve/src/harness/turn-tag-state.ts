@@ -119,7 +119,9 @@ export function getSessionRuntimeUsageLimits(
  * approval buys one full configured window even after an overshoot. All axes
  * bump together to avoid back-to-back prompts. Configured limits never change.
  */
-export function bumpSessionRuntimeUsageLimits(session: HarnessSession): HarnessSession {
+export function bumpSessionRuntimeUsageLimits<T extends Pick<HarnessSession, "limits" | "state">>(
+  session: T,
+): T {
   const usage = getSessionTokenUsage(session);
   const bumped = grantRuntimeUsageLimits({
     configured: configuredSessionUsageLimits(session),

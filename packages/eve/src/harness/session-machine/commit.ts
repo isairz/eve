@@ -1,4 +1,4 @@
-import { getSessionUsage } from "#harness/turn-tag-state.js";
+import { bumpSessionRuntimeUsageLimits, getSessionUsage } from "#harness/turn-tag-state.js";
 import type { ModelMessage } from "ai";
 
 import {
@@ -27,6 +27,8 @@ import { clearPendingAuthorization } from "#harness/authorization.js";
 /** What a transition returns. Nothing else changes session state. */
 export interface Transition {
   readonly turn: TurnState;
+  /** Re-anchor runtime ceilings to current usage plus configured windows at apply time. */
+  readonly grantBudget?: true;
   readonly events: readonly UnstampedMessageStreamEvent[];
   /** Messages the transition commits to the end of history. */
   readonly commit?: readonly ModelMessage[];
@@ -46,11 +48,15 @@ export function sessionView(
   projection: SessionProjection,
   state: SessionStateMap | undefined,
 ): SessionView {
+  const turn = readTurnState(state);
   return {
     projection,
-    relayedRequestIds: new Set(getProxyInputRequests(state).keys()),
+    relayedRequestIds: new Set([
+      ...getProxyInputRequests(state).keys(),
+      ...Object.keys(turn.relayedRoutes ?? {}),
+    ]),
     signIns: getPendingAuthorization(state)?.challenges ?? [],
-    turn: readTurnState(state),
+    turn,
     usage: getSessionUsage({ state }),
   };
 }
@@ -86,7 +92,11 @@ export async function applyTransition<T extends HarnessSessionBase>(
         : setPendingAuthorization(clearPendingAuthorization(session.state), {
             challenges: transition.signIns,
           });
-  const next = writeTurnState({ ...session, state }, transition.turn);
+  const withState = { ...session, state };
+  const next = writeTurnState(
+    transition.grantBudget === true ? bumpSessionRuntimeUsageLimits(withState) : withState,
+    transition.turn,
+  );
   const commit = transition.commit ?? [];
   if (transition.clearsHistory !== true && commit.length === 0) return next;
   if (!("history" in session)) {

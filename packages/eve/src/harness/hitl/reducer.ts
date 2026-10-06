@@ -34,8 +34,8 @@ import {
   openAuthorizations,
   requireAuthorizations,
 } from "./authorization.js";
-import { store, type HumanInputState, type Reduced, isOpenRelayed } from "./state.js";
-import { readState } from "./state-legacy.js";
+import { type HumanInputState, type Reduced, isOpenRelayed } from "./state.js";
+import { readState, store } from "./state-legacy.js";
 import { typedAnswers } from "./input-typed-reply.js";
 
 // ---------------------------------------------------------------------------

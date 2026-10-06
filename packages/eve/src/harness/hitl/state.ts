@@ -2,16 +2,17 @@ import type { ModelMessage } from "ai";
 
 import type { SessionAuthContext } from "#channel/types.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
-import type { SessionStateMap, StepInput } from "#harness/types.js";
-import type { ApprovalCandidateOutcome } from "#protocol/message.js";
+import type { StepInput } from "#harness/types.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 import type { InputRequest, InputResponse } from "#shared/input.js";
 
+import type { ApprovalAudit } from "#harness/session-machine/view.js";
+
 import type { Command } from "./command.js";
-import type { CandidateDecision, RelayRoute, RequestAt } from "./input.js";
+import type { RelayRoute, RequestAt } from "./input.js";
 
 // ---------------------------------------------------------------------------
-// State: one session key, read and written only here.
+// Read-only rule projection; the session machine owns persisted execution state.
 // ---------------------------------------------------------------------------
 
 export const STATE_KEY = "eve.harness.humanInput";
@@ -61,31 +62,6 @@ export function parseState(value: unknown): HumanInputState {
   const grants: unknown = Reflect.get(value, "grants");
   if (typeof requests !== "object" || requests === null || !Array.isArray(grants)) return EMPTY;
   return value as HumanInputState;
-}
-
-/** Stores `state` in the session's state, removing the key when nothing is open. */
-export function store(
-  sessionState: SessionStateMap | undefined,
-  state: HumanInputState,
-): SessionStateMap | undefined {
-  const next: Record<string, unknown> = { ...sessionState };
-  // `readState` moved a legacy batch and grants into `state`.
-  delete next[LEGACY_BATCH_KEY];
-  delete next[LEGACY_GRANTS_KEY];
-  if (isEmpty(state)) delete next[STATE_KEY];
-  else next[STATE_KEY] = state;
-  return Object.keys(next).length > 0 ? next : undefined;
-}
-
-function isEmpty(state: HumanInputState): boolean {
-  return (
-    Object.keys(state.requests).length === 0 &&
-    state.queued === undefined &&
-    state.held === undefined &&
-    state.grants.length === 0 &&
-    state.audit === undefined &&
-    Object.keys(state.relayedAuthorizations ?? {}).length === 0
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -151,56 +127,13 @@ export interface RelayedAuthorization {
   readonly runId: string;
 }
 
-/** A candidate waiting on its policy, or on its responder's authorization. */
-export interface ActiveCandidate {
-  readonly candidateId: string;
-  readonly createdAt: number;
-  readonly decision: CandidateDecision;
-  readonly expiresAt: number;
-  readonly requestId: string;
-  readonly responder: SessionAuthContext;
-  readonly status: "pending" | "authorization-required";
-  /** The authorizations its policy waits on, while `authorization-required`. */
-  readonly authorizations?: readonly AuthorizationChallenge[];
-}
-
-/** Who answered, narrowed to identity for the audit's finished records. */
-export interface ResponderIdentity {
-  readonly authenticator: string;
-  readonly issuer?: string;
-  readonly principalId: string;
-  readonly principalType: string;
-}
-
-export interface FinishedCandidate {
-  readonly candidateId: string;
-  readonly createdAt: number;
-  readonly decision: CandidateDecision;
-  readonly expiresAt: number;
-  readonly reason?: string;
-  readonly requestId: string;
-  readonly responder: ResponderIdentity;
-  readonly status: "allowed" | Exclude<ApprovalCandidateOutcome, "pending">;
-}
-
-/** An approval a signed-in person settled: through a candidate, or directly. */
-export interface Settlement {
-  readonly actor: ResponderIdentity;
-  /** The full auth of the approver, absent for cancellations. */
-  readonly approver?: SessionAuthContext;
-  readonly candidateId?: string;
-  readonly outcome: "allowed" | "cancelled";
-  readonly requestId: string;
-}
-
-/** The durable candidate audit, kept in human input's state. */
-export interface ApprovalAudit {
-  readonly activeCandidates: Readonly<Record<string, ActiveCandidate>>;
-  readonly candidateHistory: readonly FinishedCandidate[];
-  readonly nextCandidateSequence: number;
-  readonly settlements: Readonly<Record<string, Settlement>>;
-}
-
+export type {
+  ActiveCandidate,
+  ApprovalAudit,
+  FinishedCandidate,
+  ResponderIdentity,
+  Settlement,
+} from "#harness/session-machine/view.js";
 export const EMPTY_AUDIT: ApprovalAudit = {
   activeCandidates: {},
   candidateHistory: [],

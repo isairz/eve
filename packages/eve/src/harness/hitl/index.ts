@@ -189,3 +189,5 @@ export function retireCancelledCandidates<T extends HarnessSessionBase>(session:
     state: retireActiveCandidates(session.state, { completedAt: Date.now(), reason: "Cancelled." }),
   };
 }
+
+export { beforeStep, afterStep } from "./decisions.js";

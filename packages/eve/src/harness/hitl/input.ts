@@ -1,13 +1,13 @@
 import type { ModelMessage } from "ai";
 
 import type { SessionAuthContext, SubagentAuthorizationEvent } from "#channel/types.js";
-import type { RemoteAgentBinding } from "#eve-channel/support.js";
-import type { SessionInboxAddress } from "#execution/session-inbox/address.js";
 import type { AuthorizationChallenge, AuthorizationResult } from "#harness/authorization.js";
 import type { StepInput } from "#harness/types.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 import type { AuthorizationCallback } from "#shared/connection-types.js";
 import type { InputRequest, InputResponse } from "#shared/input.js";
+
+import type { RelayRoute } from "#harness/session-machine/view.js";
 
 /** The coordinates of the stream position a request was asked at. */
 export interface RequestAt {
@@ -247,19 +247,5 @@ export type PolicyRun =
   /** It threw or timed out; `challenges` when it threw for the responder to authorize. */
   | { readonly kind: "threw"; readonly challenges?: readonly AuthorizationChallenge[] };
 
-/** Where a relayed request's answer goes. */
-export interface RelayRoute {
-  /** The child's continuation token, which names its session inbox unless `childSessionInbox` does. */
-  readonly childContinuationToken: string;
-  readonly childSessionInbox?: SessionInboxAddress;
-  /** A remote agent's session, answered over its own protocol. */
-  readonly remote?: RemoteAgentBinding & { readonly sessionId: string };
-  /** Where in the child the batch came from; its fresh batch from one source replaces the last. */
-  readonly inputSource?: string;
-  /** The workflow run that relayed it: nobody can answer it once that run ends. */
-  readonly runId?: string;
-  /** The run's control hook, for its own `ctx.ask()` question. */
-  readonly control?: string;
-}
-
+export type { RelayRoute } from "#harness/session-machine/view.js";
 export type CandidateDecision = "approve" | "cancel";

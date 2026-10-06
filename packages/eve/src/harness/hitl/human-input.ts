@@ -4,6 +4,10 @@ import type { SessionAuthContext } from "#channel/types.js";
 import type { SessionStateMap, StepInput } from "#harness/types.js";
 import type { InputRequest } from "#shared/input.js";
 
+import type { SessionView } from "#harness/session-machine/view.js";
+import { beforeStep, afterStep } from "./decisions.js";
+import { projectHumanInput } from "./projection.js";
+
 import { askedCallIds, grantedApprovalKeys } from "./approval.js";
 import { arrivalsOf } from "./input-arrival.js";
 import { candidateAuthorizationAttempts } from "./approval-candidate.js";
@@ -26,8 +30,8 @@ import { reduce, verdictsOf } from "./reducer.js";
 import { relayedRequestIds } from "./relay.js";
 import { awaitedAuthorizations } from "./authorization.js";
 import { staleAnswersAsText } from "./input-stale-answer.js";
-import { LEGACY_BATCH_KEY, store, type HumanInputState, isOpenRelayed } from "./state.js";
-import { readState } from "./state-legacy.js";
+import { LEGACY_BATCH_KEY, type HumanInputState, isOpenRelayed } from "./state.js";
+import { readState, store } from "./state-legacy.js";
 
 export { approvalsRequested, withoutApprovalParts } from "./approval.js";
 export { createSessionLimitContinuationRequest } from "./budget-question.js";
@@ -64,10 +68,10 @@ export type { HumanInputState, Reduced } from "./state.js";
  * Everything a turn waits on from a person: tool approvals, authorizations, the
  * budget question, and requests relayed from child sessions and workflow runs.
  *
- * This is the only module that knows how human input works. The rest of eve
- * commits what happened (`commit`), through a host that carries out what only
- * its phase can, and asks what to do next (`next`). It never reads or changes
- * the state itself, which lives under one session key that only `commit` writes.
+ * Rules read a projection of the session machine through beforeStep/afterStep.
+ * The adapter folds their commands into a transition and an ordered effect outbox;
+ * only the machine's apply persists it. The read/commit host facade below remains
+ * solely for compatibility with the legacy rule tests, never for runtime use.
  *
  * Words, one meaning each:
  * - **turn**: it *waits* (`{ waiting: "input" }`, `turn.waiting`), on a
@@ -76,7 +80,7 @@ export type { HumanInputState, Reduced } from "./state.js";
  *   completed (the model call is done), then *settled* (every call has a
  *   result), and only then joins history.
  * - **held step**: a completed step that has not settled, kept out of
- *   history. There is at most one.
+ *   history. Each rule invocation sees one originating suspended step.
  * - **held call**: a call of the held step that has no result yet.
  * - **request**: something asked of a person; it stays *open* until resolved.
  * - **input**: one thing the session saw at a step boundary (`Input`): from
@@ -94,7 +98,15 @@ export class HumanInput {
     this.#legacy = legacy;
   }
 
-  /** Reads the session's human input. */
+  static beforeStep = beforeStep;
+  static afterStep = afterStep;
+
+  /** Project one originating step. Runtime persistence belongs exclusively to the session machine. */
+  static fromView(view: SessionView, stepIndex = 0): HumanInput {
+    return new HumanInput(projectHumanInput(view, view.turn.suspended[stepIndex]), false);
+  }
+
+  /** Compatibility reader for legacy rule tests; runtime entry points take SessionView. */
   static read(sessionState: SessionStateMap | undefined): HumanInput {
     return new HumanInput(readState(sessionState), sessionState?.[LEGACY_BATCH_KEY] !== undefined);
   }
@@ -108,6 +120,7 @@ export class HumanInput {
    * the next input. Returns the session with its human input, and how the turn ended when an
    * event ended it.
    */
+  /** @deprecated Legacy host/test facade. Not used by the runtime. */
   static async commit<S extends Stateful, P extends Phase>(
     host: HumanInputHost<S, P>,
     session: S,

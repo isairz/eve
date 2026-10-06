@@ -145,3 +145,12 @@ export function runtimeWait(state: SessionStateMap | undefined): RuntimeWait | u
     tasks,
   };
 }
+
+export type {
+  ActiveCandidate,
+  ApprovalAudit,
+  FinishedCandidate,
+  ResponderIdentity,
+  Settlement,
+  RelayRoute,
+} from "./human-input-types.js";

@@ -3,7 +3,9 @@ import type { ModelMessage } from "ai";
 import type { SessionAuthContext } from "#channel/types.js";
 import type { SessionStateMap, StepInput } from "#harness/types.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
-import type { InputRequest } from "#shared/input.js";
+import type { InputRequest, InputResponse } from "#shared/input.js";
+
+import type { ApprovalAudit, RelayRoute } from "./human-input-types.js";
 
 // Execution state the session machine keeps between steps. Lifecycle facts (whether a turn is
 // open, whether a request is answered, how a call ended) are the projection's; this holds only
@@ -34,6 +36,10 @@ export interface SuspendedStep {
    * its step starts and its budget allows it, as calls the model makes do.
    */
   readonly approved?: readonly InputRequest[];
+  /** Partial answers remain with their originating step until its batch resolves. */
+  readonly answers?: Readonly<Record<string, InputResponse>>;
+  readonly approvalKeys?: Readonly<Record<string, string>>;
+  readonly following?: StepInput;
   /** Workflow and agent calls the runtime runs for the step. */
   readonly tasks: readonly RuntimeWorkflowTaskRequest[];
   /** Who approved each task an approval started, by call id: the task runs as them. */
@@ -44,6 +50,15 @@ export interface SuspendedStep {
 }
 
 export interface TurnState {
+  readonly audit?: ApprovalAudit;
+  readonly authorizationCoordinates?: Readonly<Record<string, StepCoordinates>>;
+  readonly relayedRoutes?: Readonly<Record<string, RelayRoute>>;
+  readonly relayedAuthorizations?: Readonly<
+    Record<string, { readonly at: StepCoordinates; readonly name: string; readonly runId: string }>
+  >;
+  readonly limitRequest?: { readonly at: StepCoordinates; readonly request: InputRequest };
+  /** Results joined history; arrivals stay queued until the next model response. */
+  readonly readsResults?: true;
   /** Input that arrived before it could run: a partial answer, or input behind a policy pass. */
   readonly queued?: StepInput;
   readonly suspended: readonly SuspendedStep[];
@@ -62,7 +77,17 @@ export function writeTurnState<T extends { readonly state?: SessionStateMap }>(
   turn: TurnState,
 ): T {
   const state = { ...session.state };
-  if (turn.suspended.length === 0 && turn.queued === undefined && turn.grants.length === 0) {
+  if (
+    turn.suspended.length === 0 &&
+    turn.queued === undefined &&
+    turn.grants.length === 0 &&
+    turn.audit === undefined &&
+    Object.keys(turn.authorizationCoordinates ?? {}).length === 0 &&
+    Object.keys(turn.relayedRoutes ?? {}).length === 0 &&
+    Object.keys(turn.relayedAuthorizations ?? {}).length === 0 &&
+    turn.limitRequest === undefined &&
+    turn.readsResults !== true
+  ) {
     delete state[TURN_STATE_KEY];
   } else {
     state[TURN_STATE_KEY] = turn;
