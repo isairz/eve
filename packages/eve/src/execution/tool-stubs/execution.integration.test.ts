@@ -117,7 +117,10 @@ describe("tool replacement through the session runtime", () => {
       ]);
       const stream = captureTurnEvents(run);
       try {
-        await stream.nextTurn();
+        const rootEvents = await stream.nextTurn();
+        expect(
+          filterEventsByType(rootEvents, "action.result").map((event) => event.data.result),
+        ).toContainEqual(expect.objectContaining({ output: { state: "root" } }));
         await dispatchWorkflowSessionCommand({
           sessionId: run.runId,
           command: {
