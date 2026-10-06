@@ -9,7 +9,8 @@ import {
   TOOL_RESULT_BOUNDARY,
   type UserModelMessage,
 } from "#harness/messages.js";
-import { finishRun, settle } from "#harness/session-machine/transitions.js";
+import { afterStep, applyHumanInputDecision } from "#harness/hitl/index.js";
+import { finishRun, reportRuntimeResults } from "#harness/session-machine/transitions.js";
 import { activeTurnId, runtimeWait } from "#harness/session-machine/view.js";
 import { getTurnClientContextState } from "#harness/turn-client-context.js";
 import type { StepInput } from "#harness/types.js";
@@ -43,11 +44,32 @@ export async function settleRuntimeWork(
   const parts = staged.flatMap((message) =>
     message.role === "tool" ? message.content.filter((part) => part.type === "tool-result") : [],
   );
-  await step.apply(
-    settle(step.view(), {
-      results: results.map((result, index) => ({ ...result, part: parts[index]! })),
-    }),
-  );
+  for (const parked of step.view().turn.suspended) {
+    const callIds = new Set(
+      parked.messages.flatMap((message) =>
+        message.role === "assistant" && Array.isArray(message.content)
+          ? message.content.flatMap((part) => (part.type === "tool-call" ? [part.toolCallId] : []))
+          : [],
+      ),
+    );
+    const content = parts.filter((part) => callIds.has(part.toolCallId));
+    if (content.length === 0) continue;
+    const runtimeResults = results.flatMap(({ part, result }) =>
+      result !== undefined && callIds.has(part.toolCallId) ? [result] : [],
+    );
+    if (runtimeResults.length > 0)
+      await step.apply(
+        reportRuntimeResults(step.view(), { event: parked.event, results: runtimeResults }),
+      );
+    await applyHumanInputDecision(
+      step,
+      afterStep(step.view(), {
+        type: "actions.settled",
+        at: parked.event,
+        results: [{ role: "tool", content }],
+      }),
+    );
+  }
   if (input === undefined) return { input, waited: true };
   const { runtimeActionResults: _results, ...rest } = input;
   return { input: rest, waited: true };

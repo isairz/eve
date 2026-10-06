@@ -36,6 +36,7 @@ export function adaptHumanInput(
   const events: UnstampedMessageStreamEvent[] = [];
   const commit: ModelMessage[] = [];
   const effects: EffectCommand[] = [];
+  const decided = decidedCallIds(view);
   const appendEvents = (next: readonly UnstampedMessageStreamEvent[]) => {
     for (const event of next) {
       events.push(event);
@@ -56,16 +57,15 @@ export function adaptHumanInput(
         break;
       case "appendHistory":
         commit.push(command.message);
-        turn = { ...turn, readsResults: true };
+        // Only a person's decision holds later arrivals: runtime results join as on main.
+        if (hasResultFor(command.message, decided)) turn = { ...turn, readsResults: true };
         break;
       case "resumeInput":
         turn = { ...turn, queued: command.input };
         break;
-      case "consumeMessage": {
-        const { message: _message, messageAuth: _auth, ...input } = turn.queued ?? {};
-        turn = { ...turn, queued: Object.keys(input).length > 0 ? input : undefined };
+      case "consumeMessage":
+        // The delivered message is consumed by intake; queued input is a different delivery.
         break;
-      }
       case "addNote":
         turn = {
           ...turn,
@@ -116,4 +116,22 @@ export function adaptHumanInput(
     },
     effects,
   };
+}
+
+/** Calls a person approved or was asked about, whose results the model reads before more input. */
+function decidedCallIds(view: SessionView): ReadonlySet<string> {
+  return new Set(
+    view.turn.suspended.flatMap((step) =>
+      [...step.requests, ...(step.approved ?? [])].flatMap((request) =>
+        request.action.kind === "tool-call" ? [request.action.callId] : [],
+      ),
+    ),
+  );
+}
+
+function hasResultFor(message: ModelMessage, callIds: ReadonlySet<string>): boolean {
+  return (
+    message.role === "tool" &&
+    message.content.some((part) => part.type === "tool-result" && callIds.has(part.toolCallId))
+  );
 }

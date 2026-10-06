@@ -576,14 +576,10 @@ describe("answers", () => {
       return machine;
     }
 
-    it("asks whether to continue and ends the turn", async () => {
+    it("asks whether to continue and holds the turn", async () => {
       const machine = await exhausted();
 
-      expect(machine.events.slice(-3)).toEqual([
-        "input.requested",
-        "turn.completed",
-        "session.waiting",
-      ]);
+      expect(machine.events.slice(-2)).toEqual(["input.requested", "turn.waiting"]);
       expect(machine.projection.inputs[request.requestId]?.status).toBe("open");
     });
 
@@ -601,14 +597,25 @@ describe("answers", () => {
       }
     });
 
-    it("receives a message now, and queues only what waits for the answer", async () => {
+    it("does not cancel an already-cancelled budget turn or resolve its question twice", async () => {
+      const machine = await exhausted();
+      await machine.apply(cancel(machine.view()));
+      const saved = machine.events.length;
+      await machine.apply(cancel(machine.view()));
+      expect(machine.events.slice(saved)).toEqual([]);
+      expect(machine.events.filter((type) => type === "turn.cancelled")).toHaveLength(1);
+      expect(machine.events.filter((type) => type === "input.resolved")).toHaveLength(1);
+      expect(machine.view().turn.limitRequest).toBeUndefined();
+    });
+
+    it("queues a message behind the budget question", async () => {
       const machine = await exhausted();
 
       const decision = await respond(machine, { message: "Any update?" });
 
-      expect(decision.next).toBe("defer-message");
-      expect(decision.input?.message).toBe("Any update?");
-      expect(machine.view().turn.queued).toBeUndefined();
+      expect(decision.next).toBe("park");
+      expect(decision.input).toBeUndefined();
+      expect(machine.view().turn.queued?.message).toBe("Any update?");
     });
 
     it("takes the prompt's answer from text while an approval is also open", async () => {

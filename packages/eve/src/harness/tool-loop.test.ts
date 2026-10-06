@@ -75,7 +75,7 @@ import { stashToolInterrupt } from "#harness/tool-interrupts.js";
 import { appendMissingToolResultMessages } from "#harness/model-call/response.js";
 import { createToolLoopHarness } from "#harness/tool-loop.js";
 import { createTask, writeTaskTable } from "#execution/tasks/table.js";
-import { SessionLimitDeclinedError, TurnCancelledError } from "#harness/turn-cancellation.js";
+import { TurnCancelledError } from "#harness/turn-cancellation.js";
 import {
   getSessionUsageLimitViolation,
   getSessionTokenUsage,
@@ -1971,7 +1971,8 @@ describe("createToolLoopHarness", () => {
     const result = await runStep(createLimitReachedSession(), { message: "Hi again" });
 
     expect(vi.mocked(ToolLoopAgent)).not.toHaveBeenCalled();
-    expect(result.next).toBeNull();
+    expect(result.next).toBe(runStep);
+    expect(result.held).toEqual({ kind: "request" });
     expect(result.settledTurn).toBeUndefined();
     expect(events.map((event) => event.type)).toEqual([
       "session.started",
@@ -1979,8 +1980,7 @@ describe("createToolLoopHarness", () => {
       "message.received",
       "step.started",
       "input.requested",
-      "turn.completed",
-      "session.waiting",
+      "turn.waiting",
     ]);
     const requested = events.find((event) => event.type === "input.requested");
     expect(requested?.data).toMatchObject({
@@ -2129,12 +2129,20 @@ describe("createToolLoopHarness", () => {
       inputResponses: [{ optionId: "stop", requestId: LIMIT_REQUEST_ID }],
     });
 
-    // A decline is a user decision, not an error: the harness declares
-    // intent by throwing the decline-flavored cancellation, which the
-    // execution layer settles as `turn.cancelled` → `session.waiting` (and,
-    // for delegated sessions, escalates to a root-turn cancel). No failure
-    // or completion events are emitted here.
-    await expect(declined).rejects.toBeInstanceOf(SessionLimitDeclinedError);
+    // No model work is in flight: the applied cancellation is carried to the owner,
+    // which cancels descendants without rolling back this human decision.
+    const result = await declined;
+    expect(result.cancelled).toBe(true);
+    expect(result.next).toBeNull();
+    expect(events.filter((event) => event.type === "turn.cancelled")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "input.resolved")).toHaveLength(1);
+    expect(
+      ownOpenRequestIds(sessionView(storedProjection(result.session.state), result.session.state))
+        .size,
+    ).toBe(0);
+    expect(
+      sessionView(storedProjection(result.session.state), result.session.state).turn.limitRequest,
+    ).toBeUndefined();
     expect(vi.mocked(ToolLoopAgent)).not.toHaveBeenCalled();
     expect(events.some((event) => event.type.endsWith(".failed"))).toBe(false);
     expect(events.some((event) => event.type === "session.completed")).toBe(false);
@@ -2152,53 +2160,61 @@ describe("createToolLoopHarness", () => {
     expect(events.some((event) => event.type === "input.requested")).toBe(false);
   });
 
-  it("keeps one limit prompt pending when the user replies without answering it", async () => {
-    setupMockAgent({
-      finishReason: "stop",
-      response: { messages: [{ content: "Hello!", role: "assistant" }] },
-      text: "Hello!",
-      toolCalls: [],
-      toolResults: [],
-      usage: { inputTokens: 7, outputTokens: 3 },
-    });
-    const { emit, events } = createEventCollector();
-    const runStep = createToolLoopHarness(createTestConfig(emit));
+  it.each(["button", "text"])(
+    "keeps one limit prompt pending and drains queued input after a %s answer",
+    async (answerKind) => {
+      setupMockAgent({
+        finishReason: "stop",
+        response: { messages: [{ content: "Hello!", role: "assistant" }] },
+        text: "Hello!",
+        toolCalls: [],
+        toolResults: [],
+        usage: { inputTokens: 7, outputTokens: 3 },
+      });
+      const { emit, events } = createEventCollector();
+      const runStep = createToolLoopHarness(createTestConfig(emit));
 
-    const parked = await runStep(createLimitReachedSession(), { message: "Hi again" });
-    const beforeQueued = events.length;
-    const reparked = await runStep(parked.session, { message: "also do this other thing" });
+      const parked = await runStep(createLimitReachedSession(), { message: "Hi again" });
+      const beforeQueued = events.length;
+      const reparked = await runStep(parked.session, { message: "also do this other thing" });
 
-    // The message is received into a real turn, which holds for the prompt.
-    expect(events.slice(beforeQueued).map((event) => event.type)).toEqual([
-      "turn.started",
-      "message.received",
-      "turn.waiting",
-    ]);
-    const waiting = events.at(-1);
-    expect(waiting).toMatchObject({ data: { on: "input" }, type: "turn.waiting" });
-    const turnId = waiting?.type === "turn.waiting" ? waiting.data.turnId : undefined;
-    expect(turnId).toMatch(/^turn_/);
-    expect(reparked.held).toEqual({ kind: "request" });
-    expect(vi.mocked(ToolLoopAgent)).not.toHaveBeenCalled();
-    expect(events.filter((event) => event.type === "input.requested")).toHaveLength(1);
-    const asked = { content: "also do this other thing", kind: "user" as const, role: "user" };
-    expect(reparked.session.history).toContainEqual(asked);
+      // The existing turn holds; the message waits behind its budget question.
+      expect(events.slice(beforeQueued).map((event) => event.type)).toEqual(["turn.waiting"]);
+      const waiting = events.at(-1);
+      expect(waiting).toMatchObject({ data: { on: "input" }, type: "turn.waiting" });
+      const turnId = waiting?.type === "turn.waiting" ? waiting.data.turnId : undefined;
+      expect(turnId).toMatch(/^turn_/);
+      expect(reparked.held).toEqual({ kind: "request" });
+      expect(vi.mocked(ToolLoopAgent)).not.toHaveBeenCalled();
+      expect(events.filter((event) => event.type === "input.requested")).toHaveLength(1);
+      const asked = { content: "also do this other thing", kind: "user" as const, role: "user" };
+      expect(reparked.session.history).not.toContainEqual(asked);
+      expect(
+        sessionView(storedProjection(reparked.session.state), reparked.session.state).turn.queued
+          ?.message,
+      ).toBe(asked.content);
 
-    const beforeGrant = events.length;
-    const resumed = await runStep(reparked.session, {
-      inputResponses: [{ optionId: "continue", requestId: LIMIT_REQUEST_ID }],
-    });
+      const beforeGrant = events.length;
+      const resumed = await runStep(
+        reparked.session,
+        answerKind === "text"
+          ? { message: "approve", context: ["channel envelope"] }
+          : { inputResponses: [{ optionId: "continue", requestId: LIMIT_REQUEST_ID }] },
+      );
 
-    // The grant resumes that turn; the message was received once, and the model reads it once.
-    const resumedEvents = events.slice(beforeGrant);
-    expect(resumedEvents.some((event) => event.type === "turn.started")).toBe(false);
-    expect(resumedEvents.some((event) => event.type === "message.received")).toBe(false);
-    expect(resumedEvents.find((event) => event.type === "step.started")?.data.turnId).toBe(turnId);
-    expect(vi.mocked(ToolLoopAgent)).toHaveBeenCalledTimes(1);
-    expect(
-      resumed.session.history.filter((message) => message.content === asked.content),
-    ).toHaveLength(1);
-  });
+      // The grant resumes that turn; the message was received once, and the model reads it once.
+      const resumedEvents = events.slice(beforeGrant);
+      expect(resumedEvents.some((event) => event.type === "turn.started")).toBe(false);
+      expect(resumedEvents.some((event) => event.type === "message.received")).toBe(true);
+      expect(resumedEvents.find((event) => event.type === "step.started")?.data.turnId).toBe(
+        turnId,
+      );
+      expect(vi.mocked(ToolLoopAgent)).toHaveBeenCalledTimes(1);
+      expect(
+        resumed.session.history.filter((message) => message.content === asked.content),
+      ).toHaveLength(1);
+    },
+  );
 
   it("preserves approval gates on step-scoped dynamic tools", async () => {
     setupMockAgent({
@@ -7805,61 +7821,118 @@ describe("createToolLoopHarness", () => {
     expect(events.filter((event) => event.type === "action.result")).toHaveLength(1);
   });
 
-  it("consumes text approval shortcuts without appending them as user messages", async () => {
-    const generateCalls: unknown[] = [];
+  it.each([undefined, ["channel metadata"]])(
+    "consumes text approval shortcuts and their context (%j)",
+    async (context) => {
+      const generateCalls: unknown[] = [];
 
-    vi.mocked(ToolLoopAgent).mockImplementation(function (
-      this: Record<string, unknown>,
-      settings: MockAgentSettings,
-    ) {
-      const { onStepEnd, prepareStep } = settings;
-      this.generate = vi.fn().mockImplementation(async (input: { messages: unknown[] }) => {
-        if (prepareStep) {
-          await prepareStep({
-            messages: input.messages,
-            steps: [],
-            stepNumber: 0,
-            model: {},
-            context: undefined,
-          });
-        }
-        generateCalls.push(input.messages);
-        const result = {
-          finishReason: "stop",
-          response: { messages: [{ content: "Approved.", role: "assistant" }] },
-          text: "Approved.",
-          toolCalls: [],
-          toolResults: [],
-        };
-        if (onStepEnd) await onStepEnd(result);
-        return createMockGenerateResult(result);
-      });
-      return this as unknown as ToolLoopAgent;
-    } as unknown as ConstructorParameters<typeof ToolLoopAgent> extends [infer S]
-      ? (settings: S) => ToolLoopAgent
-      : never);
+      vi.mocked(ToolLoopAgent).mockImplementation(function (
+        this: Record<string, unknown>,
+        settings: MockAgentSettings,
+      ) {
+        const { onStepEnd, prepareStep } = settings;
+        this.generate = vi.fn().mockImplementation(async (input: { messages: unknown[] }) => {
+          if (prepareStep) {
+            await prepareStep({
+              messages: input.messages,
+              steps: [],
+              stepNumber: 0,
+              model: {},
+              context: undefined,
+            });
+          }
+          generateCalls.push(input.messages);
+          const result = {
+            finishReason: "stop",
+            response: { messages: [{ content: "Approved.", role: "assistant" }] },
+            text: "Approved.",
+            toolCalls: [],
+            toolResults: [],
+          };
+          if (onStepEnd) await onStepEnd(result);
+          return createMockGenerateResult(result);
+        });
+        return this as unknown as ToolLoopAgent;
+      } as unknown as ConstructorParameters<typeof ToolLoopAgent> extends [infer S]
+        ? (settings: S) => ToolLoopAgent
+        : never);
 
-    const session = parkedOnApproval({
-      requests: [
-        {
-          action: {
-            callId: "call-1",
-            input: { note: "text approval" },
-            kind: "tool-call",
-            toolName: "guarded_echo",
+      const session = parkedOnApproval({
+        requests: [
+          {
+            action: {
+              callId: "call-1",
+              input: { note: "text approval" },
+              kind: "tool-call",
+              toolName: "guarded_echo",
+            },
+            allowFreeform: false,
+            display: "confirmation",
+            kind: "tool-approval",
+            options: [
+              { id: "approve", label: "Approve" },
+              { id: "cancel", label: "Cancel" },
+            ],
+            prompt: "Approve tool call: guarded_echo",
+            requestId: "approval-1",
           },
-          allowFreeform: false,
-          display: "confirmation",
-          kind: "tool-approval",
-          options: [
-            { id: "approve", label: "Approve" },
-            { id: "cancel", label: "Cancel" },
+        ],
+        responseMessages: [
+          {
+            content: [
+              {
+                input: { note: "text approval" },
+                toolCallId: "call-1",
+                toolName: "guarded_echo",
+                type: "tool-call",
+              },
+              {
+                approvalId: "approval-1",
+                toolCallId: "call-1",
+                type: "tool-approval-request",
+              },
+            ],
+            role: "assistant",
+          },
+        ],
+        session: createTestSession({
+          agent: {
+            modelReference: { id: "test-model" },
+            system: "You are a test assistant.",
+            tools: [
+              {
+                description: "Echo a note",
+                name: "guarded_echo",
+                inputSchema: { type: "object" },
+              },
+            ],
+          },
+        }),
+      });
+
+      const config = createTestConfig(undefined, {
+        tools: new Map([
+          [
+            "guarded_echo",
+            {
+              description: "Echo a note",
+              execute: vi.fn().mockResolvedValue("ok"),
+              inputSchema: jsonSchema({ type: "object" }),
+              name: "guarded_echo",
+            },
           ],
-          prompt: "Approve tool call: guarded_echo",
-          requestId: "approval-1",
+        ]),
+      });
+
+      await createToolLoopHarness(config)(session, { message: "approve", context });
+
+      // The answer runs the call; the model reads its result, never the text that approved it.
+      expect(generateCalls[0]).toEqual([
+        {
+          content: expect.stringContaining("[Pending approvals]"),
+          kind: "context.state",
+          role: "user",
         },
-      ],
-      responseMessages: [
         {
           content: [
             {
@@ -7868,77 +7941,23 @@ describe("createToolLoopHarness", () => {
               toolName: "guarded_echo",
               type: "tool-call",
             },
-            {
-              approvalId: "approval-1",
-              toolCallId: "call-1",
-              type: "tool-approval-request",
-            },
           ],
           role: "assistant",
         },
-      ],
-      session: createTestSession({
-        agent: {
-          modelReference: { id: "test-model" },
-          system: "You are a test assistant.",
-          tools: [
+        {
+          content: [
             {
-              description: "Echo a note",
-              name: "guarded_echo",
-              inputSchema: { type: "object" },
+              output: { type: "text", value: "ok" },
+              toolCallId: "call-1",
+              toolName: "guarded_echo",
+              type: "tool-result",
             },
           ],
+          role: "tool",
         },
-      }),
-    });
-
-    const config = createTestConfig(undefined, {
-      tools: new Map([
-        [
-          "guarded_echo",
-          {
-            description: "Echo a note",
-            execute: vi.fn().mockResolvedValue("ok"),
-            inputSchema: jsonSchema({ type: "object" }),
-            name: "guarded_echo",
-          },
-        ],
-      ]),
-    });
-
-    await createToolLoopHarness(config)(session, { message: "approve" });
-
-    // The answer runs the call; the model reads its result, never the text that approved it.
-    expect(generateCalls[0]).toEqual([
-      {
-        content: expect.stringContaining("[Pending approvals]"),
-        kind: "context.state",
-        role: "user",
-      },
-      {
-        content: [
-          {
-            input: { note: "text approval" },
-            toolCallId: "call-1",
-            toolName: "guarded_echo",
-            type: "tool-call",
-          },
-        ],
-        role: "assistant",
-      },
-      {
-        content: [
-          {
-            output: { type: "text", value: "ok" },
-            toolCallId: "call-1",
-            toolName: "guarded_echo",
-            type: "tool-result",
-          },
-        ],
-        role: "tool",
-      },
-    ]);
-  });
+      ]);
+    },
+  );
 
   it("emits compaction.requested and compaction.completed when compaction triggers", async () => {
     vi.mocked(shouldCompact).mockReturnValue(true);

@@ -263,11 +263,13 @@ export async function recheckApprovedCall(
     readonly approvedTools?: ReadonlySet<string>;
   },
 ): Promise<{ readonly denied: boolean; readonly reason?: string }> {
-  const status = await buildApprovalFn(definition, { approvedTools: call.approvedTools })(
-    call.input,
-    call.callId,
-    call.abortSignal,
-    true,
+  const status = await runAsApprover(call.callId, () =>
+    buildApprovalFn(definition, { approvedTools: call.approvedTools })(
+      call.input,
+      call.callId,
+      call.abortSignal,
+      true,
+    ),
   );
   if (status === "denied") return { denied: true };
   if (typeof status === "object" && status !== null && status.type === "denied") {

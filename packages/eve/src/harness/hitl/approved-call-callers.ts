@@ -2,9 +2,10 @@ import type { SessionAuthContext } from "#channel/types.js";
 import { runAsCaller } from "#context/caller-scope.js";
 import { contextStorage } from "#context/container.js";
 import { ContextKey } from "#context/key.js";
-import { approverOfRequest } from "./candidates.js";
-import type { InputRequest } from "#shared/input.js";
+import { legacyApprovalAudit, mergeApprovalAudits } from "./candidates.js";
+import type { SessionView, TurnState } from "#harness/session-machine/view.js";
 import type { SessionStateMap } from "#harness/types.js";
+import type { InputRequest } from "#shared/input.js";
 
 /**
  * The person who approved each call the current step replays, by call id.
@@ -14,15 +15,27 @@ const ApprovedCallCallersKey = new ContextKey<ReadonlyMap<string, SessionAuthCon
   "eve.approvedCallCallers",
 );
 
+/**
+ * The turn as saved, with an approval audit saved before the machine kept one read into it, so
+ * an approved call keeps its approver. Reads only; nothing is written.
+ */
+export function withLegacyApprovalAudit(
+  turn: TurnState,
+  state: SessionStateMap | undefined,
+): TurnState {
+  const legacy = legacyApprovalAudit(state);
+  return legacy === undefined ? turn : { ...turn, audit: mergeApprovalAudits(legacy, turn.audit) };
+}
+
 /** Who approved each of the `approved` calls, by call id. */
 export function approversOf(
   approved: readonly InputRequest[],
-  state: SessionStateMap | undefined,
+  view: SessionView,
 ): Readonly<Record<string, SessionAuthContext>> {
   const approvers: Record<string, SessionAuthContext> = {};
   for (const request of approved) {
     if (request.action === undefined) continue;
-    const approver = approverOfRequest(state, request.requestId);
+    const approver = view.turn.audit?.settlements[request.requestId]?.approver;
     if (approver !== undefined) approvers[request.action.callId] = approver;
   }
   return approvers;
@@ -32,15 +45,12 @@ export function approversOf(
  * Records who approved each of the `approved` calls, so each runs as its approver while the rest
  * of the turn keeps the turn's own caller.
  */
-export function setApprovedCallCallers(
-  approved: readonly InputRequest[],
-  state: SessionStateMap | undefined,
-): void {
+export function setApprovedCallCallers(approved: readonly InputRequest[], view: SessionView): void {
   const ctx = contextStorage.getStore();
   if (ctx === undefined) return;
   ctx.setVirtualContext(
     ApprovedCallCallersKey,
-    new Map(Object.entries(approversOf(approved, state))),
+    new Map(Object.entries(approversOf(approved, view))),
   );
 }
 

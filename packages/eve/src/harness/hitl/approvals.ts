@@ -1,3 +1,6 @@
+import { beforeStep } from "./decisions.js";
+import { adaptHumanInput } from "./adapter.js";
+
 import type { SessionAuthContext } from "#channel/types.js";
 import type { ModelMessage } from "ai";
 
@@ -47,13 +50,11 @@ import {
   isEmptyInput,
   resolveTextInput,
   withoutResponses,
-  withoutTurnInput,
   type ResolvedStepInput,
 } from "./delivery.js";
 import type { StepCoordinates, SuspendedStep, TurnState } from "#harness/session-machine/view.js";
 import { withoutCalls } from "#harness/inline-tool-authorization.js";
 import {
-  finishTurn,
   hold,
   ownOpenRequestIds,
   settle,
@@ -285,8 +286,8 @@ export function answer(
       }
       // The message is received now, into the turn that holds for the prompt: only answers to
       // other requests wait for the grant. What waits in the queue was never received.
-      queue(withoutTurnInput(resolved));
-      return done({ input: resolved, next: "defer-message" });
+      queue(compactInput(resolved));
+      return done({ next: "park" });
     }
     const batch: ResolvedInputBatch = {
       event: { sequence: limit.sequence, stepIndex: limit.stepIndex, turnId: limit.turnId },
@@ -299,6 +300,7 @@ export function answer(
       ],
     };
     events.push(resolvedEvent(batch));
+    turn = { ...turn, limitRequest: undefined };
     const leftover = leftoverFor(answerable);
     if (leftover.length > 0) queue({ inputResponses: leftover });
     return done({
@@ -559,26 +561,24 @@ export function withdrawSignIns(view: SessionView, reason: string): Transition {
 
 /**
  * The session spent its budget: it asks whether to continue instead of calling the model, and
- * the turn ends. The prompt is the projection's open request; `answer` grants a
- * fresh budget or declines it.
+ * the turn holds. The prompt stays open until Continue grants a fresh window
+ * for the same pending work or Stop cancels it.
  */
 export function requestLimit(
   view: SessionView,
   input: { readonly request: InputRequest },
 ): Transition {
-  const position = turnPosition(view.projection);
-  return {
-    events: [
-      createInputRequestedEvent({
-        requests: [input.request],
-        sequence: position.sequence,
-        stepIndex: position.stepIndex,
-        turnId: position.turnId,
-      }),
-      ...finishTurn(view).events,
-    ],
-    turn: view.turn,
-  };
+  return adaptHumanInput(
+    view,
+    beforeStep(view, [
+      {
+        at: turnPosition(view.projection),
+        request: input.request,
+        type: "budget.exceeded",
+      },
+      { type: "turn.waiting" },
+    ]),
+  ).transition;
 }
 
 // ---------------------------------------------------------------------------

@@ -100,13 +100,14 @@ describe("HumanInput adapter", () => {
         break;
       case "appendHistory":
         expect(transition.commit).toEqual([text]);
-        expect(transition.turn.readsResults).toBe(true);
+        // Only results of calls a person decided hold later arrivals.
+        expect(transition.turn.readsResults).toBeUndefined();
         break;
       case "resumeInput":
         expect(transition.turn.queued).toEqual({ message: "next" });
         break;
       case "consumeMessage":
-        expect(transition.turn.queued).toEqual({ context: ["existing"] });
+        expect(transition.turn.queued).toEqual({ message: "old", context: ["existing"] });
         break;
       case "addNote":
         expect(transition.turn.queued).toEqual({ message: "old", context: ["existing", "note"] });
@@ -178,7 +179,7 @@ describe("HumanInput adapter", () => {
       "input.resolved",
       "turn.waiting",
     ]);
-    expect(result.transition.turn.queued).toEqual({ context: ["note"] });
+    expect(result.transition.turn.queued).toEqual({ message: "next", context: ["note"] });
   });
 
   it("uses the machine cancel after already published resolutions without withdrawing them twice", () => {
@@ -352,6 +353,37 @@ describe("HumanInput adapter", () => {
     expect(projected.relayedAuthorizations?.child?.runId).toBe("run");
   });
 
+  it("holds arrivals behind approved results, not behind runtime results", () => {
+    const result = (callId: string): ModelMessage => ({
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: callId,
+          toolName: "t",
+          output: { type: "text", value: "ok" },
+        },
+      ],
+    });
+    const deploy = approval("deploy");
+    const held = {
+      ...view(),
+      turn: {
+        ...view().turn,
+        suspended: [{ event: AT, messages: [], requests: [], approved: [deploy], tasks: [] }],
+      },
+    };
+    const approvedCallId = deploy.action.kind === "tool-call" ? deploy.action.callId : "";
+    expect(
+      adapt([{ type: "appendHistory", message: result(approvedCallId) }], held).transition.turn
+        .readsResults,
+    ).toBe(true);
+    expect(
+      adapt([{ type: "appendHistory", message: result("task-call") }], held).transition.turn
+        .readsResults,
+    ).toBeUndefined();
+  });
+
   it("keeps arrivals behind the result-reading barrier", () => {
     const v = { ...view(), turn: { ...view().turn, readsResults: true as const } };
     const result = beforeStep(v, [message("later")]);
@@ -438,6 +470,24 @@ describe("HumanInput adapter", () => {
     expect(modelCompleted.turn.readsResults).toBeUndefined();
     const cancelled = adapt([examples.cancelTurn], v);
     expect(cancelled.transition.turn.readsResults).toBeUndefined();
+  });
+
+  it("consumes a budget answer without consuming the message queued behind it", () => {
+    const v = view();
+    const asked = beforeStep(v, [{ type: "budget.exceeded", at: AT, request: BUDGET_QUESTION }]);
+    const waiting = {
+      ...v,
+      turn: {
+        ...asked.turn,
+        readsResults: true as const,
+        queued: { message: "Answer this after continuing." },
+      },
+    };
+    const answered = beforeStep(waiting, [message("approve")]);
+    const adapted = adaptHumanInput(waiting, answered);
+    expect(adapted.transition.grantBudget).toBe(true);
+    expect(adapted.transition.turn.limitRequest).toBeUndefined();
+    expect(adapted.transition.turn.queued?.message).toBe("Answer this after continuing.");
   });
 
   it("holds and stops a budget question with one resolution while preserving unrelated state", async () => {

@@ -185,10 +185,6 @@ const SLACK_BROKEN = {
     "only the button interaction handler edits a question; a typed answer leaves it",
     ["questionText"],
   ),
-  "approving by text names who approved on the approval": {
-    reason: "the card loses its buttons after a typed approval but doesn't say who approved",
-    symptom: /the answered prompt never names who answered/,
-  },
 } satisfies Partial<Record<ContractRuleName, BrokenCell>>;
 
 const TEAMS_BROKEN = {

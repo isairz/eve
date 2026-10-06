@@ -53,6 +53,7 @@ function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
 }
 import { openInputs } from "#protocol/session-projection.js";
 import { storedProjection } from "#harness/session-machine/view.js";
+import { readTurnState, writeTurnState } from "#harness/session-machine/state.js";
 import { setTurnUsageState } from "#harness/turn-tag-state.js";
 import type { HarnessSession, ToolLoopHarnessConfig } from "#harness/types.js";
 import { once } from "#tools/approval/policies.js";
@@ -233,6 +234,43 @@ function findPart(
 }
 
 describe("tool loop generate approval resume (real AI SDK)", () => {
+  it.each(["text", "tool"] as const)(
+    "runs a signed-in steering message past a pending approval (%s)",
+    async (kind) => {
+      const model = new MockLanguageModelV4({
+        doStream:
+          kind === "text"
+            ? textStreamResult("The new message was read.")
+            : [
+                toolCallStreamResult({
+                  ...secondToolCall,
+                  input: JSON.stringify(secondToolCall.input),
+                }),
+                textStreamResult("The new call completed."),
+              ],
+      });
+      const execute = vi.fn(async (_input: unknown, _options: unknown) => "new result");
+      const harness = createToolLoopHarness(createConfig(model, execute));
+      const first = await harness(createPendingApprovalSession(), {
+        message: "Read the new status.",
+      });
+      expect(model.doStreamCalls).toHaveLength(1);
+      expect(parkedSteps(first.session).flatMap((step) => step.requests)).toEqual([]);
+      if (kind === "text") {
+        expect(execute).not.toHaveBeenCalled();
+        expect(first.session.history).toContainEqual(
+          expect.objectContaining({
+            role: "assistant",
+            content: [{ type: "text", text: "The new message was read." }],
+          }),
+        );
+      } else {
+        expect(execute).toHaveBeenCalledTimes(1);
+        expect(execute.mock.calls[0]?.[0]).toEqual(secondToolCall.input);
+      }
+    },
+  );
+
   it.each(
     [
       { scope: "step", metadataKey: StepDynamicToolMetadataKey },
@@ -774,6 +812,127 @@ describe("tool loop generate approval resume (real AI SDK)", () => {
       content: [{ text: "All done.", type: "text" }],
       role: "assistant",
     });
+  });
+
+  it.each([false, true])(
+    "holds a delivery until approved results have been read (model continues: %s)",
+    async (continues) => {
+      const execute = vi.fn(async () => "/workspace");
+      const model = new MockLanguageModelV4({
+        doStream: [
+          continues
+            ? toolCallStreamResult({
+                input: JSON.stringify({ command: "ls" }),
+                toolCallId: "call-next",
+                toolName: "bash",
+              })
+            : textStreamResult("Result read."),
+          textStreamResult("Delivery read."),
+        ],
+        modelId: "generate-approval-resume-model",
+        provider: "eve-integration-mock",
+      });
+      const runStep = createToolLoopHarness(createConfig(model, execute));
+      const history: HarnessModelMessage[] = [
+        { role: "assistant", content: [toolCall] },
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool-result",
+              toolCallId: "call-1",
+              toolName: "bash",
+              output: { type: "text", value: "/workspace" },
+            },
+          ],
+        },
+      ];
+      const opened = withOpenTurn(createBaseSession(history), {
+        sequence: 1,
+        turnId: "turn-1",
+        stepIndex: 0,
+      });
+      const session = writeTurnState(opened, {
+        ...readTurnState(opened.state),
+        readsResults: true,
+      });
+      const first = await runStep(session, {
+        message: "A delivery arriving while results are read.",
+      });
+      expect(model.doStreamCalls).toHaveLength(1);
+      expect(model.doStreamCalls[0]?.prompt.at(-1)?.role).toBe("tool");
+      expect(first.session.history.some((message) => message.role === "user")).toBe(false);
+      expect(readTurnState(first.session.state).queued?.message).toBe(
+        "A delivery arriving while results are read.",
+      );
+      expect(readTurnState(first.session.state).readsResults).toBeUndefined();
+      expect(typeof first.next).toBe("function");
+      if (typeof first.next !== "function")
+        throw new Error("Delivery must reach the next boundary.");
+      const second = await first.next(first.session);
+      expect(model.doStreamCalls).toHaveLength(2);
+      expect(model.doStreamCalls[1]?.prompt.at(-1)).toMatchObject({
+        role: "user",
+        content: [{ type: "text", text: "A delivery arriving while results are read." }],
+      });
+      expect(readTurnState(second.session.state).queued).toBeUndefined();
+      expect(second.next).toBeNull();
+      expect(execute).toHaveBeenCalledTimes(continues ? 1 : 0);
+    },
+  );
+
+  it("publishes the signed-in responder on a direct approval settlement", async () => {
+    const responder = {
+      attributes: {},
+      authenticator: "test",
+      issuer: "test",
+      principalId: "signed-in-approver",
+      principalType: "user" as const,
+    };
+    const settlements: unknown[] = [];
+    const execute = vi.fn(async () => "/workspace");
+    const runStep = createToolLoopHarness({
+      ...createConfig(createModel(), execute),
+      handleEvent: async (event) => {
+        if (event.type === "approval.settled") settlements.push(event.data);
+      },
+    });
+    await runStep(createPendingApprovalSession(), {
+      attributedInputResponses: [
+        {
+          auth: responder,
+          response: { optionId: "approve", requestId: approvalRequest.approvalId },
+        },
+      ],
+    });
+    expect(settlements).toContainEqual(
+      expect.objectContaining({
+        requestId: approvalRequest.approvalId,
+        outcome: "approved",
+        responderPrincipalId: responder.principalId,
+      }),
+    );
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads an approved result before a repeated Approve becomes non-authorizing input", async () => {
+    const execute = vi.fn(async () => "/workspace");
+    const model = new MockLanguageModelV4({
+      doStream: [textStreamResult("Result read."), textStreamResult("Repeated answer read.")],
+      modelId: "generate-approval-resume-model",
+      provider: "eve-integration-mock",
+    });
+    const runStep = createToolLoopHarness(createConfig(model, execute));
+    const response = {
+      inputResponses: [{ optionId: "approve", requestId: approvalRequest.approvalId }],
+    };
+    const first = await runStep(createPendingApprovalSession(), response);
+    const second = await runStep(first.session, response);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(model.doStreamCalls).toHaveLength(2);
+    expect(model.doStreamCalls[0]?.prompt.at(-1)?.role).toBe("tool");
+    expect(model.doStreamCalls[1]?.prompt.at(-1)?.role).toBe("user");
+    expect(readTurnState(second.session.state).queued).toBeUndefined();
   });
 
   it("executes an approval before replaying its message after a limit continuation", async () => {

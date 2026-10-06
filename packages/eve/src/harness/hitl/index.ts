@@ -5,23 +5,23 @@ import { buildResponseAuthorizationTools } from "#context/build-dynamic-tools.js
 import { AuthKey, SessionKey } from "#context/keys.js";
 import { clearPendingAuthorization } from "#harness/authorization.js";
 import type { resolveInlineAuthorizationInterrupt } from "#harness/inline-tool-authorization.js";
-import { validateHarnessModelMessages } from "#harness/messages.js";
+import { createFrameworkUserMessage, validateHarnessModelMessages } from "#harness/messages.js";
 import { fail } from "#harness/session-machine/transitions.js";
 import type { StepCoordinates } from "#harness/session-machine/view.js";
 import type { Step } from "#harness/step/context.js";
 import type { HarnessSessionBase, HarnessToolMap, StepResult } from "#harness/types.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 import type { InputRequest } from "#shared/input.js";
-import { renderPendingApprovalsInstruction } from "./approval-prompt.js";
 import {
-  grantedApprovalKeys,
-  hasRunnableQueue,
-  parkOnApprovals as parkOnApprovalsTransition,
-  requestLimit,
-  requireSignIn,
-} from "./approvals.js";
+  renderPendingApprovalsSnippet,
+  renderPendingApprovalsInstruction,
+} from "./approval-prompt.js";
+import { grantedApprovalKeys, hasRunnableQueue } from "./approvals.js";
 import { checkSessionUsageLimit } from "./budget.js";
 import { retireActiveCandidates } from "./candidates.js";
+import { applyHumanInputDecision } from "./effects.js";
+import { approvalsRequested } from "./approval.js";
+import { beforeStep, afterStep } from "./decisions.js";
 import { holdForInput } from "./intake.js";
 
 // The session's human-in-the-loop lifecycle, behind the few points where the rest of the harness
@@ -56,17 +56,57 @@ export async function parkOnApprovals(
     readonly tasks: readonly RuntimeWorkflowTaskRequest[];
     /** The step made calls the runtime runs, so the turn waits on them instead. */
     readonly waitsOnRuntime: boolean;
+    readonly authorizationInterrupt?: NonNullable<
+      ReturnType<typeof resolveInlineAuthorizationInterrupt>
+    >;
   },
 ): Promise<StepResult> {
-  const transition = parkOnApprovalsTransition(step.view(), {
-    event: input.event,
-    messages: input.messages,
-    requests: input.requests,
-    tasks: input.tasks,
-    requester: currentRequester(step),
-    responseAuthRequiredRequestIds: responsePolicyRequestIds(step, input.requests),
+  const pendingStart = input.messages.findIndex((message) => message.role !== "tool");
+  const committed = pendingStart === -1 ? input.messages : input.messages.slice(0, pendingStart);
+  const messages = input.messages.slice(committed.length);
+  const snippet = renderPendingApprovalsSnippet(input.requests);
+  const prefix = [
+    ...committed,
+    ...(snippet === undefined ? [] : [createFrameworkUserMessage("context.state", snippet)]),
+  ];
+  const decision = afterStep(step.view(), {
+    at: input.event,
+    inputs: [
+      approvalsRequested({
+        at: input.event,
+        messages,
+        requests: input.requests,
+        requester: currentRequester(step),
+        tools: responseTools(step),
+      }),
+      ...(input.authorizationInterrupt === undefined
+        ? []
+        : [
+            {
+              type: "authorization.required" as const,
+              at: input.event,
+              callIds: [...input.authorizationInterrupt.callIdsByName.values()].flat(),
+              challenges: input.authorizationInterrupt.challenges,
+              messages: [],
+              requester: currentRequester(step),
+            },
+          ]),
+      ...(input.waitsOnRuntime
+        ? [
+            {
+              type: "actions.dispatched" as const,
+              at: input.event,
+              messages,
+              tasks: input.tasks,
+            },
+          ]
+        : []),
+    ],
   });
-  await step.apply(transition, [...step.session.history, ...(transition.commit ?? [])]);
+  await applyHumanInputDecision(step, decision, undefined, {
+    commit: prefix,
+    messages: [...step.session.history, ...prefix],
+  });
   if (input.waitsOnRuntime) return { next: null, session: step.session };
   if (hasRunnableQueue(step.view())) return { next: step.runStep, session: step.session };
   return holdForInput(step);
@@ -81,13 +121,20 @@ export async function stopForToolSignIn(
   interrupt: NonNullable<ReturnType<typeof resolveInlineAuthorizationInterrupt>>,
 ): Promise<StepResult> {
   step.session = { ...step.session, history: validateHarnessModelMessages(interrupt.history) };
-  await step.apply(
-    requireSignIn(step.view(), {
-      callIdsByName: interrupt.callIdsByName,
+  await applyHumanInputDecision(
+    step,
+    afterStep(step.view(), {
+      type: "authorization.required",
+      at: step.position(),
+      callIds: [...interrupt.callIdsByName.values()].flat(),
       challenges: interrupt.challenges,
+      messages: [],
+      requester: currentRequester(step),
     }),
-    step.session.history,
+    undefined,
+    { messages: step.session.history },
   );
+  await applyHumanInputDecision(step, beforeStep(step.view(), [{ type: "turn.waiting" }]));
   return { held: { kind: "request" }, next: null, session: step.session };
 }
 
@@ -108,8 +155,14 @@ export async function enforceBudget(
   if (limit.kind === "within") return undefined;
   if (limit.kind === "ask") {
     step.session = { ...step.session, history: validateHarnessModelMessages([...messages]) };
-    await step.apply(requestLimit(step.view(), { request: limit.request }), step.session.history);
-    return { next: null, session: step.session };
+    await applyHumanInputDecision(
+      step,
+      beforeStep(step.view(), [
+        { type: "budget.exceeded", at: step.position(), request: limit.request },
+        { type: "turn.waiting" },
+      ]),
+    );
+    return { held: { kind: "request" }, next: step.runStep, session: step.session };
   }
   await step.apply(
     fail(step.view(), {
@@ -158,25 +211,6 @@ function responseTools(step: Step): HarnessToolMap {
   return buildResponseAuthorizationTools({ authoredTools: step.config.tools, context: step.ctx });
 }
 
-/**
- * The approvals whose tool defines a response policy. Every park records them, so no Approve or
- * Cancel of such an approval skips the policy.
- */
-function responsePolicyRequestIds(
-  step: Step,
-  requests: readonly InputRequest[],
-): readonly string[] {
-  const tools = responseTools(step);
-  return requests
-    .filter((request) => {
-      const approval = tools.get(request.action.toolName)?.approval;
-      return (
-        approval !== undefined && typeof approval !== "function" && approval.response !== undefined
-      );
-    })
-    .map((request) => request.requestId);
-}
-
 /** The caller whose turn parks a step. */
 function currentRequester(step: Step): SessionAuthContext | null {
   return step.ctx?.get(AuthKey) ?? step.ctx?.get(SessionKey)?.auth.current ?? null;
@@ -191,3 +225,5 @@ export function retireCancelledCandidates<T extends HarnessSessionBase>(session:
 }
 
 export { beforeStep, afterStep } from "./decisions.js";
+
+export { applyHumanInputDecision } from "./effects.js";

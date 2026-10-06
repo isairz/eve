@@ -82,6 +82,15 @@ export function reduce(
   verdictOf: VerdictOf,
 ): Reduced {
   switch (input.type) {
+    case "policy.checked": {
+      const checked = checkedCandidate(state, input.candidateId, input.verdict);
+      return checked.settled === undefined
+        ? checked
+        : then(checked, (next) => answerApprovals(next, [checked.settled!]));
+    }
+    case "authorization.resumed":
+      // The step installs this callback fact in its scoped tool context.
+      return { events: [], state };
     case "budget.exceeded":
       return askBudget(state, input);
     case "approval.requested":
@@ -138,7 +147,9 @@ export function reduce(
       const { authorizations } = input;
       const at = state.held?.at;
       const ran =
-        input.approved === undefined ? state : ranApproved(state, input.approved.following);
+        input.approved === undefined
+          ? state
+          : ranApproved(state, input.approved.following, input.approved.callIds);
       const settled = settleCalls(
         ran,
         input.results,

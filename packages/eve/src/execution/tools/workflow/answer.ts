@@ -26,7 +26,7 @@ export function toToolInputResponseResponder(
  * before an interrupt or cancel reaches the body before them.
  */
 export async function sendWorkflowAskAnswers(
-  route: WorkflowAskRoute,
+  route: Pick<WorkflowAskRoute, "control">,
   responses: readonly InputResponse[] | undefined,
   responder?: ToolInputResponseResponder,
 ): Promise<void> {

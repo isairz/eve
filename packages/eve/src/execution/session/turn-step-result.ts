@@ -15,6 +15,7 @@ export function resolveSessionStepResult(
     serializedContext: nextSerializedContext,
     ...createDurableSessionValues(stepResult.session),
   };
+  if (stepResult.cancelled === true) return { action: "cancelled", ...values };
   if (stepResult.steered) return { action: "steered", ...values };
 
   if (

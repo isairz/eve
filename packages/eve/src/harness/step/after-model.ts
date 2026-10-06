@@ -25,7 +25,6 @@ import {
   fail,
   finishTurn,
   hold,
-  suspendStep,
   type ToolResultPart,
   withResult,
 } from "#harness/session-machine/transitions.js";
@@ -36,6 +35,8 @@ import {
   isToolResultError,
 } from "#harness/action-result-helpers.js";
 import {
+  afterStep,
+  applyHumanInputDecision,
   extractToolApprovalInputRequests,
   hasRunnableQueue,
   parkOnApprovals,
@@ -159,6 +160,11 @@ export async function handleStepResult(step: Step, input: ModelResponse): Promis
       return false;
     });
 
+  const authorizationInterrupt = resolveInlineAuthorizationInterrupt({
+    messages: [...promptMessages, ...responseMessages],
+    toolResults: result.toolResults,
+  });
+
   // --- Park on approvals or runtime calls ----------------------------------
 
   if (deferredToolCalls.length > 0 || approvalRequests.length > 0) {
@@ -182,21 +188,28 @@ export async function handleStepResult(step: Step, input: ModelResponse): Promis
         ...parked,
         requests: approvalRequests,
         waitsOnRuntime: deferredToolCalls.length > 0,
+        authorizationInterrupt,
       });
     }
-    await step.apply(suspendStep(step.view(), parked));
+    await applyHumanInputDecision(
+      step,
+      afterStep(step.view(), {
+        type: "actions.dispatched",
+        at: parked.event,
+        messages: parked.messages,
+        tasks: parked.tasks,
+      }),
+    );
     return { next: null, session: step.session };
   }
 
   // --- Park on authorization request ------------------------------------------
 
-  const authorizationInterrupt = resolveInlineAuthorizationInterrupt({
-    messages: [...promptMessages, ...responseMessages],
-    toolResults: result.toolResults,
-  });
   if (authorizationInterrupt) return stopForToolSignIn(step, authorizationInterrupt);
 
   // --- Continue or terminate ------------------------------------------------
+
+  await applyHumanInputDecision(step, afterStep(step.view(), { at: step.position(), inputs: [] }));
 
   // History grows by append only; nothing rewrites earlier messages mid-turn,
   // so the prompt prefix stays stable and the provider's prompt cache keeps

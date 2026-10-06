@@ -91,7 +91,7 @@ export type FromStep =
        * is the turn input that arrived with their answers: the turn reads it
        * once the step joins history.
        */
-      readonly approved?: { readonly following?: StepInput };
+      readonly approved?: { readonly following?: StepInput; readonly callIds?: readonly string[] };
     };
 
 /**
@@ -189,6 +189,13 @@ export type FromRelay =
  * Each is a candidate to become a query or part of how a turn settles.
  */
 export type FromHost =
+  | { readonly type: "policy.checked"; readonly candidateId: string; readonly verdict: PolicyRun }
+  /** The ordered outbox resumed a callback; the next decision carries its outcome to the scoped tool context. */
+  | {
+      readonly type: "authorization.resumed";
+      readonly result: AuthorizationResult & { readonly name: string };
+      readonly requester: SessionAuthContext | null;
+    }
   /**
    * The turn stops to wait on a person: before its model call, or after a
    * step whose calls asked one. It resumes in the same turn once the person

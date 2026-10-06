@@ -218,6 +218,8 @@ export interface SettledTurn {
  * Result returned by one harness step invocation.
  */
 export interface StepResult {
+  /** A before-model human decision cancelled the turn; preserve this applied session. */
+  readonly cancelled?: true;
   readonly steered?: true;
   readonly next: StepNext;
   readonly session: HarnessSession;

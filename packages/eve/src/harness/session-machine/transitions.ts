@@ -187,6 +187,9 @@ export function fail(
     turn: {
       ...view.turn,
       suspended: view.turn.suspended.filter((step) => !stopped.includes(step)),
+      limitRequest: undefined,
+      readsResults: undefined,
+      queued: undefined,
     },
   };
 }
@@ -580,6 +583,17 @@ export const CANCELLED_CALL_RESULT = "The turn was cancelled before this call fi
 export function cancel(view: SessionView): Transition {
   const { projection } = view;
   const turnId = projection.activeTurnId;
+  const latest = Object.values(projection.turns).find(
+    (turn) => turn.sequence === projection.nextSequence - 1,
+  );
+  if (turnId === undefined && latest?.status === "cancelled")
+    return {
+      events: [],
+      turn:
+        view.turn.limitRequest === undefined
+          ? view.turn
+          : { ...view.turn, limitRequest: undefined },
+    };
   const stopped = view.turn.suspended.filter(
     (step) =>
       (turnId !== undefined && step.event.turnId === turnId) ||
@@ -613,6 +627,9 @@ export function cancel(view: SessionView): Transition {
     turn: {
       ...view.turn,
       suspended: view.turn.suspended.filter((step) => !stopped.includes(step)),
+      limitRequest: undefined,
+      readsResults: undefined,
+      queued: undefined,
     },
   };
 }
@@ -658,5 +675,19 @@ export function clear(view: SessionView, input: { readonly sessionId: string }):
       createSessionWaitingEvent(view.usage),
     ],
     turn: { grants: view.turn.grants, suspended: [] } satisfies TurnState,
+  };
+}
+
+/** Reports runtime outcomes at the originating step, independently of HITL transcript settlement. */
+export function reportRuntimeResults(
+  view: SessionView,
+  input: {
+    readonly event: StepCoordinates;
+    readonly results: readonly RuntimeActionResult[];
+  },
+): Transition {
+  return {
+    turn: view.turn,
+    events: input.results.map((result) => createActionResultEvent({ result, ...input.event })),
   };
 }

@@ -128,11 +128,23 @@ export function dispatchCalls<S extends HeldStepState>(
 export function ranApproved<S extends HeldStepState>(
   state: S,
   following: StepInput | undefined,
+  callIds?: readonly string[],
 ): S {
   const step = state.held;
   if (step?.approved === undefined) return state;
-  const { approved: _ran, ...rest } = step;
-  return { ...state, held: { ...rest, ...(following !== undefined && { following }) } };
+  const { approved, ...rest } = step;
+  const remaining =
+    callIds === undefined
+      ? []
+      : approved.filter((request) => !callIds.includes(request.action.callId));
+  return {
+    ...state,
+    held: {
+      ...rest,
+      ...(remaining.length > 0 && { approved: remaining }),
+      ...(following !== undefined && { following }),
+    },
+  };
 }
 
 /** The held step's approved calls the turn has yet to run, at the step that asked. */

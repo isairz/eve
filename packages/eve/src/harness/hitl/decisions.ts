@@ -1,8 +1,11 @@
+import { applyRecordedSettlements } from "./approval.js";
+import { authorizationRequested } from "./authorization.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
 import type { SessionView, StepCoordinates, TurnState } from "#harness/session-machine/view.js";
 import { foldSession } from "#protocol/session-projection.js";
 import type { Command } from "./command.js";
-import type { FromStep, FromInbox, FromRelay, FromHost } from "./input.js";
+import type { FromStep, FromInbox, FromRelay, FromHost, PolicyCheck, PolicyRun } from "./input.js";
+import { typedAnswers } from "./input-typed-reply.js";
 import { reduce, verdictsOf } from "./reducer.js";
 import { projectHumanInput, projectedSignIns, projectedTurn, sameStep } from "./projection.js";
 
@@ -16,17 +19,54 @@ export interface HumanInputDecision {
   readonly turn: TurnState;
   readonly signIns: readonly AuthorizationChallenge[];
   readonly commands: readonly Command[];
+  /** Ephemeral callback facts, installed in the scoped tool context, never persisted. */
+  readonly authorizations?: readonly Extract<
+    FromHost,
+    { readonly type: "authorization.resumed" }
+  >[];
 }
 
 /** Arrivals are evaluated in originating suspended-step order, then the session's own/relayed requests. */
 export function beforeStep(
   view: SessionView,
   arrivals: readonly BeforeStepArrival[],
+  checkPolicy?: (check: PolicyCheck) => PolicyRun | undefined,
 ): HumanInputDecision {
   let current = view;
   const commands: Command[] = [];
+  for (const candidate of Object.values(view.turn.audit?.activeCandidates ?? {})) {
+    const owner = view.turn.suspended.find((step) =>
+      step.requests.some((request) => request.requestId === candidate.requestId),
+    );
+    if (owner === undefined) continue;
+    for (const challenge of candidate.authorizations ?? []) {
+      if (view.projection.authorizations[challenge.attemptId ?? challenge.name] === undefined)
+        commands.push(authorizationRequested(challenge, owner.event));
+    }
+  }
+  for (const step of view.turn.suspended) {
+    const before = projectHumanInput(current, step);
+    const reduced = applyRecordedSettlements(before);
+    if (reduced.events.length === 0 && reduced.state === before) continue;
+    current = {
+      ...current,
+      projection: reduced.events.reduce(
+        (projection, command) =>
+          command.type === "publish" ? foldSession(projection, command.event) : projection,
+        current.projection,
+      ),
+      turn: projectedTurn(current, reduced.state, step.event),
+      signIns: projectedSignIns(current, before, reduced.state),
+    };
+    commands.push(...reduced.events);
+  }
+  const authorizations: Extract<FromHost, { readonly type: "authorization.resumed" }>[] = [];
   for (const step of [...view.turn.suspended, undefined]) {
     for (const arrival of arrivals) {
+      if (arrival.type === "authorization.resumed") {
+        if (step === undefined) authorizations.push(arrival);
+        continue;
+      }
       // Session-wide arrivals run once, after the originating held-step lenses.
       if (
         step !== undefined &&
@@ -38,7 +78,11 @@ export function beforeStep(
           arrival.type === "budget.stopped")
       )
         continue;
-      if (current.turn.readsResults === true && arrival.type === "message.received") {
+      if (
+        arrival.type === "message.received" &&
+        (current.turn.readsResults === true || current.turn.limitRequest !== undefined) &&
+        typedAnswers(projectHumanInput(current), arrival.text, "own").length === 0
+      ) {
         if (step === undefined)
           current = {
             ...current,
@@ -93,7 +137,12 @@ export function beforeStep(
         input.type.startsWith("relayed.") ||
         input.type === "delivery.received" ||
         input.type === "run.ended";
-      const reduced = reduce(before, input, parked ? "parked" : "pre-step", verdictsOf(input));
+      const reduced = reduce(
+        before,
+        input,
+        parked ? "parked" : "pre-step",
+        checkPolicy ?? verdictsOf(input),
+      );
       current = {
         ...current,
         projection: reduced.events.reduce(
@@ -107,7 +156,12 @@ export function beforeStep(
       commands.push(...reduced.events);
     }
   }
-  return { turn: current.turn, signIns: current.signIns, commands };
+  return {
+    turn: current.turn,
+    signIns: current.signIns,
+    commands,
+    ...(authorizations.length > 0 && { authorizations }),
+  };
 }
 
 /** A whole model response clears the result-reading barrier even when it asks nobody. */
@@ -158,4 +212,17 @@ export function afterStep(
     commands.push(...reduced.events);
   }
   return { turn: current.turn, signIns: current.signIns, commands };
+}
+
+/** Pure dry run across the same originating-step lenses as the committed decision. */
+export function policyChecksBeforeStep(
+  view: SessionView,
+  arrivals: readonly BeforeStepArrival[],
+): readonly PolicyCheck[] {
+  const checks: PolicyCheck[] = [];
+  beforeStep(view, arrivals, (check) => {
+    checks.push(check);
+    return undefined;
+  });
+  return checks;
 }

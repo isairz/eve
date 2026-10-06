@@ -1,39 +1,29 @@
+import { pendingPolicyChecks } from "./approval-candidate.js";
+import { typedAnswers } from "./input-typed-reply.js";
+import { projectHumanInput } from "./projection.js";
+import { readAnswerText } from "#internal/input-text.js";
+import { resolveInputOutcome } from "#harness/input-request-resolution.js";
+import { AuthKey, SessionKey } from "#context/keys.js";
 import { buildResponseAuthorizationTools } from "#context/build-dynamic-tools.js";
 import { collectDeferredCalls } from "#harness/coordination.js";
 import { resolveInlineAuthorizationInterrupt } from "#harness/inline-tool-authorization.js";
 import { stepStartedForResolvers } from "#harness/session-machine/resolver-events.js";
-import {
-  approvedCalls,
-  completeSignIn,
-  hold,
-  settle,
-} from "#harness/session-machine/transitions.js";
+import { approvedCalls } from "#harness/session-machine/transitions.js";
 import type { SuspendedStep } from "#harness/session-machine/view.js";
-import { validateHarnessModelMessages } from "#harness/messages.js";
-import { openTurn, type Step } from "#harness/step/context.js";
-import { prepareTurnInput } from "#harness/step/intake.js";
-import { placeTurnInput } from "#harness/step/prompt.js";
-import { SessionLimitDeclinedError } from "#harness/turn-cancellation.js";
-import { bumpSessionRuntimeUsageLimits } from "#harness/turn-tag-state.js";
+import { type Step } from "#harness/step/context.js";
 import type { HarnessToolMap, StepInput, StepResult } from "#harness/types.js";
-import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
-import {
-  answer,
-  approvingSteps,
-  grantedApprovalKeys,
-  dispatch,
-  requireSignIn,
-  deferInput,
-  stepForRequest,
-  withdrawSignIns,
-} from "./approvals.js";
+import { grantedApprovalKeys, deferInput } from "./approvals.js";
 import { runApprovedCalls } from "./approved-calls.js";
-import { getApprovalAuditState, retireActiveCandidates } from "./candidates.js";
-import { coordinateApprovalDelivery } from "./coordinator.js";
-import { deliver, turnInputOnly, withoutTurnInput } from "./delivery.js";
+import { deliver, turnInputOnly, withoutTurnInput, withoutResponses } from "./delivery.js";
 import { approversOf, setApprovedCallCallers } from "./approved-call-callers.js";
-import type { InputRequest } from "#shared/input.js";
 import type { InstrumentationAttempt } from "#instrumentation/runtime.js";
+import { beforeStep, afterStep, policyChecksBeforeStep } from "./decisions.js";
+import { applyHumanInputDecision } from "./effects.js";
+import { arrivalsOf } from "./input-arrival.js";
+import { runPolicy } from "./policy-effect.js";
+import { PendingAuthorizationResultKey } from "#harness/authorization.js";
+import type { BeforeStepArrival } from "./decisions.js";
+import type { Verdicts } from "./input.js";
 import { activeTurnId } from "#harness/session-machine/view.js";
 
 /**
@@ -60,7 +50,6 @@ export type HumanInputIntake =
  * The calls themselves wait in their suspended steps until the turn's next model step.
  */
 export interface ApprovedWork {
-  readonly limit?: { readonly granted: boolean };
   /** The tools a parked step's calls run with: those of the step that asked. */
   readonly toolsOf: (step: SuspendedStep | undefined) => HarnessToolMap;
 }
@@ -76,16 +65,52 @@ export async function acceptHumanInput(
   options: { readonly takeQueued: boolean },
 ): Promise<HumanInputIntake> {
   const { config, ctx } = step;
-  // A sign-in completes first, at the coordinates of the turn it holds.
+  const starting = step.view();
+  const takeQueued =
+    options.takeQueued &&
+    starting.turn.readsResults !== true &&
+    starting.turn.limitRequest === undefined;
+  const delivered = deliver(starting, input, { takeQueued });
+  // The durable session boundary matched callbacks before entering the harness and removed
+  // their challenges. Reconstruct the decision lens, without persisting an intermediate state.
   const completions = config.signInCompletions ?? [];
-  if (completions.length > 0) await step.apply(completeSignIn(step.view(), { completions }));
-  const delivered = deliver(step.view(), input, options);
-  // A new message reaching the held turn steers it: the sign-ins it waits on end, and its
-  // unanswered approvals resolve with the answers below.
-  const steered =
-    input?.message !== undefined || delivered.displayMessage !== undefined
-      ? await withdrawSteeredSignIns(step, delivered.input)
-      : delivered.input;
+  const callbacks = ctx?.get(PendingAuthorizationResultKey) ?? [];
+  const view = {
+    ...starting,
+    turn: takeQueued ? { ...starting.turn, queued: undefined } : starting.turn,
+    signIns: [
+      ...starting.signIns,
+      ...completions.filter(
+        (challenge) =>
+          !starting.signIns.some(
+            (open) => (open.attemptId ?? open.name) === (challenge.attemptId ?? challenge.name),
+          ),
+      ),
+    ],
+  };
+  if (view.turn.audit !== undefined) {
+    view.turn = {
+      ...view.turn,
+      audit: {
+        ...view.turn.audit,
+        activeCandidates: Object.fromEntries(
+          Object.entries(view.turn.audit.activeCandidates).map(([id, candidate]) => {
+            const authorizations = view.signIns.filter((challenge) => challenge.candidateId === id);
+            return [
+              id,
+              candidate.authorizations !== undefined || authorizations.length === 0
+                ? candidate
+                : {
+                    ...candidate,
+                    status: "authorization-required" as const,
+                    authorizations,
+                  },
+            ];
+          }),
+        ),
+      },
+    };
+  }
   // Restoring a turn's tools runs its resolvers, so a step's tools are restored once, and again
   // only after another step's.
   const restoredTools = new Map<string, HarnessToolMap>();
@@ -117,108 +142,192 @@ export async function acceptHumanInput(
     (parked && restoredTools.get(`${parked.event.turnId}:${parked.event.stepIndex}`)) ??
     config.tools;
 
-  const challengesAtStart = step.view().signIns;
-  const coordinated = await coordinateApprovalDelivery({
-    session: step.session,
-    stepInput: steered,
-    tools: config.tools,
-    prepareTools: (request) => restoreTools(stepForRequest(step.view(), request.requestId)),
+  const sender = ctx?.get(AuthKey) ?? ctx?.get(SessionKey)?.auth.current ?? null;
+  const waiting =
+    starting.turn.limitRequest !== undefined ||
+    starting.turn.readsResults === true ||
+    starting.turn.suspended.some((parked) => parked.requests.length > 0) ||
+    view.signIns.length > 0;
+  const arrivals = arrivalsOf({
+    now: Date.now(),
+    sender,
+    waiting,
+    stepInput: delivered.input,
+    callbacks: completions.map((challenge) => ({
+      attemptId: challenge.attemptId ?? challenge.name,
+      connectionName: challenge.name,
+      callback: callbacks.find(
+        (result) => (result.attemptId ?? result.name) === (challenge.attemptId ?? challenge.name),
+      )?.callback,
+    })),
   });
-  step.session = coordinated.session;
-
-  for (const parked of approvingSteps(step.view(), coordinated.stepInput)) {
-    await restoreTools(parked);
+  const approvingIds = new Set(
+    [
+      ...(delivered.input?.inputResponses ?? []),
+      ...(delivered.input?.attributedInputResponses ?? []).map((entry) => entry.response),
+      ...view.turn.suspended.flatMap((parked) =>
+        typedAnswers(projectHumanInput(view, parked), readAnswerText(delivered.input) ?? "", "own"),
+      ),
+    ]
+      .filter((response) => response.optionId === "approve")
+      .map((response) => response.requestId),
+  );
+  for (const parked of view.turn.suspended) {
+    if (!parked.requests.some((request) => approvingIds.has(request.requestId))) continue;
+    const tools = await restoreTools(parked);
+    view.turn = {
+      ...view.turn,
+      suspended: view.turn.suspended.map((candidate) =>
+        candidate !== parked
+          ? candidate
+          : {
+              ...candidate,
+              approvalKeys: Object.fromEntries(
+                candidate.requests.map((request) => [
+                  request.requestId,
+                  tools.get(request.action.toolName)?.approvalKey?.(request.action.input) ??
+                    candidate.approvalKeys?.[request.requestId] ??
+                    request.action.toolName,
+                ]),
+              ),
+            },
+      ),
+    };
   }
-  const decision = answer(step.view(), {
-    approvalKey: (request) =>
-      toolsOf(stepForRequest(step.view(), request.requestId))
-        .get(request.action.toolName)
-        ?.approvalKey?.(request.action.input),
-    delivery: coordinated.stepInput,
-    policy: {
-      ...coordinated,
-      audit: getApprovalAuditState(step.session.state),
-      challengesAtStart,
-    },
-    takeQueued: delivered.takeQueued,
-  });
-  for (const batch of decision.resolved) {
+  const requestedChecks = policyChecksBeforeStep(view, arrivals);
+  const dry = beforeStep(view, arrivals, () => undefined);
+  const readyView = { ...view, turn: dry.turn, signIns: dry.signIns };
+  const existing = new Set(Object.keys(starting.turn.audit?.activeCandidates ?? {}));
+  const byId = new Map(
+    readyView.turn.suspended
+      .flatMap((parked) => pendingPolicyChecks(projectHumanInput(readyView, parked)))
+      .filter((check) => existing.has(check.candidateId))
+      .map((check) => [check.candidateId, check]),
+  );
+  for (const check of requestedChecks)
+    if (existing.has(check.candidateId)) byId.set(check.candidateId, check);
+  const checks = [...byId.values()];
+  const verdicts: Record<string, Verdicts[string]> = {};
+  for (const check of checks) {
+    const parked = starting.turn.suspended.find(
+      (candidate) =>
+        candidate.event.turnId === check.at.turnId &&
+        candidate.event.stepIndex === check.at.stepIndex,
+    );
+    verdicts[check.candidateId] = await runPolicy(check, await restoreTools(parked));
+  }
+  const checked: BeforeStepArrival[] = [
+    ...arrivals,
+    ...checks.map((check) => ({
+      type: "policy.checked" as const,
+      candidateId: check.candidateId,
+      verdict: verdicts[check.candidateId]!,
+    })),
+  ];
+  const decision = beforeStep(view, checked, (check) => verdicts[check.candidateId]);
+  const resolved = decision.commands.flatMap((command) =>
+    command.type === "publish" && command.event.type === "input.resolved" ? [command.event] : [],
+  );
+  for (const event of resolved) {
     await step.instrumentation?.publishInputResolutions({
-      batch,
+      batch: {
+        event: {
+          sequence: event.data.sequence,
+          stepIndex: event.data.stepIndex,
+          turnId: event.data.turnId,
+        },
+        inputs: event.data.resolutions.flatMap((resolution) => {
+          const request = Object.values(starting.projection.inputs).find(
+            (entry) => entry.request.requestId === resolution.requestId,
+          )?.request;
+          return request === undefined
+            ? []
+            : [
+                {
+                  request,
+                  response: resolution.response,
+                  outcome: resolveInputOutcome(request.kind, resolution.response),
+                },
+              ];
+        }),
+      },
       sessionId: step.session.sessionId,
     });
   }
-  await step.apply(decision);
-  const stop = (result: StepResult): HumanInputIntake => ({ kind: "stop", result });
-  switch (decision.next) {
-    case "park":
-      // A held turn's request is still open: a partial answer, or one a policy refused.
-      if (step.view().projection.activeTurnId === undefined) {
-        return stop({ next: null, session: step.session });
-      }
-      return stop(await holdForInput(step));
-    case "repeat":
-      return stop({ next: step.runStep, session: step.session });
-    case "sign-in":
-      await step.apply(
-        requireSignIn(step.view(), {
-          challenges: coordinated.challenges,
-          queued: coordinated.stepInput,
-        }),
-      );
-      return stop(held(step));
-    case "defer-message": {
-      // Approved calls wait behind the budget prompt, and the message waits behind them.
-      if (approvedCalls(step.view().turn).length > 0) {
-        const deferred = turnInputOnly(decision.input);
-        if (deferred !== undefined) await step.apply(deferInput(step.view(), deferred));
-        return stop({ next: null, session: step.session });
-      }
-      // The message is received now, into a turn that holds for the budget prompt: the grant
-      // resumes that turn, and the model reads the message from history.
-      const turn = await prepareTurnInput(step, decision.input, { consumedMessage: false });
-      const failed = await openTurn(step, {
-        input: [...turn.ephemeral, ...turn.messages],
-        message: delivered.displayMessage ?? decision.input?.message,
-      });
-      if (failed !== undefined) return stop(failed);
-      step.session = {
-        ...step.session,
-        history: validateHarnessModelMessages(placeTurnInput(step, step.session.history, turn)),
-      };
-      return stop(await holdForInput(step));
-    }
-    case "continue":
-      break;
+  await applyHumanInputDecision(step, decision);
+  if (
+    decision.commands.some(
+      (command) => command.type === "declineBudget" || command.type === "cancelTurn",
+    )
+  )
+    return { kind: "stop", result: { cancelled: true, next: null, session: step.session } };
+
+  if (requestedChecks.some((check) => !existing.has(check.candidateId))) {
+    const following = turnInputOnly(delivered.input);
+    if (following !== undefined) await step.apply(deferInput(step.view(), following));
+    return { kind: "stop", result: { next: step.runStep, session: step.session } };
   }
-  // Approved calls run with the tools of the step that asked, including calls approved by an
-  // earlier delivery whose turn the budget stopped.
   for (const parked of step.view().turn.suspended) {
     if ((parked.approved?.length ?? 0) > 0) await restoreTools(parked);
   }
-  // What the answers resolved comes before the delivery's own input, as with the AI SDK: the model
-  // reads the approved calls' results and the denials first, and the input waits a step. A
-  // message that steers past unanswered approvals joins this step.
-  const answeredApprovals = decision.resolved.some(
-    (batch) =>
-      batch.inputs.some((entry) => entry.request.kind === "tool-approval") &&
-      batch.inputs.every((entry) => entry.response !== undefined),
+  const queuedAfterBudget = decision.commands.some((command) => command.type === "grantBudget")
+    ? step.view().turn.queued
+    : undefined;
+  if (queuedAfterBudget !== undefined) {
+    await step.apply({ turn: { ...step.view().turn, queued: undefined }, events: [] });
+  }
+  const consumedMessage =
+    queuedAfterBudget === undefined &&
+    decision.commands.some((command) => command.type === "consumeMessage");
+  const answered = resolved.some(
+    (event) =>
+      event.data.resolutions.some((resolution) => resolution.kind === "tool-approval") &&
+      event.data.resolutions.every((resolution) => resolution.response !== undefined),
   );
   const deferred =
-    answeredApprovals || approvedCalls(step.view().turn).length > 0
-      ? turnInputOnly(decision.input)
+    (answered || hasApprovedWork(step)) && !consumedMessage
+      ? turnInputOnly(queuedAfterBudget ?? delivered.input)
       : undefined;
   if (deferred !== undefined) await step.apply(deferInput(step.view(), deferred));
+  if (
+    sender !== null &&
+    delivered.input?.message === undefined &&
+    resolved.some((event) =>
+      event.data.resolutions.some((resolution) => resolution.kind === "tool-approval"),
+    ) &&
+    !hasApprovedWork(step)
+  )
+    return { kind: "stop", result: { next: step.runStep, session: step.session } };
+  const remaining =
+    queuedAfterBudget ??
+    (consumedMessage ? withoutTurnInput(delivered.input) : withoutResponses(delivered.input));
+  const barrierQueued =
+    starting.turn.readsResults === true ||
+    (step.view().turn.limitRequest !== undefined && !consumedMessage);
+  const turnInput =
+    deferred !== undefined || barrierQueued ? withoutTurnInput(remaining) : remaining;
+  const pending =
+    step.view().turn.limitRequest !== undefined ||
+    step.view().signIns.length > 0 ||
+    step.view().turn.suspended.some((parked) => parked.requests.length > 0);
+  if (pending && !hasApprovedWork(step))
+    return {
+      kind: "stop",
+      result:
+        starting.projection.activeTurnId === undefined
+          ? { next: null, session: step.session }
+          : await holdForInput(step),
+    };
   return {
-    approved: { limit: decision.limit, toolsOf },
-    consumedMessage: decision.consumedMessage === true,
-    input: deferred === undefined ? decision.input : withoutTurnInput(decision.input),
+    approved: { toolsOf },
+    consumedMessage,
+    input: turnInput,
     message:
-      decision.consumedMessage === true || deferred !== undefined
+      consumedMessage || deferred !== undefined || barrierQueued
         ? undefined
-        : (delivered.displayMessage ?? delivered.input?.message),
+        : (queuedAfterBudget?.message ?? delivered.displayMessage ?? delivered.input?.message),
     kind: "run",
-    opensTurn: hasTurnInput(delivered.input) || hasTurnInput(coordinated.stepInput),
+    opensTurn: !barrierQueued && (hasTurnInput(delivered.input) || completions.length > 0),
   };
 }
 
@@ -226,12 +335,13 @@ export async function acceptHumanInput(
  * Admits what a delivery decided before its turn calls the model: a session-limit answer grants a
  * fresh budget or ends the turn tree, and a step its answers completed, as denials do, commits.
  */
-export async function admitApprovedWork(step: Step, work: ApprovedWork): Promise<void> {
-  if (work.limit !== undefined) {
-    if (!work.limit.granted) throw new SessionLimitDeclinedError();
-    step.session = bumpSessionRuntimeUsageLimits(step.session);
+export async function admitApprovedWork(step: Step, _work: ApprovedWork): Promise<void> {
+  for (const parked of step.view().turn.suspended) {
+    await applyHumanInputDecision(
+      step,
+      afterStep(step.view(), { type: "actions.settled", at: parked.event, results: [] }),
+    );
   }
-  await step.apply(settle(step.view(), { results: [] }));
 }
 
 /** Whether a suspended step holds approved calls that haven't run. */
@@ -245,15 +355,13 @@ export function hasApprovedWork(step: Step): boolean {
  * approved local calls run after their results arrive.
  */
 export async function dispatchApprovedWorkflows(step: Step, work: ApprovedWork): Promise<boolean> {
-  const tasks: RuntimeWorkflowTaskRequest[] = [];
-  const approved: InputRequest[] = [];
+  let dispatched = false;
   for (const parked of step.view().turn.suspended) {
     const tools = work.toolsOf(parked);
     const requests = (parked.approved ?? []).filter(
       (request) => tools.get(request.action.toolName)?.workflowId !== undefined,
     );
     if (requests.length === 0) continue;
-    approved.push(...requests);
     const deferred = collectDeferredCalls({
       session: step.session,
       toolCalls: requests.map(({ action }) => ({
@@ -265,13 +373,20 @@ export async function dispatchApprovedWorkflows(step: Step, work: ApprovedWork):
       turnId: parked.event.turnId,
     });
     step.session = deferred.session;
-    tasks.push(...deferred.workflowRequests);
+    await applyHumanInputDecision(
+      step,
+      afterStep(step.view(), {
+        type: "actions.settled",
+        at: parked.event,
+        results: [],
+        running: deferred.workflowRequests,
+        runningApprovers: approversOf(requests, step.view()),
+        approved: { callIds: requests.map((request) => request.action.callId) },
+      }),
+    );
+    dispatched = true;
   }
-  if (tasks.length === 0) return false;
-  await step.apply(
-    dispatch(step.view(), { approvers: approversOf(approved, step.session.state), tasks }),
-  );
-  return true;
+  return dispatched;
 }
 
 /**
@@ -290,7 +405,7 @@ export async function runApprovedLocalCalls(
     const requests = (parked.approved ?? []).filter(
       (request) => tools.get(request.action.toolName)?.workflowId === undefined,
     );
-    return { requests, tools };
+    return { parked, requests, tools };
   });
   const approved = local.flatMap(({ requests }) => requests);
   step.frameworkToolNames = new Set(
@@ -298,7 +413,7 @@ export async function runApprovedLocalCalls(
       [...tools].filter(([, tool]) => tool.frameworkTool === true).map(([name]) => name),
     ),
   );
-  setApprovedCallCallers(approved, step.session.state);
+  setApprovedCallCallers(approved, step.view());
   const position = step.position();
   const attempt =
     approved.length === 0
@@ -327,62 +442,48 @@ export async function runApprovedLocalCalls(
       });
     }),
   );
-  await step.apply(settle(step.view(), { results: executed.flatMap((run) => run.settled) }));
-  const signIn = resolveInlineAuthorizationInterrupt({
-    messages: [],
-    toolResults: executed.flatMap((run) => run.toolResults),
-  });
-  if (signIn === undefined) return undefined;
-  await step.apply(
-    requireSignIn(step.view(), {
-      callIdsByName: signIn.callIdsByName,
-      challenges: signIn.challenges,
-    }),
-    step.session.history,
-  );
-  return held(step);
+  let needsSignIn = false;
+  for (const [index, run] of executed.entries()) {
+    const { parked, requests } = local[index]!;
+    if (requests.length === 0) continue;
+    const signIn = resolveInlineAuthorizationInterrupt({
+      messages: [],
+      toolResults: run.toolResults,
+    });
+    await applyHumanInputDecision(
+      step,
+      afterStep(step.view(), {
+        type: "actions.settled",
+        at: parked.event,
+        results:
+          run.settled.length === 0
+            ? []
+            : [{ role: "tool", content: run.settled.map((result) => result.part) }],
+        approved: { callIds: requests.map((request) => request.action.callId) },
+        ...(signIn !== undefined && {
+          authorizations: {
+            callIds: [...signIn.callIdsByName.values()].flat(),
+            challenges: signIn.challenges,
+          },
+        }),
+      }),
+    );
+    needsSignIn ||= signIn !== undefined;
+  }
+  return needsSignIn ? await holdForInput(step) : undefined;
 }
-
-const STEERED_SIGN_IN_REASON = "Cancelled because a new message arrived.";
 
 /**
  * The held turn holds on, for a person to act on its sign-in, approval, or the session-limit
  * prompt; the session resumes it when they do.
  */
 export async function holdForInput(step: Step): Promise<StepResult> {
-  await step.apply(hold(step.view(), { on: "input" }));
+  await applyHumanInputDecision(step, beforeStep(step.view(), [{ type: "turn.waiting" }]));
   return held(step);
 }
 
 function held(step: Step): StepResult {
   return { held: { kind: "request" }, next: null, session: step.session };
-}
-
-/**
- * A message steers the held turn: the responders still checking its approvals stop, the sign-ins
- * it waits on end, declined, and the model learns why.
- */
-async function withdrawSteeredSignIns(
-  step: Step,
-  input: StepInput | undefined,
-): Promise<StepInput | undefined> {
-  const names = [...new Set(step.view().signIns.map((challenge) => challenge.name))];
-  step.session = {
-    ...step.session,
-    state: retireActiveCandidates(step.session.state, {
-      completedAt: Date.now(),
-      reason: STEERED_SIGN_IN_REASON,
-    }),
-  };
-  if (names.length === 0) return input;
-  await step.apply(withdrawSignIns(step.view(), STEERED_SIGN_IN_REASON));
-  return {
-    ...input,
-    context: [
-      ...(input?.context ?? []),
-      `Sign-in to ${names.join(", ")} was cancelled because the user sent a new message instead. Ask to sign in again only if the new message still needs it.`,
-    ],
-  };
 }
 
 /** Whether the input carries user-facing turn input. */

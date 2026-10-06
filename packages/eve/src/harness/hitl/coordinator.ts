@@ -456,7 +456,7 @@ function hasMeaningfulInput(stepInput: StepInput | undefined): boolean {
 
 function appendSettledResponses(
   stepInput: StepInput | undefined,
-  settlements: readonly ApprovalSettlementAuditRecord[],
+  settlements: readonly Pick<ApprovalSettlementAuditRecord, "requestId" | "outcome">[],
 ): StepInput | undefined {
   if (settlements.length === 0) return stepInput;
   const existingRequestIds = new Set([

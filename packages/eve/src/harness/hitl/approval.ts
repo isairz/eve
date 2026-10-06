@@ -205,6 +205,23 @@ export function answerApprovals<S extends ApprovalState>(
 }
 
 /**
+ * An approval the audit already settled, but whose answer never reached its step: a checkpoint
+ * saved between the two. The recorded outcome stands, as its synthetic answer; the response
+ * policy and the requester check already ran, and the settlement keeps who approved.
+ */
+export function applyRecordedSettlements<S extends ApprovalState>(state: S): Reduced<S> {
+  const settlements = state.audit?.settlements ?? {};
+  const responses: InputResponse[] = [];
+  for (const [requestId, open] of Object.entries(state.requests)) {
+    if (!isOpenApproval(open) || open.answer !== undefined) continue;
+    const settlement = settlements[requestId];
+    if (settlement === undefined) continue;
+    responses.push({ optionId: settlement.outcome === "allowed" ? "approve" : "cancel", requestId });
+  }
+  return responses.length === 0 ? { events: [], state } : answerApprovals(state, responses);
+}
+
+/**
  * Settles each approval `responder` decided: the audit records who, and the
  * event names them.
  */
@@ -317,18 +334,32 @@ export function settleCalls<S extends ApprovalState>(
   const joined = withMessages(held.messages, results);
   // Calls that asked for an authorization leave the step; the model calls them again.
   const messages = stopped.length === 0 ? joined : withoutCalls(joined, new Set(stopped));
+  const finished = new Set([
+    ...running.map((task) => task.callId),
+    ...stopped,
+    ...results.flatMap((message) =>
+      message.role === "tool"
+        ? message.content.flatMap((part) => (part.type === "tool-result" ? [part.toolCallId] : []))
+        : [],
+    ),
+  ]);
+  const approved = held.approved?.filter((request) => !finished.has(request.action.callId));
   const tasks = [...(held.runtime?.tasks ?? []), ...running];
   const settled = {
     ...state,
     held: {
       ...held,
+      approved,
       messages,
       ...((held.runtime !== undefined || running.length > 0) && {
         runtime: { tasks, approvers: { ...held.runtime?.approvers, ...approvers } },
       }),
     },
   };
-  if ((heldCalls(settled.held, askedCallIds(state))?.calls.length ?? 0) > 0) {
+  if (
+    (settled.held.approved?.length ?? 0) > 0 ||
+    (heldCalls(settled.held, askedCallIds(state))?.calls.length ?? 0) > 0
+  ) {
     return { events: [], state: settled };
   }
   return settleStep(settled, []);

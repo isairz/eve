@@ -409,7 +409,7 @@ function finish(
     }
   }
   return {
-    events: [...events, ...closed],
+    events: [...closed, ...events],
     state: withAudit(state, {
       ...audit,
       activeCandidates,
@@ -514,4 +514,14 @@ function auditOf(state: HumanInputState): ApprovalAudit {
 
 function withAudit(state: HumanInputState, audit: ApprovalAudit): HumanInputState {
   return { ...state, audit };
+}
+
+/** Pending candidates are policy work for the next durable step, not new answers. */
+export function pendingPolicyChecks(state: HumanInputState): readonly PolicyCheck[] {
+  return Object.values(auditOf(state).activeCandidates).flatMap((candidate) => {
+    const approval = state.requests[candidate.requestId];
+    return candidate.status === "pending" && approval?.kind === "tool-approval"
+      ? [check(approval, candidate)]
+      : [];
+  });
 }

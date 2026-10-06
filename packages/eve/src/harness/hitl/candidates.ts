@@ -1,3 +1,5 @@
+import { readTurnState, writeTurnState } from "#harness/session-machine/state.js";
+import type { ApprovalAudit, Settlement } from "#harness/session-machine/human-input-types.js";
 import type { SessionAuthContext } from "#channel/types.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
 import type { SessionStateMap } from "#harness/types.js";
@@ -135,6 +137,28 @@ export function markApprovalCandidateAuthorizationRequired(input: {
   readonly expiresAt?: number;
   readonly state: SessionStateMap | undefined;
 }): SessionStateMap | undefined {
+  const turn = readTurnState(input.state);
+  const active = turn.audit?.activeCandidates[input.candidateId];
+  if (active !== undefined && turn.audit !== undefined) {
+    return writeTurnState(
+      { state: input.state },
+      {
+        ...turn,
+        audit: {
+          ...turn.audit,
+          activeCandidates: {
+            ...turn.audit.activeCandidates,
+            [input.candidateId]: {
+              ...active,
+              authorizations: input.authorizationChallenges,
+              expiresAt: input.expiresAt ?? active.expiresAt,
+              status: "authorization-required",
+            },
+          },
+        },
+      },
+    ).state;
+  }
   const approvalState = readApprovalState(input.state);
   const candidate = approvalState.activeCandidates[input.candidateId];
   if (candidate === undefined) return input.state;
@@ -259,8 +283,18 @@ export function getActiveApprovalCandidate(
 export function getApprovalAuditState(state: SessionStateMap | undefined): {
   readonly activeCandidates: readonly ActiveApprovalCandidate[];
   readonly candidateHistory: readonly ApprovalCandidateAuditRecord[];
-  readonly settlements: readonly ApprovalSettlementAuditRecord[];
+  readonly settlements: readonly (ApprovalSettlementAuditRecord | Settlement)[];
 } {
+  const audit = readTurnState(state).audit;
+  if (audit !== undefined)
+    return {
+      activeCandidates: Object.values(audit.activeCandidates).map((candidate) => ({
+        ...candidate,
+        authorizationChallenges: candidate.authorizations,
+      })),
+      candidateHistory: audit.candidateHistory,
+      settlements: Object.values(audit.settlements),
+    };
   const approvalState = readApprovalState(state);
   return {
     activeCandidates: Object.values(approvalState.activeCandidates),
@@ -443,4 +477,49 @@ export function approverOfRequest(
   requestId: string,
 ): SessionAuthContext | undefined {
   return readApprovalState(state).settlements[requestId]?.approver;
+}
+
+/** Main's audit keeps timestamps too; retain them while renaming candidate challenges. */
+function approvalAudit(state: DurableApprovalState): ApprovalAudit {
+  return {
+    ...state,
+    activeCandidates: Object.fromEntries(
+      Object.entries(state.activeCandidates).map(([id, candidate]) => {
+        const { authorizationChallenges, ...rest } = candidate;
+        return [id, { ...rest, authorizations: authorizationChallenges }];
+      }),
+    ),
+    candidateHistory: state.candidateHistory as ApprovalAudit["candidateHistory"],
+  };
+}
+
+/** Read only the old key: the machine audit must not mask an upgrade's source. */
+export function legacyApprovalAudit(state: SessionStateMap | undefined): ApprovalAudit | undefined {
+  return state?.[APPROVAL_STATE_KEY] === undefined
+    ? undefined
+    : approvalAudit(readApprovalState({ [APPROVAL_STATE_KEY]: state[APPROVAL_STATE_KEY] }));
+}
+
+/**
+ * Audit wins on duplicate candidate/request ids and on an existing sequence counter.
+ * History is keyed by candidate id, so repeated hydration never appends duplicates.
+ */
+export function mergeApprovalAudits(
+  legacy: ApprovalAudit | undefined,
+  audit: ApprovalAudit | undefined,
+): ApprovalAudit | undefined {
+  if (legacy === undefined) return audit;
+  if (audit === undefined) return legacy;
+  return {
+    activeCandidates: { ...legacy.activeCandidates, ...audit.activeCandidates },
+    candidateHistory: [
+      ...legacy.candidateHistory.filter(
+        (entry) =>
+          !audit.candidateHistory.some((current) => current.candidateId === entry.candidateId),
+      ),
+      ...audit.candidateHistory,
+    ],
+    nextCandidateSequence: audit.nextCandidateSequence,
+    settlements: { ...legacy.settlements, ...audit.settlements },
+  };
 }

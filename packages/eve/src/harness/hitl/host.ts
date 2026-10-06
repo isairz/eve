@@ -49,6 +49,8 @@ export type Phase = "pre-step" | "post-step" | "parked";
  * withdrawn once the turn has stopped, parked.
  */
 export const INPUT_PHASES = {
+  "policy.checked": ["pre-step"],
+  "authorization.resumed": ["pre-step"],
   "turn.waiting": ["pre-step", "post-step"],
   "approval.requested": ["post-step"],
   "authorization.required": ["post-step"],
