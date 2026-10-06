@@ -10,7 +10,7 @@ function matches(schema: JsonObject | boolean, value: JsonValue): boolean {
 }
 
 // Known upstream limitations: https://github.com/cfworker/cfworker/issues/338
-// Keep the intended results executable; an upstream fix must retire these markers.
+// Remove the expected-failure markers when these bugs are fixed.
 describe("known upstream JSON Schema limitations", () => {
   it.fails("requires one contains match by default even when maxContains is specified", () => {
     expect(matches({ contains: { const: "urgent" }, maxContains: 1 }, ["normal"])).toBe(false);
@@ -34,8 +34,7 @@ describe("known upstream JSON Schema limitations", () => {
   });
 });
 
-// Expectations follow draft 2020-12. Each row owns a distinct keyword contract;
-// paired examples detect both silently ignored constraints and over-rejection.
+// These cases follow JSON Schema draft 2020-12 and test both accepted and rejected inputs.
 const constraints: {
   name: string;
   schema: JsonObject | boolean;
@@ -301,7 +300,7 @@ const constraints: {
   { name: "not", schema: { not: { type: "number" } }, accepted: ["1"], rejected: [1] },
   {
     name: "if then else",
-    // JSON Schema keyword, not a Promise-like method.
+    // JSON Schema uses `then` as a keyword.
     // oxlint-disable-next-line unicorn/no-thenable
     schema: { if: { type: "number" }, then: { minimum: 1 }, else: { const: "unknown" } },
     accepted: [1, "unknown"],

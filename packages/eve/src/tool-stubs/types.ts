@@ -1,9 +1,9 @@
 import type { JsonObject, JsonValue } from "#shared/json.js";
 
-/** A JSON response selected by tool name and partial argument constraints. */
+/** Stub responses selected by tool name and input fields. */
 export type ToolStub = {
   readonly id: string;
-  /** Root tool name, or a slash-separated local delegation path such as researcher/list_tasks. */
+  /** Use list_tasks for a root tool or researcher/list_tasks for a local subagent's tool. */
   readonly tool: string;
   /** Each named input property must exist and satisfy its JSON Schema. */
   readonly match?: Readonly<Record<string, JsonObject | boolean>>;
@@ -13,7 +13,7 @@ export type ToolStub = {
 );
 
 export interface StubCall {
-  /** Includes the originating session, turn, and tool call identities. */
+  /** Combines the session, turn, and tool call IDs. */
   readonly callId: string;
   readonly tool: string;
   readonly input: unknown;
@@ -30,7 +30,7 @@ export type StubResult =
       readonly response: JsonValue;
     };
 
-/** Trusted server metadata, never read from a client-supplied session identifier. */
+/** Rules and workflow routing set by the server after it authorizes tool stubs. */
 export interface StubScope {
   readonly token: string;
   readonly rules: readonly ToolStub[];
