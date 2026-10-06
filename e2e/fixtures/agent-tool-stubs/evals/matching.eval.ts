@@ -20,6 +20,18 @@ export default defineEval({
           },
           responses: [{ marker: "pending" }, { marker: "MATCH-FIRST" }, { marker: "MATCH-NEXT" }],
         },
+        {
+          id: "open-fallback",
+          tool: "lookup_record",
+          match: {
+            filter: {
+              type: "object",
+              properties: { status: { const: "open" } },
+              required: ["status"],
+            },
+          },
+          response: { marker: "FALLBACK" },
+        },
       ],
     });
     const matching = {

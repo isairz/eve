@@ -86,40 +86,47 @@ Import `taskStubs` into any eval and pass it to `t.session({ stubs: taskStubs })
 
 ## Permit tool replacement
 
-The target disables tool replacement by default, including in development. Keep your existing [route authentication](../guides/auth-and-route-protection), then use `allowToolStubs` to grant replacement permission to your eval runners. Being allowed to call the agent does not automatically allow a caller to replace its tools.
-
-This example uses Vercel OIDC to authenticate two eval projects and grants both permission to replace tools:
+Tool replacement is denied by default, including in development. The authenticator verifies the caller and returns an explicit grant. With [Vercel OIDC](../guides/auth-and-route-protection#verceloidc), put that grant on the subject entry:
 
 ```ts title="agent/channels/eve.ts"
 import { vercelOidc, vercelSubject } from "eve/channels/auth";
 import { eveChannel } from "eve/channels/eve";
 
-const evalSubjects = [
-  vercelSubject({ teamSlug: "acme", projectName: "eval-runner" }),
-  vercelSubject({ teamSlug: "acme", projectName: "ci-evals" }),
-];
-
 export default eveChannel({
-  auth: [vercelOidc({ subjects: evalSubjects })],
-  allowToolStubs: { subjects: evalSubjects },
+  auth: [
+    vercelOidc({
+      subjects: [
+        vercelSubject({ teamSlug: "acme", projectName: "app" }),
+        {
+          subject: vercelSubject({ teamSlug: "acme", projectName: "eval-runner" }),
+          allowToolStubs: true,
+        },
+      ],
+    }),
+  ],
 });
 ```
 
-Replace the example subjects with your eval projects. Both settings use the same whole-string `*` pattern matching. `vercelSubject` defaults to the production environment; pass `environment: "*"` to allow all environments for that eval project. Only subjects listed in `allowToolStubs` receive replacement permission, including callers from the target's own project. An empty list or a caller without a subject is denied. `EVE_EVAL_AUTH_TOKEN` supplies the runner's bearer token; the target still decides whether that caller may replace tools.
+Both projects can authenticate; only the eval runner receives replacement permission. Subject strings still work for ordinary authentication. Any matching entry with `allowToolStubs: true` grants permission; other entries do not revoke it. Patterns use the existing whole-string `*` matching. `vercelSubject` defaults to production; pass `environment: "*"` to include all environments.
 
-A callback is also available for custom claims or authenticators without a subject. For a local-only development channel:
+The target's server configuration supplies the grant. The signed OIDC token establishes who is calling; request JSON cannot grant permission. Implicit current-project acceptance does not grant tool replacement. OIDC user principals (including development users and externally forwarded users) do not inherit project grants. `EVE_EVAL_AUTH_TOKEN` supplies the runner's bearer token.
+
+Custom authenticators can return `allowToolStubs: true` after verifying their caller. For a local-only development channel:
 
 ```ts title="agent/channels/eve.ts"
 import { localDev } from "eve/channels/auth";
 import { eveChannel } from "eve/channels/eve";
 
+const authenticate = localDev();
 export default eveChannel({
-  auth: [localDev()],
-  allowToolStubs: (caller) => caller.authenticator === "local-dev",
+  auth: async (request) => {
+    const caller = await authenticate(request);
+    return caller ? { ...caller, allowToolStubs: true } : null;
+  },
 });
 ```
 
-`allowToolStubs` is checked when a session is created with stubs, using the verified route caller before any `onMessage` auth projection. Later messages, approvals, controls, and result reads use the channel's normal authentication policy. Replacement permission is not rechecked, and stubbed sessions have no additional creator-only access rule.
+The channel checks the fresh authentication result at session creation, before forwarded-principal handling or `onMessage` identity projection. The grant is not persisted or forwarded as session identity. Later messages, approvals, controls, and result reads use normal channel authentication. There is no additional creator-only rule or replacement-permission recheck.
 
 Anyone your channel admits to an existing session can use its configured stubs. If mocked evals share a production deployment, your application's [session-access policy](../guides/auth-and-route-protection#what-reaches-ctxsessionauth) must provide the required isolation. An isolated eval deployment can use the same agent code.
 
@@ -149,8 +156,24 @@ Nested properties are optional unless listed in `required`. Omit `match` or use 
 Constraints use a reference-free subset of JSON Schema 2020-12: types, `const`, `enum`, string and numeric bounds, `pattern`, array items/contains, object properties/required/additionalProperties, dependencies, and logical/conditional schemas. `$ref`, `format`, unknown keywords, and malformed constraints are rejected at setup. No functions or regular-expression objects cross the wire; use the JSON Schema `pattern` string. Configuration is limited to 100 rules, 20,000 JSON nodes, nesting depth 32, and approximately one million characters. The `__proto__` property name is reserved.
 
 - No matching rule: execute the real tool.
-- Multiple matching rules: report an ambiguity error. Rule order does not select a winner.
+- Read rules top to bottom. The first matching rule wins. Put specific rules before a catch-all; later matches are ignored.
 - Selected stub failure: fail the eval, even if the agent recovers. Never fall back to real execution.
+
+### Multiple rules for one tool
+
+```ts
+const stubs = [
+  {
+    id: "milk",
+    tool: "complete_task",
+    match: { task_id: { const: "milk" } },
+    response: { success: true },
+  },
+  { id: "other-tasks", tool: "complete_task", response: { success: false } },
+];
+```
+
+A call for milk receives success; other valid calls receive the fallback. Reversing these rules makes the unconditional rule win every time. Only the selected rule's sequence advances. Exhausting a sequence repeats its last value; it never falls through to a later rule. IDs identify rules independently of their order and remain unique across the session's configuration. Exposing IDs and sequence positions in traces is tracked separately in [AX-5157](https://linear.app/vercel/issue/AX-5157).
 
 ### Known matcher limitations
 
@@ -173,7 +196,7 @@ For example, `responses: ["pending", "completed"]` returns `"pending"` on the fi
 
 eve's internal workflow recovery preserves previously recorded tool results without consuming additional responses. This replay is transparent to the eval runner: an already recorded tool call keeps its original response without advancing the sequence.
 
-Choose the rules when creating the session; they stay fixed for that session. Local child agents share the parent's sequence position, and deployment handoffs preserve it. A new independent session starts at the first response. Calls awaiting or denied approval do not consume entries. A session supports up to 10,000 recorded tool calls.
+Choose the rules when creating the session; they stay fixed for that session. Local children use the same playback owner with explicitly scoped tool paths, and deployment handoffs preserve playback. A new independent session starts at the first response. Calls awaiting or denied approval do not consume entries. A session supports up to 10,000 recorded tool calls.
 
 The responses are supplied by the eval. They do not calculate new task lists from earlier writes: another `list_tasks` call takes the next response even if `complete_task` was never called. Assert the completion call and its order when the scenario requires them. A stubbed completion checks the agent's request and handling of the result; testing a real database update requires the real tool.
 
@@ -191,11 +214,23 @@ You can stub existing tools that eve executes, including ordinary tools, dynamic
 
 Stubbing the `agent` tool returns your configured delegation result without starting a child agent. Persistent tools implemented with `serve`, including `agent`, require an unconditional stub: omit `match` or use `{}`. Every call to that tool is mocked for the session; conditional mixing of real and mocked calls is unsupported.
 
-If you let a local child agent run, it uses the parent's stubs and shares their sequence position. For example, the parent and child calling `list_tasks` consume entries from the same response sequence. A remote agent on another server does not receive the parent's stub configuration.
+If a local child runs, qualify its tools with `/`:
+
+```ts
+const stubs = [
+  { id: "root-tasks", tool: "list_tasks", response: ["Root task"] },
+  { id: "research-tasks", tool: "researcher/list_tasks", response: ["Child task"] },
+  { id: "nested-tasks", tool: "researcher/assistant/list_tasks", response: [] },
+];
+```
+
+Paths follow the local delegation chain from the eval root. `researcher` replaces the whole root-level delegation tool; `researcher/list_tasks` lets that child run and replaces only its list tool. The built-in `agent` child uses `agent/list_tasks`. Model-visible tool names remain unchanged; `/` separates agent scopes in stub configuration only. A root rule never implicitly matches a child's same-named tool.
+
+Repeated child sessions at the same delegation path share that path's rule sequence. Different paths use different rules. A remote agent on another server does not receive the configuration; replace its whole delegation tool instead.
 
 ### Connections
 
-Stub a connection's operation by its qualified name, such as `linear__list_issues`. Put the operation's argument constraints in `match` and its JSON result in `response`.
+Stub a connection's operation by its qualified name, such as `linear__list_issues` (or `researcher/linear__list_issues` in a local child). Put the operation's argument constraints in `match` and its JSON result in `response`.
 
 The connection must still be available and authenticated so eve can discover the operation and validate its arguments. A stub replaces the operation's execution; it does not provide an offline connection. The framework's `connection_search` and `connection_execute` tools cannot themselves be replaced.
 

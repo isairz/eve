@@ -1,4 +1,3 @@
-import { authorizeToolStubs } from "#eve-channel/tool-stubs.js";
 import { readStubFailure } from "#execution/tool-stubs/steps.js";
 import { handleExpiredLegacyAuthorization } from "#execution/legacy-session/authorization.js";
 import { EVE_ROUTE_PREFIX } from "#protocol/routes.js";
@@ -55,6 +54,7 @@ import {
   FAIL_CLOSED_FORWARDED_TRACE_ASSERTION,
   formatTraceContentCeiling,
 } from "#shared/forwarded-trace-policy.js";
+import { sessionAuthFromResult } from "#channel/auth/result.js";
 import { routeAuth } from "#public/channels/auth.js";
 import { defaultEveAudience } from "#eve-channel/audience.js";
 import { mergeUploadPolicy } from "#public/channels/upload-policy.js";
@@ -164,16 +164,18 @@ export function eveChannel(input: EveChannelInput): EveChannel {
 
         const payload = await parseOptionalJsonRequest(req);
         if (payload instanceof Response) return payload;
-        if (payload.stubs !== undefined) {
-          const denied = await authorizeToolStubs(input, authResult);
-          if (denied !== undefined) return denied;
+        if (payload.stubs !== undefined && authResult.allowToolStubs !== true) {
+          return Response.json(
+            { ok: false, error: "Tool stubbing is not permitted for this caller." },
+            { status: 403 },
+          );
         }
         const tokenRejection = rejectSessionContinuationToken(payload);
         if (tokenRejection !== null) return tokenRejection;
 
         const forwarded = await resolveForwardedPrincipal({
           trustedForwarders: input.trustedForwarders,
-          forwarder: authResult,
+          forwarder: sessionAuthFromResult(authResult),
           payload,
         });
         if (forwarded instanceof Response) return forwarded;
@@ -390,7 +392,7 @@ export function eveChannel(input: EveChannelInput): EveChannel {
         if (payload instanceof Response) return payload;
         const forwarded = await resolveForwardedPrincipal({
           trustedForwarders: input.trustedForwarders,
-          forwarder: authResult,
+          forwarder: sessionAuthFromResult(authResult),
           payload,
         });
         if (forwarded instanceof Response) return forwarded;

@@ -7,15 +7,16 @@ it carries the `real-model` tag. Matching and cross-turn playback also run
 with the shared scripted responder in the Postgres and Vercel world suites.
 A passing scripted world run is transport/durability evidence, not live-model evidence.
 
-| Contract                                                                               | Primary proof                                                                                                           |
-| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| List three tasks, complete the intended task, list two remaining tasks on a later turn | `evals/tasks.eval.ts`: tool arguments, counts, order, outputs, and final user-visible task list                         |
-| Nested partial matching, regex and array membership, extra input fields                | `evals/matching.eval.ts`: actual model-generated arguments select the expected response                                 |
-| Several calls to one tool within a turn, then continuation on a later turn             | `evals/matching.eval.ts`: pending → first result → next result                                                          |
-| An unmatched call invokes the real executor                                            | `evals/matching.eval.ts`: distinct live marker                                                                          |
-| Every admitted JSON Schema keyword and setup rejection                                 | `packages/eve/src/tool-stubs/schema.test.ts`: positive/negative values, malformed schemas, no coercion/default mutation |
-| Independent rule sequences, ambiguity, replay, persistent-tool restrictions, bounds    | `packages/eve/src/tool-stubs/rules.test.ts` and existing runtime integration tests                                      |
-| Concurrent admission, separate session state, multi-turn continuation                  | `agent-workflow-stress/evals/tool-stubs.eval.ts` with its deliberately scripted model                                   |
+| Contract                                                                                         | Primary proof                                                                                                           |
+| ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| List three tasks, complete the intended task, list two remaining tasks on a later turn           | `evals/tasks.eval.ts`: tool arguments, counts, order, outputs, and final user-visible task list                         |
+| Nested partial matching, regex and array membership, extra input fields                          | `evals/matching.eval.ts`: actual model-generated arguments select the expected response                                 |
+| Overlapping rules select the first match                                                         | `evals/matching.eval.ts`: a specific rule precedes a broader matching fallback                                          |
+| Several calls to one tool within a turn, then continuation on a later turn                       | `evals/matching.eval.ts`: pending → first result → next result                                                          |
+| An unmatched call invokes the real executor                                                      | `evals/matching.eval.ts`: distinct live marker                                                                          |
+| Every admitted JSON Schema keyword and setup rejection                                           | `packages/eve/src/tool-stubs/schema.test.ts`: positive/negative values, malformed schemas, no coercion/default mutation |
+| Independent rule sequences, first-match precedence, replay, persistent-tool restrictions, bounds | `packages/eve/src/tool-stubs/rules.test.ts` and existing runtime integration tests                                      |
+| Concurrent admission, separate session state, multi-turn continuation                            | `agent-workflow-stress/evals/tool-stubs.eval.ts` with its deliberately scripted model                                   |
 
 The matcher accepts 38 keywords: type, const, enum; five numeric constraints;
 three string constraints; eight array constraints; nine object constraints;

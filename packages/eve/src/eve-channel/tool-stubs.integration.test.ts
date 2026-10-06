@@ -28,42 +28,15 @@ describe("tool stub authorization", () => {
     expect(response.status).toBe(403);
   });
 
-  it.each([
-    { name: "first subject", subjects: ["eval-a", "eval-b"], subject: "eval-a", status: 202 },
-    { name: "second subject", subjects: ["eval-a", "eval-b"], subject: "eval-b", status: 202 },
-    {
-      name: "wildcard environment",
-      subjects: ["owner:acme:project:eval-runner:environment:*"],
-      subject: "owner:acme:project:eval-runner:environment:preview",
-      status: 202,
-    },
-    {
-      name: "authenticated project outside the allowlist",
-      subjects: ["owner:acme:project:eval-runner:environment:*"],
-      subject: "owner:acme:project:production-agent:environment:production",
-      status: 403,
-    },
-    { name: "empty allowlist", subjects: [], subject: "eval-a", status: 403 },
-    { name: "missing subject", subjects: ["*"], subject: undefined, status: 403 },
-  ])("enforces the subject policy for $name", async ({ subjects, subject, status }) => {
-    const response = await request(
-      { auth: () => ({ ...alice, subject }), allowToolStubs: { subjects } },
-      "POST",
-      "/eve/v1/session",
-      {},
-      { stubs: [{ id: "auth", tool: "authenticate", response: true }] },
-      () => ({ sessionId: "created" }) as never,
-    );
-    expect(response.status).toBe(status);
-  });
-
   it("binds the grant to route authentication before onMessage projects the session principal", async () => {
     let scope: unknown;
     const response = await request(
       {
-        auth: () => alice,
-        allowToolStubs: async (auth) => auth.attributes.role === "eval",
-        onMessage: () => ({ auth: bob }),
+        auth: () => ({ ...alice, allowToolStubs: true }),
+        onMessage: (ctx) => {
+          expect(ctx.eve.caller).not.toHaveProperty("allowToolStubs");
+          return { auth: bob };
+        },
       },
       "POST",
       "/eve/v1/session",
@@ -81,6 +54,17 @@ describe("tool stub authorization", () => {
     expect(scope).toHaveProperty("token", expect.any(String));
   });
 
+  it("does not accept permission supplied in a request body or projected by onMessage", async () => {
+    const response = await request(
+      { auth: () => bob, onMessage: () => ({ auth: { ...alice, allowToolStubs: true } }) },
+      "POST",
+      "/eve/v1/session",
+      {},
+      { allowToolStubs: true, stubs: [{ id: "auth", tool: "authenticate", response: true }] },
+    );
+    expect(response.status).toBe(403);
+  });
+
   it.each([
     ["POST", "/eve/v1/session"],
     ["POST", "/eve/v1/session/:sessionId"],
@@ -93,7 +77,7 @@ describe("tool stub authorization", () => {
     ["GET", "/eve/v1/session/:parentSessionId/subagents/:callId/:childSessionId/stream"],
   ])("requires channel authentication for %s %s", async (method, path) => {
     const response = await request(
-      { auth: () => null, allowToolStubs: () => true },
+      { auth: () => null },
       method,
       path,
       { sessionId: "session", parentSessionId: "parent", childSessionId: "child", callId: "call" },

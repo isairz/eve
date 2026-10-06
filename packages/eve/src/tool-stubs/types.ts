@@ -3,6 +3,7 @@ import type { JsonObject, JsonValue } from "#shared/json.js";
 /** A JSON response selected by tool name and partial argument constraints. */
 export type ToolStub = {
   readonly id: string;
+  /** Root tool name, or a slash-separated local delegation path such as researcher/list_tasks. */
   readonly tool: string;
   /** Each named input property must exist and satisfy its JSON Schema. */
   readonly match?: Readonly<Record<string, JsonObject | boolean>>;
@@ -34,6 +35,7 @@ export interface StubScope {
   readonly token: string;
   readonly rules: readonly ToolStub[];
   readonly rootSessionId?: string;
+  readonly agentPath?: string;
 }
 
 export const STUB_CONTEXT_KEY = "eve.toolStubs";

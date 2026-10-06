@@ -68,7 +68,7 @@ describe("tool replacement through the session runtime", () => {
     });
   });
 
-  it("inherits root playback in a real local descendant", async () => {
+  it("isolates same-named root and child tools while sharing root playback", async () => {
     const runtime = await createTestRuntime({
       modules: [
         {
@@ -103,7 +103,12 @@ describe("tool replacement through the session runtime", () => {
                 {
                   id: "deploy",
                   tool: "deploy_service",
-                  responses: [{ state: "root" }, { state: "child" }],
+                  response: { state: "root" },
+                },
+                {
+                  id: "child-deploy",
+                  tool: "agent/deploy_service",
+                  response: { state: "child" },
                 },
               ],
             },
@@ -343,7 +348,14 @@ describe("tool replacement through the session runtime", () => {
             ...buildSerializedContext({ channelKind: "http" }),
             [STUB_CONTEXT_KEY]: {
               token: "workflow-tool-playback",
-              rules: [{ id: "deploy", tool: "deploy_service", response: { state: "stubbed" } }],
+              rules: [
+                { id: "deploy", tool: "deploy_service", response: { state: "stubbed" } },
+                {
+                  id: "child-deploy",
+                  tool: "agent/deploy_service",
+                  response: { state: "child-workflow" },
+                },
+              ],
             },
           },
         },
@@ -355,6 +367,20 @@ describe("tool replacement through the session runtime", () => {
           filterEventsByType(events, "action.result").map((event) => event.data.result),
         ).toContainEqual(expect.objectContaining({ output: { state: "stubbed" } }));
         expect(filterEventsByType(events, "turn.failed")).toEqual([]);
+        await dispatchWorkflowSessionCommand({
+          sessionId: run.runId,
+          command: {
+            kind: "send",
+            payload: { message: 'Delegate to a subagent: Run deploy_service with service "api"' },
+          },
+        });
+        const childEvents = await stream.nextTurn();
+        expect(filterEventsByType(childEvents, "agent.started")).toHaveLength(1);
+        expect(
+          filterEventsByType(childEvents, "task.settled").some((event) =>
+            JSON.stringify(event.data.output).includes("child-workflow"),
+          ),
+        ).toBe(true);
       } finally {
         stream.dispose();
         await run.cancel();
