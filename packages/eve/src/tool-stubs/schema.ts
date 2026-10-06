@@ -1,6 +1,5 @@
 import { Validator } from "#compiled/@cfworker/json-schema/index.js";
 import type { JsonObject } from "#shared/json.js";
-import { isObject } from "#shared/guards.js";
 
 const schema = { $ref: "#" };
 const schemaList = { type: "array", minItems: 1, items: schema };
@@ -35,7 +34,7 @@ const constraintSchema = new Validator(
           multipleOf: { type: "number", exclusiveMinimum: 0 },
           minLength: nonnegativeInteger,
           maxLength: nonnegativeInteger,
-          pattern: { type: "string", maxLength: 256 },
+          pattern: { type: "string", format: "regex", maxLength: 256 },
           minItems: nonnegativeInteger,
           maxItems: nonnegativeInteger,
           uniqueItems: { type: "boolean" },
@@ -47,7 +46,7 @@ const constraintSchema = new Validator(
           minProperties: nonnegativeInteger,
           maxProperties: nonnegativeInteger,
           properties: schemaMap,
-          patternProperties: schemaMap,
+          patternProperties: { ...schemaMap, propertyNames: { format: "regex" } },
           propertyNames: schema,
           required: strings,
           additionalProperties: schema,
@@ -75,36 +74,8 @@ export function validateStubConstraint(value: unknown): void {
       "Invalid tool stub JSON Schema. Use supported, reference-free JSON Schema constraints.",
     );
   }
-  validatePatterns(value);
 }
 
 export function compileStubConstraint(value: JsonObject | boolean): Validator {
   return new Validator(structuredClone(value), "2020-12");
-}
-
-function validatePatterns(value: unknown): void {
-  if (!isObject(value)) return;
-  if (typeof value.pattern === "string") new RegExp(value.pattern, "u");
-  if (isObject(value.patternProperties)) {
-    for (const pattern of Object.keys(value.patternProperties)) new RegExp(pattern, "u");
-  }
-  for (const key of [
-    "items",
-    "contains",
-    "additionalProperties",
-    "propertyNames",
-    "not",
-    "if",
-    "then",
-    "else",
-  ]) {
-    validatePatterns(value[key]);
-  }
-  for (const key of ["prefixItems", "allOf", "anyOf", "oneOf"]) {
-    if (Array.isArray(value[key])) for (const child of value[key]) validatePatterns(child);
-  }
-  for (const key of ["properties", "patternProperties", "dependentSchemas"]) {
-    if (isObject(value[key]))
-      for (const child of Object.values(value[key])) validatePatterns(child);
-  }
 }
