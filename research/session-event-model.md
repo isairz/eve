@@ -16,29 +16,18 @@ Every eve reader folds the same session stream: web and React clients, the dev T
 - Which text is the reply is read from `finishReason` on a text block.
 - Most payloads repeat `turnId`, `sequence`, and `stepIndex`, and what those mean depends on the event.
 
-This doc proposes the contract for the next stream-version break, with a stated goal: **the contract stays stable afterward.** Two things make that credible.
+This doc proposes a stable contract for the next stream-version break:
 
-**A small fixed part, decided now:**
-
-- **Eight entities.** Each has one ID, one owner declared when it is introduced, and exactly one terminal event, with an outcome from a closed set.
-- **Invariants a checker enforces.**
-- **Explicit facts for what readers guess today:**
-  - when a delivery's response is finished;
-  - how a call ended and what it produced;
-  - how an interaction was resolved;
-  - which text is the reply.
-- **One commit per stream line,** and positions that never move.
-
-**An open part, with rules for growing it:**
-
-- New kinds, fields, families, and annotations are additive.
-- Readers ignore what they don't know, and open enums fall back to declared defaults ([Evolution rules](#evolution-rules)).
+- **Eight entities**, each with an ID, immutable ownership, and one terminal event with a closed outcome set.
+- **Checkable invariants** and explicit delivery completion, call outcomes, interaction resolution, and reply references.
+- **One commit per stream line**, with immutable positions.
+- **Additive evolution:** new kinds, fields, families, and annotations; tolerant readers and declared fallbacks ([Evolution rules](#evolution-rules)).
 
 The catalog has 27 event types (24 durable facts and 3 streaming progress types), where v26 has 34. The schemas are Zod, in one self-contained module.
 
 Compatibility is cut on purpose: v27 clients read v27 only, and sessions don't cross the break. A read-through of `main` puts the net change at roughly 500–1,000 fewer source lines out of about 10,000 touched. Test updates dominate the effort ([Implementation estimate](#implementation-estimate)).
 
-The decisions came out of a pressure test against eve's roadmap and open issues ([Pressure test](#pressure-test)), and a comparison with pi and opencode ([Prior art](#prior-art-pi-and-opencode)).
+The contract was pressure-tested against eve's roadmap and open issues ([Pressure test](#pressure-test)).
 
 ## Baseline and scope
 
@@ -144,13 +133,7 @@ protocol/session-events/
 protocol/session-projection/   fold per family, public tables, selectors
 ```
 
-- **No runtime types.** The module imports nothing from `shared/`, `harness/`, `connections/`, or `ai`, and a guard rule enforces it. Today, payloads reuse runtime types:
-  - `RuntimeActionRequest`'s dispatch variants (`nodeId`, `workflowId`, `subagentName`);
-  - `InputRequest`, which embeds a full `action` even for questions;
-  - `ConnectionAuthorizationChallenge`;
-  - AI SDK UI part types.
-
-  So runtime refactors change the wire silently.
+- **No runtime types.** A guard forbids imports from `shared/`, `harness/`, `connections/`, or `ai`, so runtime refactors cannot silently change the wire.
 
 - **No builders in `protocol/`.** Facts are typed literals built by their owners: the session machine and `hitl/` for lifecycle, and the emission files for streamed content and calls.
 - **Validation runs in tests and dev only.** Payloads are validated there and in the checker. Clients import types only, so nothing is validated on the delta hot path.
@@ -497,7 +480,7 @@ What's deferred:
 
 - **The fact that moves the context when no turn starts** (a rewind with nothing sent, or switching to an existing branch). It's added and named when the feature ships, for example `context.rewound`. It's additive, and a reader that ignores it catches up at the next turn's `follows`.
 - **Forks into a new session (#75)** can add `session.started.forkedFrom {sessionId, turnId}`.
-- **Rewinding past a compaction** needs the originals compaction discards today. Until a producer keeps raw history, such a request finishes `refused` with `reason: "context-unavailable"`. pi keeps raw history for exactly this reason.
+- **Rewinding past a compaction** needs the originals compaction discards today. Until a producer keeps raw history, such a request finishes `refused` with `reason: "context-unavailable"`.
 
 ## Example: a declined approval
 
@@ -591,18 +574,6 @@ Fenced appends would fix stream pollution entirely. Combined with durable-before
 
 Streams continue across deployments (idle handoff), and clients may be older or newer than the server. Within a major version, new readers must read old lines and old readers must read new ones.
 
-**History shows what to expect.** eve went from v15 to v26 between June and September 2026:
-
-| Kind of change                                                                     | Bumps                        | Under these rules |
-| ---------------------------------------------------------------------------------- | ---------------------------- | ----------------- |
-| Optional field, new progress type, envelope field                                  | v17, v18, v20, v21, v22, v24 | Minor             |
-| New family, or a non-terminal annotation (`agent.started`, `turn.waiting`)         | part of v26                  | Minor             |
-| A value added to a closed set (`rejected`, `cancelled`)                            | v16, part of v26             | Breaking          |
-| A new lifecycle fact (`turn.cancelled`, `input.resolved`); a progress shape change | v19, v23, v25                | Breaking          |
-
-- **Even the additive bumps broke older clients,** which reject unknown versions.
-- **Every breaking kind is already covered in this catalog.** Completeness of the outcome sets and lifecycles is what matters most.
-
 **Versioning.** One major version plus additive minors:
 
 - clients accept any minor and refuse unknown majors;
@@ -664,24 +635,6 @@ Streams continue across deployments (idle handoff), and clients may be older or 
 - the checker in tests.
 
 ## Session projection
-
-The v26 shape, as of #4177:
-
-```text
-SessionProjection
-├─ started?  ended?
-├─ activeTurnId?   nextSequence
-├─ turns          [turnId]       sequence · status · waiting? · stepIndex · stepStarted? · outputStarted?
-├─ calls          [callId]       name · turnId · stepIndex · status · requestId? · taskId? · error?
-├─ tasks          [taskId]       name · kind · calls[callId] { turnId · status · output? · error? }
-├─ inputs         [requestId]    request · sequence · turnId · stepIndex · taskId? · callId?
-│                                status: open | responded* | settled · response? · outcome?
-├─ authorizations [attemptId]    name · sequence · turnId · stepIndex · taskId? · principalId?
-│                                candidateId? · callIds? · status · awaitsCallback?
-└─ candidates     [candidateId]  requestId · outcome
-
-* a client-only status stored in the shared type
-```
 
 Proposed public tables, one per family, at a position:
 
@@ -766,19 +719,9 @@ SessionProjection @ position
 
 ## Private state
 
-Some records never go on the wire:
+Withheld model responses, prepared inputs, answer routes, grants, sign-in resume data, execution plans, history, checkpoint positions, and `outputStarted` stay private. Lifecycle authority remains in the projection; these records supply execution payloads and handles, not a second lifecycle model.
 
-- withheld model responses;
-- prepared tool inputs;
-- answer routes;
-- approval grants;
-- sign-in resume data;
-- execution plans;
-- history;
-- each checkpoint's stream position;
-- `outputStarted`.
-
-The session-state stack already writes most of these only from transitions. Whether they should become an appended journal instead of snapshots is a separate decision that needs its own measurements. This contract doesn't depend on it, but its facts are shaped to allow it: each fact is one decision, and each line is one commit.
+The contract does not require replacing private snapshots with an appended journal; that needs separate measurements.
 
 ## Compatibility
 
@@ -794,94 +737,13 @@ The break supports as little as possible, following HumanInput's precedent of no
   - remote agent protocol 1.
 - **After the break,** compatibility follows [Evolution rules](#evolution-rules), with no version bump for additive changes.
 
-## What reading the code changed
-
-**The first read of `main`:**
-
-- **Narration versus reply.** About a dozen channel defaults, evals, the invocation API, and the client tell narration from the reply by `message.completed.finishReason`. Moving `finishReason` to `model.settled` alone would break them, since the run settles after its text. Hence `phase`, and now `turn.settled.reply`.
-- **The relay protocol reuses stream shapes,** including in the remote callback route's strict Zod schemas. The relay needs its own contract.
-- **The remote stream proxy reads the stream.** It finds a remote child's binding by scanning the parent stream from line 0, on every follower connect.
-- **Five server readers count events against chunk indexes,** and they keep counting lines.
-- **Three server features scan the public stream ad hoc** (the remote binding, Telegram's callback, the invocation API's window). They become shared-fold readers.
-- **Framework notices are published as model text.** The unauthenticated-approval notice becomes a delivery outcome.
-- **Readers split on sign-ins.** The finish rule follows the callback principle.
-- **Deliveries are admitted at step boundaries,** so `delivery.accepted` means "admitted by the machine".
-
-**Working through the decisions:**
-
-- **Workflow 5 resolves `write()` on buffer,** so eve's ordered emitter rarely merges deltas, and channel effects run before durability.
-- **The client rejects unknown stream versions,** so every additive bump broke older clients. Meanwhile the server reader already normalizes mixed-version lines inside one stream.
-- **Bytes reach the stream:** raw MCP media results and client `data:` URLs, while history stores refs.
-- **No checkpoint records a stream position.** Step retries republish from scratch, in-step model retries leave ghost tool cards (#3308), and a zombie writer polluted a production session (#2599).
-- **The shared fold derives `outputStarted` from progress,** against invariant 5.
-- **Today's client already keeps interrupted text** after a cancel, and drops tool cards whose input was still streaming. That's the interrupted/abandoned split, made explicit here.
-- **Context notices are mostly metadata riding along with a message.** Context-only deliveries come from event-driven turns (GitHub CI) and notices into ongoing sessions (#4276).
-
 ## Pressure test
 
-The contract was tested against 29 features from open issues and the proposed, in-progress, and draft research docs.
+An analytical pressure test covered 29 roadmap scenarios; it was not an implementation test.
 
-**Features that fit the open part:**
-
-- steering with replacement input (#867);
-- answers sent before their prompt existed (#786, `seenThrough`);
-- folded steering (#3313);
-- steering remote agents (#1287);
-- multi-hop relays (#4088);
-- deadlines and escalation (#3546);
-- hook cancels;
-- model fallback (`model.settled.servedBy`);
-- principal-scoped sessions (#661);
-- new interaction kinds (human handoff, MCP elicitation);
-- visible memory recall (`context.recalled`);
-- structured task output (#3200);
-- scheduled sends;
-- todos and plans as a new family (#544);
-- media output (#3384), through open content kinds and references.
-
-**Fixed-part decisions it forced:** each is reflected above.
-
-- transcript versus context, and turn lineage, for rewind, fork, edit, and regenerate (#75);
-- interrupted versus abandoned output;
-- at most one open turn;
-- closed outcome sets, including `interrupted` with usage (#952);
-- open enums with fallbacks;
-- the extension rule;
-- values by reference;
-- one line sequence for every reader, with transport records outside it, as leased stream responses need;
-- the fold's tolerance rules (#2599, #3308);
-- separate child streams (#666, #2087, #1673);
-- public projection tables without snapshots on the wire.
-
-**Out of scope:** realtime media transport (#637). The stream records the transcript, and media stays out of band.
-
-## Prior art: pi and opencode
-
-| Dimension                 | eve (this doc)                            | pi-durable ("Pico5" spec)                                | opencode v2 (`session.next.*`)                      |
-| ------------------------- | ----------------------------------------- | -------------------------------------------------------- | --------------------------------------------------- |
-| Public model              | Replayable fact log with line positions   | Convergent view (snapshot plus deltas); events are lossy | Durable events with a sequence; replay `?after=seq` |
-| Streaming progress        | Durable lines, skipped on catch-up        | Throttled durable partials                               | Live-only deltas; `*.ended` carries the full value  |
-| Transcript versus context | Separate; context private, lineage public | Separate; context is a public fold over entries          | A public `/context` endpoint                        |
-| Branching                 | `turn.started.follows`                    | Forks are new conversations with a parent cap            | Destructive revert (staged, then committed)         |
-| Interrupted output        | Completed `interrupted`, not in context   | `aborted` entries, also on retry; excluded from context  | Completed, then `step.failed`; included in context  |
-| Interactions              | Durable, with candidates and principals   | Not in core                                              | Live-only                                           |
-| Versioning                | One major plus additive minors            | View fields are public protocol                          | Per event type                                      |
-
-**What eve takes from them:**
-
-- the transcript/context split, which both have;
-- completing interrupted text;
-- separate child views, which pi adds through a task graph view;
-- settling submissions with their answer, which becomes `turn.settled.reply` here;
-- keeping raw history for forks before compaction;
-- seq-addressed, owner-fenced writes, as an ask to the platform.
-
-**Where eve differs on purpose:**
-
-- **A replayable log rather than a convergent view,** because channels, hooks, evals, and proxies act on each fact.
-- **Private model context,** because eve serves multi-party channels.
-- **Durable interactions,** because approvals wait days across principals.
-- **No per-type versions,** because lifecycle facts can't be safely ignored.
+- **Additive features:** steering (#867, #3313, #1287), prompt-aware answers (#786), multi-hop relays (#4088), deadlines (#3546), model fallback, principal-scoped sessions (#661), new interaction kinds, memory recall, structured task output (#3200), schedules, plans (#544), and media references (#3384).
+- **Required now:** turn lineage for edit/regenerate/fork (#75), interrupted output with usage (#952), complete outcome sets, tolerant readers, retry recovery (#2599, #3308), separate child streams, and public projection tables. These decisions are incorporated above.
+- **Out of scope:** realtime media transport (#637); the stream records its transcript, with media out of band.
 
 ## Implementation estimate
 
