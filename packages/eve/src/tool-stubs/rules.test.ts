@@ -159,8 +159,15 @@ describe("tool stubs", () => {
   });
 
   it.each([
+    [{ tool: "list", response: null }],
+    [{ id: "a", tool: "", response: null }],
+    [{ id: "a", tool: "list" }],
     [{ id: "a", tool: "list", responses: [] }],
     [{ id: "a", tool: "list", response: null, responses: [null] }],
+    [{ id: "a", tool: "list", response: null, typo: true }],
+    [{ id: "a", tool: "list", match: [], response: null }],
+    [{ id: "a", tool: "list", match: { x: 1 }, response: null }],
+    [{ id: "a", tool: "list", response: { value: Number.NaN } }],
     [
       { id: "a", tool: "list", response: null },
       { id: "a", tool: "list", response: null },
@@ -178,6 +185,18 @@ describe("tool stubs", () => {
     ],
   ])("rejects invalid rules and unsupported schemas before execution: %j", (...rules) => {
     expect(() => parseToolStubs(rules)).toThrow();
+  });
+
+  it("normalizes absent options and preserves falsy JSON responses", () => {
+    expect(
+      parseToolStubs([
+        { id: "constant", tool: "list", match: undefined, response: null, responses: undefined },
+        { id: "sequence", tool: "list", response: undefined, responses: [false, 0, "", null] },
+      ]),
+    ).toEqual([
+      { id: "constant", tool: "list", response: null },
+      { id: "sequence", tool: "list", responses: [false, 0, "", null] },
+    ]);
   });
 });
 
