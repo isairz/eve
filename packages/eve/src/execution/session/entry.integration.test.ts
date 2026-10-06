@@ -4,7 +4,7 @@ import { hydrateWorkflowArguments } from "@workflow/core/serialization";
 import { createChannelAddress } from "#channel/channel-address.js";
 import { captureTurnEvents, filterEventsByType } from "#internal/testing/events.js";
 import { createTestRuntime } from "#internal/testing/app-harness.js";
-import { waitForHook } from "#internal/testing/workflow-test-helpers.js";
+import { waitForHook, startSessionOwner } from "#internal/testing/workflow-test-helpers.js";
 import { createBundledRuntimeCompiledArtifactsSource } from "#runtime/compiled-artifacts-source.js";
 import { workflowEntry } from "#execution/session/entry.js";
 import {
@@ -116,7 +116,7 @@ describe("workflowEntry integration", () => {
     });
 
     await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -199,7 +199,7 @@ describe("workflowEntry integration", () => {
     });
     try {
       await runtime.run(async () => {
-        const run = await start(workflowEntry, [
+        const run = await startSessionOwner(workflowEntry, [
           {
             kind: "initial",
             ownerDeploymentId: "dpl_inline",
@@ -234,7 +234,7 @@ describe("workflowEntry integration", () => {
     const continuationToken = "http:workflow-entry-conversation";
 
     await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -333,7 +333,7 @@ describe("workflowEntry integration", () => {
     const runtime = await createTestRuntime({ agent: { name: "workflow-entry-id-only" } });
 
     await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -363,7 +363,7 @@ describe("workflowEntry integration", () => {
     const continuationToken = "http:workflow-entry-event-ids";
 
     await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -449,7 +449,7 @@ describe("workflowEntry integration", () => {
     });
 
     await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -496,7 +496,7 @@ describe("workflowEntry integration", () => {
     });
 
     await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -562,7 +562,7 @@ describe("workflowEntry integration", () => {
     const childContinuationToken = "subagent:parent-session:call-1";
 
     await runtime.run(async () => {
-      const child = await start(workflowEntry, [
+      const child = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -662,7 +662,7 @@ describe("workflowEntry integration", () => {
     const firstCallerToken = "subagent:parent-session:call-1";
 
     await runtime.run(async () => {
-      const child = await start(workflowEntry, [
+      const child = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -1021,7 +1021,7 @@ describe("workflowEntry integration", () => {
     const continuationToken = "http:workflow-entry-hook-owner";
 
     await runtime.run(async () => {
-      const owner = await start(workflowEntry, [
+      const owner = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -1041,7 +1041,7 @@ describe("workflowEntry integration", () => {
       const firstTurn = await ownerStream.nextTurn();
       expect(firstTurn.at(-1)?.type).toBe("session.waiting");
 
-      const contender = await start(workflowEntry, [
+      const contender = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -1089,7 +1089,7 @@ describe("workflowEntry integration", () => {
     } as const;
 
     await runtime.run(async () => {
-      const run = await start(workflowEntry, [
+      const run = await startSessionOwner(workflowEntry, [
         {
           kind: "initial",
           ownerDeploymentId: "dpl_inline",
@@ -1448,7 +1448,7 @@ async function withHeldApprovalRun(
   };
   if (options.auth !== undefined) context.auth = options.auth;
   await runtime.run(async () => {
-    const run = await start(workflowEntry, [
+    const run = await startSessionOwner(workflowEntry, [
       {
         kind: "initial",
         ownerDeploymentId: "dpl_inline",
