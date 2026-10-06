@@ -1,53 +1,41 @@
+import { z } from "#compiled/zod/index.js";
 import { isObject } from "#shared/guards.js";
+import { jsonObjectSchema, jsonValueSchema } from "#shared/json-schemas.js";
 import { parseJsonValue } from "#shared/json.js";
 import { compileStubConstraint, validateStubConstraint } from "#tool-stubs/schema.js";
 import type { StubCall, StubResult, ToolStub } from "#tool-stubs/types.js";
 
+const ruleSchema = z.strictObject({
+  id: z.string().min(1),
+  tool: z.string().min(1),
+  match: z.record(z.string(), z.union([z.boolean(), jsonObjectSchema])).optional(),
+});
+
+const toolStubsSchema = z
+  .array(
+    z.union([
+      ruleSchema.extend({ response: jsonValueSchema }),
+      ruleSchema.extend({ responses: z.tuple([jsonValueSchema]).rest(jsonValueSchema) }),
+    ]),
+  )
+  .max(100);
+
 /** Validates the wire contract before admitting a stubbed session. */
 export function parseToolStubs(value: unknown): readonly ToolStub[] {
   boundStubConfiguration(value);
-  const rules = parseJsonValue(value);
-  if (!Array.isArray(rules) || rules.length > 100)
-    throw new Error("Expected at most 100 tool stubs.");
+  const rules = toolStubsSchema.parse(parseJsonValue(value));
   const ids = new Set<string>();
   for (const rule of rules) {
-    if (
-      !isObject(rule) ||
-      typeof rule.id !== "string" ||
-      !rule.id ||
-      typeof rule.tool !== "string" ||
-      !rule.tool ||
-      ids.has(rule.id)
-    ) {
-      throw new Error("Each tool stub needs a unique id and a tool name.");
-    }
+    if (ids.has(rule.id)) throw new Error(`Duplicate tool stub id "${rule.id}".`);
     ids.add(rule.id);
     if (["connection_execute", "connection_search"].includes(rule.tool.split("/").at(-1)!)) {
       throw new Error(
         "Stub connection operations by their qualified connection__tool name; connection discovery and validation remain live.",
       );
     }
-    if (
-      Object.keys(rule).some(
-        (key) => !["id", "tool", "match", "response", "responses"].includes(key),
-      )
-    ) {
-      throw new Error(`Unknown field in tool stub "${rule.id}".`);
-    }
-    if (
-      Object.hasOwn(rule, "response") === Object.hasOwn(rule, "responses") ||
-      (Object.hasOwn(rule, "responses") &&
-        (!Array.isArray(rule.responses) || rule.responses.length === 0))
-    ) {
-      throw new Error(
-        `Tool stub "${rule.id}" needs exactly one response or a nonempty responses array.`,
-      );
-    }
-    if (rule.match !== undefined && !isObject(rule.match))
-      throw new Error("Tool stub match must be a property-to-schema object.");
     for (const schema of Object.values(rule.match ?? {})) validateStubConstraint(schema);
   }
-  return rules as readonly ToolStub[];
+  return rules;
 }
 
 /** Deterministic playback; its owner supplies durable, serial call admission. */
