@@ -33,8 +33,10 @@ export default defineTool({
       "agent/channels/eve.ts": `import { httpBasic } from "eve/channels/auth";
 import { eveChannel } from "eve/channels/eve";
 export default eveChannel({
-  auth: [httpBasic({ username: "alice", password: "fixture" }), httpBasic({ username: "bob", password: "fixture" })],
-  allowToolStubs: auth => auth.principalId === "alice",
+  auth: [httpBasic({ username: "alice", password: "fixture" }), httpBasic({ username: "bob", password: "fixture" })].map(authenticate => async request => {
+    const auth = await authenticate(request);
+    return auth ? { ...auth, allowToolStubs: auth.principalId === "alice" } : null;
+  }),
 });`,
     },
   });
@@ -95,16 +97,17 @@ export default eveChannel({
       }),
     });
     expect(invalid.status).toBe(400);
-    const { session: ambiguous } = await alice.sessions.create({
+    const { session: overlapping } = await alice.sessions.create({
       stubs: [
         { id: "a", tool: "deploy", response: "a" },
         { id: "b", tool: "deploy", response: "b" },
       ],
     });
-    await (await ambiguous.send("Alice asks to deploy api.")).result();
-    const failure = await bob.fetch(`/eve/v1/session/${ambiguous.state.sessionId}/stubs`);
+    const selected = await (await overlapping.send("Alice asks to deploy api.")).result();
+    expect(results(selected.events)).toEqual(["a"]);
+    const failure = await bob.fetch(`/eve/v1/session/${overlapping.state.sessionId}/stubs`);
     expect(failure.status).toBe(200);
-    expect(await failure.json()).toEqual({ error: 'Ambiguous tool stubs for "deploy": a, b.' });
+    expect(await failure.json()).toEqual({ error: null });
   } finally {
     await server.stop();
   }

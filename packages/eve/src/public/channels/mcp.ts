@@ -1,3 +1,4 @@
+import { sessionAuthFromResult } from "#channel/auth/result.js";
 import { parseJsonObject } from "#shared/json.js";
 import { z } from "#compiled/zod/index.js";
 import {
@@ -333,7 +334,7 @@ async function authenticateMcpRequest(
   if (auth instanceof Response) {
     return oauth === undefined ? auth : addResourceChallenge(auth, request, oauth);
   }
-  return await handleMcpRequest(request, args, auth);
+  return await handleMcpRequest(request, args, sessionAuthFromResult(auth));
 }
 
 async function handleMcpRequest(

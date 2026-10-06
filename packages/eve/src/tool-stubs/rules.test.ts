@@ -109,16 +109,28 @@ describe("tool stubs", () => {
     ).toEqual({ kind: "stub", ruleId: "search", position: 0, response: ["milk"] });
   });
 
-  it("rejects ambiguous matches without using rule order", () => {
+  it("uses the first match, advances only its sequence, and never falls through after exhaustion", () => {
     const playback = new StubPlayback(
       parseToolStubs([
-        { id: "first", tool: "list", response: [] },
-        { id: "second", tool: "list", response: ["milk"] },
+        {
+          id: "specific",
+          tool: "list",
+          match: { status: { const: "open" } },
+          responses: ["one", "two"],
+        },
+        { id: "fallback", tool: "list", responses: ["fallback-one", "fallback-two"] },
       ]),
     );
-    expect(playback.call({ callId: "call", tool: "list", input: {} })).toEqual({
-      kind: "error",
-      error: 'Ambiguous tool stubs for "list": first, second.',
+    const call = (callId: string, status: string) =>
+      playback.call({ callId, tool: "list", input: { status } });
+    expect(call("a", "open")).toMatchObject({ ruleId: "specific", response: "one", position: 0 });
+    expect(call("b", "open")).toMatchObject({ ruleId: "specific", response: "two", position: 1 });
+    expect(call("c", "open")).toMatchObject({ ruleId: "specific", response: "two", position: 1 });
+    expect(call("a", "open")).toMatchObject({ ruleId: "specific", response: "one", position: 0 });
+    expect(call("d", "closed")).toMatchObject({
+      ruleId: "fallback",
+      response: "fallback-one",
+      position: 0,
     });
   });
 
@@ -195,7 +207,7 @@ it("does not consume another rule's sequence or advance on unmatched calls", () 
   expect(call("e", "closed")).toMatchObject({ response: "closed-2" });
 });
 
-it("requires the field even for a true constraint and fails overlapping partial matches", () => {
+it("requires the field even for a true constraint and lets an earlier broad match win", () => {
   const playback = new StubPlayback(
     parseToolStubs([
       { id: "present", tool: "lookup", match: { status: true }, response: "any" },
@@ -208,7 +220,7 @@ it("requires the field even for a true constraint and fails overlapping partial 
   });
   expect(
     playback.call({ callId: "overlap", tool: "lookup", input: { status: "open" } }),
-  ).toMatchObject({ kind: "error", error: expect.stringContaining("Ambiguous") });
+  ).toMatchObject({ kind: "stub", ruleId: "present", response: "any" });
 });
 
 it("includes the final visited string in the configuration size limit", () => {

@@ -26,7 +26,7 @@ export default defineEval({
       stubs: [
         {
           id: "goog-quote",
-          tool: "get_stock_price",
+          tool: "stock-price/get_stock_price",
           match: { ticker: { const: "GOOG" } },
           response: {
             ticker: "GOOG",

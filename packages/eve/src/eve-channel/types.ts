@@ -95,16 +95,6 @@ export function defaultEveAuth(ctx: EveMessageContext): SessionAuthContext | nul
  */
 export interface EveChannelInput {
   /**
-   * Grants tool replacement to an already verified route principal. Disabled
-   * by default, including in development. Subject patterns use the same `*`
-   * matching as route authentication, without implicitly allowing current-project
-   * callers. Use a callback for custom claims or subjectless authenticators.
-   * Checked when creating a session with stubs. Later requests use route auth.
-   */
-  readonly allowToolStubs?:
-    | { readonly subjects: readonly string[] }
-    | ((auth: SessionAuthContext) => boolean | Promise<boolean>);
-  /**
    * Route auth policy: a single {@link AuthFn} or an ordered array walked by {@link routeAuth}.
    * The first entry returning a {@link SessionAuthContext} wins; `null` / `undefined` skips to
    * the next; exhaustion (including the empty array) rejects with 401. Include `none()` last for anonymous traffic.

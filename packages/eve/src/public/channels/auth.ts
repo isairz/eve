@@ -5,6 +5,7 @@
  * helpers are lower-level pure functions for custom `fetch` handlers.
  */
 
+import { areTokenClaimMatchersSatisfied } from "#channel/auth/token-claims.js";
 import { decodeJwt } from "#compiled/jose/index.js";
 
 import type { SessionAuthContext } from "#channel/types.js";
@@ -508,6 +509,11 @@ export class ForbiddenError extends Error {
   }
 }
 
+export interface AuthResult extends SessionAuthContext {
+  /** Server-granted permission to create stubbed sessions; denied unless explicitly true. */
+  readonly allowToolStubs?: boolean;
+}
+
 /**
  * Route auth callback. Returned value semantics inside {@link routeAuth}:
  *
@@ -521,7 +527,7 @@ export class ForbiddenError extends Error {
  */
 export type AuthFn<TEvent = Request> = (
   event: TEvent,
-) => SessionAuthContext | null | undefined | Promise<SessionAuthContext | null | undefined>;
+) => AuthResult | null | undefined | Promise<AuthResult | null | undefined>;
 
 /**
  * OAuth protected-resource metadata attached to an inbound auth policy.
@@ -702,7 +708,7 @@ function collectDeclaredChallenges(
 export async function routeAuth(
   request: Request,
   auth: AuthFn<Request> | readonly AuthFn<Request>[],
-): Promise<SessionAuthContext | Response> {
+): Promise<AuthResult | Response> {
   const list: readonly AuthFn<Request>[] = Array.isArray(auth)
     ? (auth as readonly AuthFn<Request>[])
     : [auth as AuthFn<Request>];
@@ -861,7 +867,7 @@ const LOCAL_DEV_SESSION_AUTH_CONTEXT: SessionAuthContext = {
 const VERCEL_OIDC_AUDIENCE_PREFIX = "https://vercel.com/";
 
 /**
- * Options for {@link verifyVercelOidc} and {@link vercelOidc}.
+ * Options for the low-level {@link verifyVercelOidc} verifier.
  */
 export interface VerifyVercelOidcOptions {
   /**
@@ -1084,13 +1090,29 @@ function assertVercelSubjectSegment(field: "teamSlug" | "projectName", value: st
   }
 }
 
+export interface VercelOidcOptions extends Omit<VerifyVercelOidcOptions, "subjects"> {
+  /** Additional accepted subjects. Only explicitly granting entries permit stubs. */
+  readonly subjects?: readonly (
+    | string
+    | {
+        readonly subject: string;
+        readonly allowToolStubs?: boolean;
+      }
+  )[];
+}
+
 /**
  * Returns an HTTP route auth callback backed by Vercel OIDC. See
  * {@link verifyVercelOidc} for the always-on current-project bypass and how
  * `subjects` extends acceptance to other Vercel projects. Declares a
  * `Bearer` {@link withAuthChallenges} challenge for {@link routeAuth}'s 401.
  */
-export function vercelOidc(opts: VerifyVercelOidcOptions = {}): AuthFn<Request> {
+export function vercelOidc(opts: VercelOidcOptions = {}): AuthFn<Request> {
+  const { subjects, ...verification } = opts;
+  const verifyOptions = {
+    ...verification,
+    subjects: subjects?.map((entry) => (typeof entry === "string" ? entry : entry.subject)),
+  };
   return withAuthChallenges(
     async (request) => {
       const token = extractBearerToken(request.headers.get("authorization"));
@@ -1101,9 +1123,21 @@ export function vercelOidc(opts: VerifyVercelOidcOptions = {}): AuthFn<Request> 
           : undefined);
       const result = await verifyVercelOidc(
         token,
-        currentVercelProject === undefined ? opts : { ...opts, currentVercelProject },
+        currentVercelProject === undefined
+          ? verifyOptions
+          : { ...verifyOptions, currentVercelProject },
       );
-      return result.ok ? result.sessionAuth : null;
+      if (!result.ok) return null;
+      const auth = result.sessionAuth;
+      const allowed =
+        (auth.principalType === "service" || auth.principalType === "runtime") &&
+        subjects?.some(
+          (entry) =>
+            typeof entry !== "string" &&
+            entry.allowToolStubs === true &&
+            areTokenClaimMatchersSatisfied({ sub: auth.subject }, { subjects: [entry.subject] }),
+        );
+      return allowed ? { ...auth, allowToolStubs: true } : auth;
     },
     [{ scheme: "Bearer" }],
   );

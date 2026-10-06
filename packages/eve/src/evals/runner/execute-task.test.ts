@@ -59,7 +59,9 @@ describe("executeTask", () => {
       if (path === "/eve/v1/session")
         return Response.json({ sessionId: "stubbed" }, { status: 202 });
       if (path === "/eve/v1/session/stubbed/stubs") {
-        return Response.json({ error: 'Ambiguous tool stubs for "list_tasks": a, b.' });
+        return Response.json({
+          error: 'Stubbed tool "list_tasks" failed during output processing.',
+        });
       }
       return await server.fetch(request, init);
     });
@@ -77,7 +79,7 @@ describe("executeTask", () => {
         turn.expectOk();
       }),
     });
-    expect(outcome.error).toContain('Ambiguous tool stubs for "list_tasks": a, b.');
+    expect(outcome.error).toContain('Stubbed tool "list_tasks" failed during output processing.');
   });
 
   it("creates accepted sessions without consuming events and reuses them for sends", async () => {

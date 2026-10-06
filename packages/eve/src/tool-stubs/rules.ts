@@ -22,7 +22,7 @@ export function parseToolStubs(value: unknown): readonly ToolStub[] {
       throw new Error("Each tool stub needs a unique id and a tool name.");
     }
     ids.add(rule.id);
-    if (rule.tool === "connection_execute" || rule.tool === "connection_search") {
+    if (["connection_execute", "connection_search"].includes(rule.tool.split("/").at(-1)!)) {
       throw new Error(
         "Stub connection operations by their qualified connection__tool name; connection discovery and validation remain live.",
       );
@@ -81,7 +81,7 @@ export class StubPlayback {
         error: `Persistent tool "${call.tool}" requires an unconditional stub.`,
       });
     }
-    const matching = candidates.filter((rule) =>
+    const rule = candidates.find((rule) =>
       rule.constraints.every(
         ({ property, validator }) =>
           isObject(call.input) &&
@@ -89,13 +89,6 @@ export class StubPlayback {
           validator.validate(call.input[property]).valid,
       ),
     );
-    if (matching.length > 1) {
-      return this.record(call, {
-        kind: "error",
-        error: `Ambiguous tool stubs for "${call.tool}": ${matching.map((rule) => rule.id).join(", ")}.`,
-      });
-    }
-    const rule = matching[0];
     if (rule === undefined) return this.record(call, { kind: "real" });
     const responses = rule.responses ?? [rule.response!];
     const position = Math.min(this.positions.get(rule.id) ?? 0, responses.length - 1);

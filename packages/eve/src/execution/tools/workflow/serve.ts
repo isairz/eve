@@ -1,3 +1,4 @@
+import { stubToolPath } from "#tool-stubs/target.js";
 import type { SessionContext } from "#context/session-context.js";
 import { callToolStubStep } from "#execution/tool-stubs/steps.js";
 import type { AgentSessionContext } from "#execution/agent-sessions/context.js";
@@ -378,8 +379,9 @@ async function executeServeBody(
   let outcome: WorkflowToolRunOutcome;
   try {
     const scope = input.agentContext.toolStubs;
+    const tool = stubToolPath(scope, input.toolName);
     const serve =
-      scope !== undefined && scope.rules.some((rule) => rule.tool === input.toolName)
+      scope !== undefined && scope.rules.some((rule) => rule.tool === tool)
         ? serveStub
         : resolveWorkflowEntryPoint<ServeEntryPoint>(input);
     const output = await serve(() => calls.receive(), ctx);
@@ -448,7 +450,7 @@ async function serveStub(
     const result = await callToolStubStep(scope, {
       callId: `${ctx.session.id}:${ctx.session.turn.id}:${call.callId}`,
       input: call.input,
-      tool: ctx.toolName,
+      tool: stubToolPath(scope, ctx.toolName),
       persistent: true,
     });
     if (result.kind !== "stub")

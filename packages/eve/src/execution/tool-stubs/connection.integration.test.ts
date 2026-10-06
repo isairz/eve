@@ -16,14 +16,14 @@ import type { ConnectionClient } from "#shared/connection-types.js";
 import type { ToolContext } from "#tools/definition.js";
 
 describe("connection operation stubs", () => {
-  it("validates discovered input before replacing a qualified operation and leaves unmatched calls live", async () => {
+  it("validates input before replacing a child-scoped connection operation and leaves unmatched calls live", async () => {
     let liveCalls = 0;
     const runtime = await createTestRuntime();
     await runtime.run(async () => {
       const rules: readonly ToolStub[] = [
         {
           id: "open",
-          tool: "linear__list_issues",
+          tool: "researcher/linear__list_issues",
           match: { status: { const: "open" } },
           response: { issues: ["milk"] },
         },
@@ -76,7 +76,12 @@ describe("connection operation stubs", () => {
           auth: { current: null, initiator: null },
           turn: { id: "turn-0", sequence: 0 },
         });
-        context.set(ToolStubsKey, { token, rules, rootSessionId: run.runId });
+        context.set(ToolStubsKey, {
+          token,
+          rules,
+          rootSessionId: run.runId,
+          agentPath: "researcher",
+        });
         context.set(ConnectionRegistryKey, {
           dispose: async () => {},
           getClient: () => client,

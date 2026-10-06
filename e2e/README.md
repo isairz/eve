@@ -69,7 +69,7 @@ runtime stress fixtures may use an authored deterministic model instead.
 
 Use `t.session({ stubs })` for data that is incidental to the behavior under
 test. The [subagent approval](fixtures/agent-subagents-hitl/evals/hitl.eval.ts)
-case supplies its stock quote as a plain TypeScript stub while approval,
+case supplies its stock quote through a plain TypeScript `stock-price/get_stock_price` stub while approval,
 child execution, and input hooks remain real. Keep real executors when their
 results and input handling are part of the contract, as in the chained lookup
 and stream-resume evals.

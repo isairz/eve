@@ -255,7 +255,19 @@ async function startLocalSession(
     nodeId: action.nodeId,
   });
   await contextStorage.run(new ContextContainer({ localDevRequest: context.localDevRequest }), () =>
-    childRuntime.createSession({ ...runInput, toolStubs: context.toolStubs }),
+    childRuntime.createSession({
+      ...runInput,
+      toolStubs:
+        context.toolStubs === undefined
+          ? undefined
+          : {
+              ...context.toolStubs,
+              agentPath:
+                context.toolStubs.agentPath === undefined
+                  ? action.name
+                  : `${context.toolStubs.agentPath}/${action.name}`,
+            },
+    }),
   );
   const owner = await waitForCommandHookOwner(sessionInboxHookToken(childContinuationToken));
   return { kind: "local", name: action.name, nodeId: action.nodeId, sessionId: owner.runId };
