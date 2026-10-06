@@ -164,7 +164,10 @@ export function routeDeliverPayload(input: {
       routes,
     }): RoutedChildDelivery => {
       const responseIds = new Set(parentRequestIds);
-      const retireRequestIds = new Set(responseIds);
+      // The child decides an approval: its response policy can refuse the responder, which
+      // leaves the approval open. Its route retires when the child's `approval.settled` arrives.
+      const decided = (requestId: string) => entries.get(requestId)?.kind !== "tool-approval";
+      const retireRequestIds = new Set([...responseIds].filter(decided));
 
       // A fully-answered approval batch retires its sibling requests
       // too, so a late free-form answer cannot route through a stale
@@ -174,7 +177,9 @@ export function routeDeliverPayload(input: {
           route.batch !== undefined &&
           batchResolves({ batch: route.batch, childContinuationToken, entries, responseIds })
         ) {
-          for (const requestId of route.batch.requestIds) retireRequestIds.add(requestId);
+          for (const requestId of route.batch.requestIds) {
+            if (decided(requestId)) retireRequestIds.add(requestId);
+          }
         }
       }
 

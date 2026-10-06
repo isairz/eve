@@ -181,6 +181,59 @@ describe("proxied stream hooks", () => {
     ]);
   });
 
+  it("keeps a relayed approval answerable until the child settles it", async () => {
+    const f = fixture();
+    const approval = {
+      action: { callId: "deploy-1", input: {}, kind: "tool-call" as const, toolName: "deploy" },
+      kind: "tool-approval" as const,
+      options: [
+        { id: "approve", label: "Approve" },
+        { id: "cancel", label: "Cancel" },
+      ],
+      prompt: "Approve deploy?",
+      requestId: "approval-1",
+    };
+    const relayed = await emitProxiedSubagentEvent({
+      ...f,
+      hookPayload: { ...f.hookPayload, event: { ...f.hookPayload.event, requests: [approval] } },
+    });
+    const parked = relayed.sessionState.snapshot.session;
+    const answer = { payload: { message: "approve" }, resolveMessage: true };
+
+    // A forwarded answer leaves the route: the child's response policy may refuse it.
+    expect(
+      routeDeliverPayload({ ...answer, state: parked.state }).forChildren[0]?.resolved.resolutions,
+    ).toEqual([]);
+
+    const settled = await emitProxiedSubagentEvent({
+      ...f,
+      durableSession: parked,
+      hookPayload: {
+        callId: "child-call",
+        childSessionId: "child-session",
+        event: {
+          data: {
+            outcome: "approved",
+            requestId: "approval-1",
+            responderPrincipalId: "alice",
+            sequence: 7,
+            stepIndex: 2,
+            turnId: "child-turn",
+          },
+          type: "approval.settled",
+        },
+        kind: "subagent-authorization-event",
+        subagentName: "child",
+      },
+    });
+    const after = settled.sessionState.snapshot.session.state;
+    expect(getProxyInputRequests(after).has("approval-1")).toBe(false);
+    expect(routeDeliverPayload({ ...answer, state: after })).toMatchObject({
+      forChildren: [],
+      forSelf: { message: "approve" },
+    });
+  });
+
   it("forwards a remote session's own input without asking on its channel", async () => {
     const f = fixture();
     f.ctx.set(SessionCallbackKey, {

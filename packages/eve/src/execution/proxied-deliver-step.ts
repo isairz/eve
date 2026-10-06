@@ -116,7 +116,8 @@ async function routeProxiedDeliver(
 
     for (const [childIndex, forChild] of routed.forChildren.entries()) {
       if (forChild.workflowAsk !== undefined || forChild.message !== undefined) {
-        for (const { requestId } of forChild.resolved.resolutions) resolvedRequests.add(requestId);
+        for (const { requestId } of forChild.payload.inputResponses)
+          resolvedRequests.add(requestId);
       }
       if (forChild.message !== undefined) {
         const { sequence, turnId } = forChild.resolved.event;
@@ -210,13 +211,19 @@ async function routeProxiedDeliver(
   }
   const view = sessionView(storedProjection(durableSession.state), durableSession.state);
   const resolvedEvents = [...routeAnswer(view, { children: answered }).events];
-  // Answers that leave requests pending, and nothing for the turn itself, keep
-  // the open turn held, so it parks again as after a partial approval answer.
+  // Answers that leave other requests pending, and nothing for the turn itself, keep the
+  // open turn held, so it parks again as after a partial approval answer. A forwarded approval
+  // stays open until its child settles it, but it no longer waits on the person.
+  const forwarded = new Set(
+    [...children.values()].flatMap((child) =>
+      child.payloads.flatMap((payload) => (payload.inputResponses ?? []).map((r) => r.requestId)),
+    ),
+  );
   if (
-    resolvedEvents.length > 0 &&
+    children.size > 0 &&
     parentPayloads.size === 0 &&
     parentAction === undefined &&
-    getProxyInputRequests(durableSession.state).size > 0
+    [...getProxyInputRequests(durableSession.state).keys()].some((id) => !forwarded.has(id))
   ) {
     resolvedEvents.push(...hold(view, { on: "input" }).events);
   }
