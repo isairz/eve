@@ -16,7 +16,6 @@ import type { JsonObject } from "#shared/json.js";
 import type { InstrumentationDecision } from "#shared/instrumentation-decision.js";
 import type { ForwardedTraceAssertion } from "#shared/forwarded-trace-policy.js";
 import type { ConversationContext } from "#shared/conversation-context.js";
-import type { RemoteAgentBinding } from "#eve-channel/support.js";
 import type { StubScope } from "#tool-stubs/types.js";
 
 export type { ContextAccessor } from "#context/key.js";
@@ -321,7 +320,7 @@ export interface SubagentInputRequestEvent {
  * `input.requested` handler and the parent's runtime loop.
  */
 export interface SubagentInputRequestHookPayload {
-  readonly remote?: RemoteAgentBinding & {
+  readonly remote?: import("#eve-channel/support.js").RemoteAgentBinding & {
     readonly sessionId: string;
   };
   /** Independent source when several requests share an answer destination. */
