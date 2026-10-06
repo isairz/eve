@@ -1,3 +1,4 @@
+import { observeToolOutput } from "#tool-stubs/execute.js";
 import type { ModelMessage, SystemModelMessage } from "ai";
 
 import { TASK_CANCEL_TOOL_NAME, TASK_WAIT_TOOL_NAME } from "#protocol/task-tools.js";
@@ -193,20 +194,26 @@ async function toResultBlock(
 ): Promise<TaskResultBlock> {
   const base = { taskId: record.id, tool: record.name };
   if (result.status === "failed") return { ...base, body: result.error, status: "failed" };
-  return { ...base, body: await projectOutput(result.output, definition), status: "completed" };
+  return {
+    ...base,
+    body: await projectOutput(record.name, result, definition),
+    status: "completed",
+  };
 }
 
 async function projectOutput(
-  output: unknown,
+  tool: string,
+  result: Extract<TaskResult, { status: "completed" }>,
   definition: HarnessToolDefinition | undefined,
 ): Promise<string> {
-  if (definition?.toModelOutput === undefined) return renderModelOutputText(output);
-  try {
-    return renderModelOutputText(await definition.toModelOutput(output));
-  } catch {
+  if (definition?.toModelOutput === undefined) return renderModelOutputText(result.output);
+  return await observeToolOutput(
+    tool,
+    result.calls ?? [],
+    async () => renderModelOutputText(await definition.toModelOutput!(result.output)),
     // A projection that throws must not wedge every later model step.
-    return renderModelOutputText(output);
-  }
+    () => renderModelOutputText(result.output),
+  );
 }
 
 /**

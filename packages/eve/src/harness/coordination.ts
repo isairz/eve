@@ -1,3 +1,4 @@
+import { observeToolOutput } from "#tool-stubs/execute.js";
 import type { ModelMessage } from "ai";
 
 import type {
@@ -273,11 +274,13 @@ async function projectToolResultOutput(
   ) {
     return toToolResultOutput(result);
   }
-  return normalizeToolModelOutput({
-    output: await definition.toModelOutput(result.output),
-    toolCallId: result.callId,
-    toolName: result.toolName,
-  });
+  return await observeToolOutput(result.toolName, [{ callId: result.callId }], async () =>
+    normalizeToolModelOutput({
+      output: await definition.toModelOutput!(result.output),
+      toolCallId: result.callId,
+      toolName: result.toolName,
+    }),
+  );
 }
 
 function toToolResultOutput(result: RuntimeActionResult): ToolResultPart["output"] {

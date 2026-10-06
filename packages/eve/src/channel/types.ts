@@ -16,6 +16,8 @@ import type { JsonObject } from "#shared/json.js";
 import type { InstrumentationDecision } from "#shared/instrumentation-decision.js";
 import type { ForwardedTraceAssertion } from "#shared/forwarded-trace-policy.js";
 import type { ConversationContext } from "#shared/conversation-context.js";
+import type { RemoteAgentBinding } from "#eve-channel/support.js";
+import type { StubScope } from "#tool-stubs/types.js";
 
 export type { ContextAccessor } from "#context/key.js";
 export type { ChannelInstrumentationProjection } from "#channel/instrumentation.js";
@@ -319,7 +321,7 @@ export interface SubagentInputRequestEvent {
  * `input.requested` handler and the parent's runtime loop.
  */
 export interface SubagentInputRequestHookPayload {
-  readonly remote?: import("#eve-channel/support.js").RemoteAgentBinding & {
+  readonly remote?: RemoteAgentBinding & {
     readonly sessionId: string;
   };
   /** Independent source when several requests share an answer destination. */
@@ -424,6 +426,12 @@ export interface SessionCapabilities {
  * subagent tool wrapper).
  */
 export interface RunInput {
+  /**
+   * @internal Authorized stub rules and playback routing supplied by the server.
+   * Local children share the root session's response sequence; remote agents do
+   * not receive this scope.
+   */
+  readonly toolStubs?: StubScope;
   readonly adapter: ChannelAdapter<any>;
   /**
    * Registered channel name for root sessions started from an authored

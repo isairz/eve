@@ -91,6 +91,9 @@ const CHECKPOINT_UPGRADES: Readonly<
   },
   // Lifecycle moved from emission/batch registries to the projection and TurnState.
   11: upgradeIdleLifecycle,
+  // Older readers must refuse sessions whose tool execution is replaced.
+  // Pre-stub checkpoints need no new state.
+  12: (checkpoint) => checkpoint,
 };
 
 /**

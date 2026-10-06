@@ -1,4 +1,5 @@
 import { asSchema } from "ai";
+import { observeToolOutput } from "#tool-stubs/execute.js";
 
 import {
   authorizationPendingModelText,
@@ -63,20 +64,26 @@ export async function toolCallModelOutput(
   output: unknown,
   toolCallId: string | undefined,
 ): Promise<ToolModelOutputValue> {
-  if (isAuthorizationPendingModelOutput(output)) {
-    return { type: "text", value: authorizationPendingModelText(output.connections) };
-  }
-  if (definition.toModelOutput !== undefined) {
-    return normalizeToolModelOutput({
-      output: await definition.toModelOutput(output),
-      toolCallId,
-      toolName: definition.name,
-    });
-  }
-  if (typeof output === "string") return { type: "text", value: output };
-  return normalizeToolModelOutput({
-    output: { type: "json", value: output ?? null },
-    toolCallId,
-    toolName: definition.name,
-  });
+  return await observeToolOutput(
+    definition.name,
+    toolCallId === undefined ? [] : [{ callId: toolCallId }],
+    async () => {
+      if (isAuthorizationPendingModelOutput(output)) {
+        return { type: "text", value: authorizationPendingModelText(output.connections) };
+      }
+      if (definition.toModelOutput !== undefined) {
+        return normalizeToolModelOutput({
+          output: await definition.toModelOutput(output),
+          toolCallId,
+          toolName: definition.name,
+        });
+      }
+      if (typeof output === "string") return { type: "text", value: output };
+      return normalizeToolModelOutput({
+        output: { type: "json", value: output ?? null },
+        toolCallId,
+        toolName: definition.name,
+      });
+    },
+  );
 }
