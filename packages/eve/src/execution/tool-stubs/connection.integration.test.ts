@@ -103,7 +103,7 @@ describe("connection operation stubs", () => {
           expect(liveCalls).toBe(0);
           await call("live", { status: "closed" });
           expect(liveCalls).toBe(1);
-          // Output conversion belongs to the enclosing connection_execute tool.
+          // connection_execute converts the operation's output before the model receives it.
           await recordToolStubFailure("connection_execute", "live");
           expect(await readStubFailure(run.runId)).toBeUndefined();
           const world = await getWorld();

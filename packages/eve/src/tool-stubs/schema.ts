@@ -58,7 +58,7 @@ const constraintSchema = new Validator(
           oneOf: schemaList,
           not: schema,
           if: schema,
-          // JSON Schema keyword, not a Promise-like method.
+          // JSON Schema uses `then` as a keyword.
           // oxlint-disable-next-line unicorn/no-thenable
           then: schema,
           else: schema,

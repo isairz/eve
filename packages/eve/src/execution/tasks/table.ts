@@ -504,7 +504,7 @@ function isTaskRunCommand(value: unknown): value is TaskRunCommand {
 
 function isTaskResult(value: unknown): value is TaskResult {
   if (!isObject(value)) return false;
-  // Results written before call provenance was retained remain readable.
+  // Older saved results do not include call IDs.
   if (
     value.calls !== undefined &&
     (!Array.isArray(value.calls) || !Array.from(value.calls as unknown[]).every(isTaskCall))

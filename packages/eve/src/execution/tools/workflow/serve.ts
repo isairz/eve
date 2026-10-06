@@ -442,7 +442,8 @@ async function serveStub(
   receive: WorkflowServeReceive<JsonValue>,
   ctx: ServeContext,
 ): Promise<JsonValue> {
-  // A reply settles all received calls, so receive only after replying to its predecessor.
+  // reply() answers every received call. Reply before receiving the next call
+  // so each call consumes its own stub response.
   while (true) {
     const call = await receive();
     if (call.abortSignal.aborted) continue;

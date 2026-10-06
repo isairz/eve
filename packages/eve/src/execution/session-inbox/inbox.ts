@@ -13,7 +13,7 @@ export interface AuthorizationCallbackPayload {
   readonly payloads: DeliverPayload[];
 }
 
-/** Internal failure from a session-owned service; never accepted from channel request JSON. */
+/** The runtime sends this command; channel request bodies cannot supply it. */
 export interface SessionFailurePayload {
   readonly kind: "session-failure";
   readonly error: string;
