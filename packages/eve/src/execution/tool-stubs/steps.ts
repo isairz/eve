@@ -1,3 +1,4 @@
+import { resumeSessionInbox } from "#execution/session-inbox/resume.js";
 import { getWritable } from "#compiled/@workflow/core/index.js";
 import { getRun, resumeHook } from "#internal/workflow/runtime.js";
 import type { StubRequest } from "#execution/tool-stubs/playback.js";
@@ -81,4 +82,13 @@ export async function readStubFailure(sessionId: string): Promise<string | undef
     await reader.cancel();
     reader.releaseLock();
   }
+}
+
+/** Uses the stable address so failure reaches the owner after a deployment handoff too. */
+export async function failStubSessionStep(sessionId: string): Promise<void> {
+  "use step";
+  await resumeSessionInbox(
+    { sessionId },
+    { kind: "session-failure", error: "Tool stub playback failed." },
+  );
 }

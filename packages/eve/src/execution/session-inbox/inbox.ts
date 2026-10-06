@@ -13,7 +13,14 @@ export interface AuthorizationCallbackPayload {
   readonly payloads: DeliverPayload[];
 }
 
+/** Internal failure from a session-owned service; never accepted from channel request JSON. */
+export interface SessionFailurePayload {
+  readonly kind: "session-failure";
+  readonly error: string;
+}
+
 export type SessionInboxPayload =
+  | SessionFailurePayload
   | HookPayload
   | SessionCommand
   | WorkflowToolRunMessage
@@ -66,7 +73,12 @@ export interface SessionInboxHandle extends SessionInbox {
 }
 
 export function isInterrupt(value: SessionInboxPayload): boolean {
-  return value.kind === "cancel" || value.kind === "reset" || value.kind === "session-timeout";
+  return (
+    value.kind === "cancel" ||
+    value.kind === "reset" ||
+    value.kind === "session-timeout" ||
+    value.kind === "session-failure"
+  );
 }
 
 /**

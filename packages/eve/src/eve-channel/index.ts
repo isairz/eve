@@ -161,6 +161,7 @@ export function eveChannel(input: EveChannelInput): EveChannel {
       POST(EVE_SESSION_ROUTE_PATH, async (req, args) => {
         const authResult = await routeAuth(req, input.auth);
         if (authResult instanceof Response) return authResult;
+        const auth = sessionAuthFromResult(authResult);
 
         const payload = await parseOptionalJsonRequest(req);
         if (payload instanceof Response) return payload;
@@ -175,7 +176,7 @@ export function eveChannel(input: EveChannelInput): EveChannel {
 
         const forwarded = await resolveForwardedPrincipal({
           trustedForwarders: input.trustedForwarders,
-          forwarder: sessionAuthFromResult(authResult),
+          forwarder: auth,
           payload,
         });
         if (forwarded instanceof Response) return forwarded;
@@ -202,7 +203,7 @@ export function eveChannel(input: EveChannelInput): EveChannel {
             let accepted = forwarded.accepted;
             if (!accepted && input.trustedForwarders !== undefined) {
               try {
-                accepted = await input.trustedForwarders(authResult, {});
+                accepted = await input.trustedForwarders(auth, {});
               } catch (error) {
                 const errorId = logError(log, "trustedForwarders handler failed", error, {
                   forwarder: authResult.principalId,
@@ -332,7 +333,7 @@ export function eveChannel(input: EveChannelInput): EveChannel {
         let handle: Awaited<ReturnType<typeof createSession>>;
         try {
           handle = await createSession({
-            audienceAuth: authResult,
+            audienceAuth: auth,
             toolStubs:
               body.stubs === undefined
                 ? undefined

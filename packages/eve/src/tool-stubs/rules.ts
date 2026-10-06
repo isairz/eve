@@ -59,10 +59,15 @@ export class StubPlayback {
   constructor(rules: readonly ToolStub[]) {
     this.rules = rules.map((rule) => ({
       ...rule,
-      constraints: Object.entries(rule.match ?? {}).map(([property, schema]) => ({
-        property,
-        validator: compileStubConstraint(schema),
-      })),
+      constraints: Object.entries(rule.match ?? {}).map(([property, schema]) => {
+        try {
+          return { property, validator: compileStubConstraint(schema) };
+        } catch (cause) {
+          throw new Error(`Could not compile matcher "${property}" in tool stub "${rule.id}".`, {
+            cause,
+          });
+        }
+      }),
     }));
   }
 

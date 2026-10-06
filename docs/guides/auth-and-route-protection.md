@@ -300,6 +300,29 @@ Use the principal on `auth.current` (or `auth.initiator`) to scope tools, resolv
 
 Route auth does not enforce session ownership. If multiple users or tenants can reach the same route, you must implement the per-user, per-tenant, or per-session authorization your application requires.
 
+## Tool replacement permission
+
+Creating a [stubbed eval session](../evals/tool-stubs) requires an explicit `allowToolStubs: true` in the verified route authentication result. The target's server configuration grants permission; request JSON cannot. With `vercelOidc`, put the grant on a `subjects` entry as shown above. Any matching entry with the grant permits replacement; other entries do not revoke it. Implicit current-project acceptance and user principals do not inherit project grants.
+
+Custom authenticators return the same grant after verifying their caller. For example, this alternative channel permits stubs only in local development:
+
+```ts
+import { localDev } from "eve/channels/auth";
+import { eveChannel } from "eve/channels/eve";
+
+const authenticate = localDev();
+export default eveChannel({
+  auth: async (request) => {
+    const caller = await authenticate(request);
+    return caller ? { ...caller, allowToolStubs: true } : null;
+  },
+});
+```
+
+The channel checks the grant before forwarded-principal handling or `onMessage` projection. It removes the grant before using the identity for forwarding, audience classification, or session persistence. This is an authentication-result permission, not a session attribute.
+
+Later messages, approvals, controls, and result reads use normal channel authentication. There is no additional creator-only rule or replacement-permission recheck. Anyone your channel admits to an existing session can use its configured stubs; apply the same application-specific session-access policy you need for ordinary sessions.
+
 ## Tool and connection auth
 
 Tool and connection auth is how your agent reaches an external service that wants an interactive sign-in, like an OAuth MCP server. Connections declare `auth` on the connection definition. Tools should resolve providers inline with `ctx.getToken(provider)` and call `ctx.requireAuth(provider)` only when a downstream service rejects a token; eve drives the sign-in, caches the token per step, and re-runs the call once the caller authorizes.

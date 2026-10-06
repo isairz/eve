@@ -68,7 +68,10 @@ export type TaskOutcome =
  * An outcome the model receives, one per reply or run end, however many calls
  * it settled. Cancelled work never reports back.
  */
-export type TaskResult = Exclude<TaskOutcome, { readonly status: "cancelled" }>;
+export type TaskResult = Exclude<TaskOutcome, { readonly status: "cancelled" }> & {
+  /** Original calls, retained for output processing even when delivered in a later turn. */
+  readonly calls?: readonly TaskCall[];
+};
 
 export interface TaskRecord {
   readonly id: string;
@@ -306,7 +309,10 @@ export function settleTaskCalls(
   const next = updateTask(table, input.taskId, (current) => ({
     ...current,
     calls: current.calls.filter((call) => !settling.has(call.callId)),
-    results: outcome.status === "cancelled" ? current.results : [...current.results, outcome],
+    results:
+      outcome.status === "cancelled"
+        ? current.results
+        : [...current.results, { ...outcome, calls: settled }],
   }));
   return { settled, table: next };
 }
@@ -495,6 +501,12 @@ function isTaskRunCommand(value: unknown): value is TaskRunCommand {
 
 function isTaskResult(value: unknown): value is TaskResult {
   if (!isObject(value)) return false;
+  // Results written before call provenance was retained remain readable.
+  if (
+    value.calls !== undefined &&
+    (!Array.isArray(value.calls) || !Array.from(value.calls as unknown[]).every(isTaskCall))
+  )
+    return false;
   if (value.status === "completed") return "output" in value;
   return value.status === "failed" && typeof value.error === "string";
 }
