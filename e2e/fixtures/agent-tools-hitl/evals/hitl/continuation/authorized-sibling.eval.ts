@@ -15,13 +15,16 @@ export default defineEval({
   timeoutMs: 60_000,
   async test(t) {
     // Given A awaits approval and a separate authorized change must be followed by a read.
+    t.log("Starting change A and waiting for its approval request.");
     const first = await t.send("Prepare change A.", scriptedSession);
     const approvalA = requestFrom(first, "change-a");
     const session = first.session;
+    t.log(`Starting the separate authorized change in ${session.sessionId}.`);
     const second = await session.send("Prepare an authorized change, then read the draft status.");
     const current = requestFrom(second, "authorized-change");
 
     // When the authorized responder approves the separate change.
+    t.log(`Approving ${current.requestId} and waiting for acceptance.`);
     const live = await session.startRespond([
       { requestId: current.requestId, optionId: "approve" },
     ]);

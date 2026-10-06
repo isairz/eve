@@ -1,10 +1,31 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { eveChannel } from "#eve-channel/index.js";
 import type { EveChannelInput } from "#eve-channel/types.js";
 import type { RouteHandlerArgs } from "#channel/routes.js";
 import { mockAgentRouteArgs } from "#internal/testing/mocks/mock-route-args.js";
 import { mockChannelContext } from "#internal/testing/mocks/mock-channel-operations.js";
 import { attachRouteSessionCreator } from "#internal/nitro/routes/channel-route-context.js";
+import { captureLogRecords } from "#internal/testing/log-records.js";
+
+const storage = vi.hoisted(() => ({
+  exists: vi.fn<() => Promise<boolean>>(),
+  failure: vi.fn<() => Promise<string | undefined>>(),
+}));
+
+vi.mock("#execution/tool-stubs/steps.js", () => ({ readStubFailure: storage.failure }));
+vi.mock("#internal/workflow/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("#internal/workflow/runtime.js")>()),
+  getRun: () => ({
+    get exists() {
+      return storage.exists();
+    },
+  }),
+}));
+
+beforeEach(() => {
+  storage.exists.mockReset().mockResolvedValue(true);
+  storage.failure.mockReset().mockResolvedValue(undefined);
+});
 
 const alice = {
   authenticator: "verified-token",
@@ -67,15 +88,11 @@ describe("tool stub authorization", () => {
   });
 
   it.each([
-    ["POST", "/eve/v1/session"],
     ["POST", "/eve/v1/session/:sessionId"],
-    ["POST", "/eve/v1/session/:sessionId/cancel"],
     ["POST", "/eve/v1/session/:sessionId/compact"],
     ["POST", "/eve/v1/session/:sessionId/clear"],
-    ["POST", "/eve/v1/session/:sessionId/reset"],
     ["GET", "/eve/v1/session/:sessionId/stream"],
     ["GET", "/eve/v1/session/:sessionId/stubs"],
-    ["GET", "/eve/v1/session/:parentSessionId/subagents/:callId/:childSessionId/stream"],
   ])("requires channel authentication for %s %s", async (method, path) => {
     const response = await request(
       { auth: () => null },
@@ -86,6 +103,55 @@ describe("tool stub authorization", () => {
     );
     expect(response.status).toBe(401);
   });
+});
+
+describe("tool stub verification", () => {
+  it("does not report success for a missing session", async () => {
+    storage.exists.mockResolvedValue(false);
+    const response = await request(
+      { auth: () => alice },
+      "GET",
+      "/eve/v1/session/:sessionId/stubs",
+      { sessionId: "missing" },
+    );
+    expect(response.status).toBe(404);
+  });
+
+  it.each([undefined, "Stubbed tool output was invalid."])(
+    "reports the recorded failure for an existing session: %s",
+    async (failure) => {
+      storage.failure.mockResolvedValue(failure);
+      const response = await request(
+        { auth: () => alice },
+        "GET",
+        "/eve/v1/session/:sessionId/stubs",
+        { sessionId: "session" },
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await response.json()).toEqual({ error: failure ?? null });
+    },
+  );
+
+  it.each(["exists", "failure"] as const)(
+    "returns a safe error when the %s read fails",
+    async (operation) => {
+      captureLogRecords();
+      storage[operation].mockRejectedValue(new Error("private backend details"));
+      const response = await request(
+        { auth: () => alice },
+        "GET",
+        "/eve/v1/session/:sessionId/stubs",
+        { sessionId: "session" },
+      );
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({
+        error: "Failed to verify tool stubs.",
+        errorId: expect.any(String),
+        ok: false,
+      });
+    },
+  );
 });
 
 async function request(

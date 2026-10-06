@@ -61,7 +61,7 @@ export default defineEval({
 });
 ```
 
-Use your agent's actual tool names and response shapes. The client accepts the same option on `client.sessions.create({ stubs })`.
+Use your agent's actual tool names and response shapes. The client accepts the same option on `client.sessions.create({ stubs })` or `client.sessions.create({ message, stubs })`.
 
 These responses describe a sequence, not a simulated task database. The second `list_tasks` call returns two tasks even if `complete_task` was never called. The completion and order assertions check that the agent actually requested the write; testing a real database update requires the real tool.
 
@@ -175,7 +175,9 @@ Permission is checked at session creation before identity projection. Later mess
 
 ## Supported tools and subagents
 
-Stubs replace execution of existing ordinary, dynamic, and workflow tools. They retain the real tool's input schema, approvals, output processing, and normal events. A stub does not register a new tool or make it visible to the model.
+Stubs replace execution of existing ordinary, dynamic, and workflow tools. They retain the real tool's input schema, approvals, and output processing. A stub does not register a new tool or make it visible to the model.
+
+Ordinary tools with configured stub rules can emit an extra `action.partial` containing the final response. This also applies when no rule matches and the real tool returns a non-streaming result. The final `action.result` remains correct, and real streaming still delivers progress. Use `action.result` for final-result assertions. Removing the extra event is tracked in [AX-5164](https://linear.app/vercel/issue/AX-5164).
 
 ### Subagents
 

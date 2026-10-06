@@ -1,4 +1,5 @@
 import { readStubFailure } from "#execution/tool-stubs/steps.js";
+import { getRun } from "#internal/workflow/runtime.js";
 import { handleExpiredLegacyAuthorization } from "#execution/legacy-session/authorization.js";
 import { EVE_ROUTE_PREFIX } from "#protocol/routes.js";
 import type { SessionAuthContext, SessionParent, SessionTraceContext } from "#channel/types.js";
@@ -606,10 +607,23 @@ export function eveChannel(input: EveChannelInput): EveChannel {
         if (authResult instanceof Response) return authResult;
         const sessionId = requireSessionId(params);
         if (sessionId instanceof Response) return sessionId;
-        return Response.json(
-          { error: (await readStubFailure(sessionId)) ?? null },
-          { headers: { "cache-control": "no-store" } },
-        );
+        try {
+          if (!(await getRun(sessionId).exists)) {
+            return Response.json({ error: "Session not found.", ok: false }, { status: 404 });
+          }
+          return Response.json(
+            { error: (await readStubFailure(sessionId)) ?? null },
+            { headers: { "cache-control": "no-store" } },
+          );
+        } catch (error) {
+          const errorId = logError(log, "tool-stub verification request failed", error, {
+            sessionId,
+          });
+          return Response.json(
+            { error: "Failed to verify tool stubs.", errorId, ok: false },
+            { status: 500 },
+          );
+        }
       }),
 
       GET(EVE_SESSION_STREAM_ROUTE_PATTERN, async (req, { attachSession, params }) => {
