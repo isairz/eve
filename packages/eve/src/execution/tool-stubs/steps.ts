@@ -35,7 +35,10 @@ export async function publishStubFailureStep(error: string): Promise<void> {
   }
 }
 
-/** Also called inside ordinary tool steps; Workflow bodies use its step boundary. */
+/**
+ * Ordinary tools call this inside their existing step.
+ * Workflow tools use this function as a separate step.
+ */
 export async function callToolStubStep(scope: StubScope, call: StubCall): Promise<StubResult> {
   "use step";
   return await requestStub(scope, { kind: "call", call });
@@ -84,7 +87,7 @@ export async function readStubFailure(sessionId: string): Promise<string | undef
   }
 }
 
-/** Uses the stable address so failure reaches the owner after a deployment handoff too. */
+/** Use the session's inbox so failures reach it after a newer deployment takes over. */
 export async function failStubSessionStep(sessionId: string): Promise<void> {
   "use step";
   await resumeSessionInbox(

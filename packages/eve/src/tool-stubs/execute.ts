@@ -6,7 +6,7 @@ import type { StubResult } from "#tool-stubs/types.js";
 import type { ToolExecuteOptions } from "#tools/definition.js";
 import { isAsyncIterable } from "#shared/async-iterable.js";
 
-/** An override changes only the executor; validation and approvals precede this boundary. */
+/** Tool inputs and approvals have already been checked before a stub can replace execution. */
 export function executeWithToolStub(
   tool: string,
   input: unknown,
@@ -45,7 +45,7 @@ async function* executeStubbedTool(
   else yield output;
 }
 
-/** Connection operations already run behind their nested validation and approval boundary. */
+/** The connection wrapper checks operation inputs and approvals before requesting a stub. */
 export async function connectionToolStub(
   tool: string,
   input: unknown,
@@ -64,7 +64,7 @@ export async function connectionToolStub(
   });
 }
 
-/** Keep output-adapter failures fatal to the eval even if the model recovers. */
+/** Record errors converting stub responses so eval verification can detect them. */
 export async function recordToolStubFailure(
   tool: string,
   callId: string | undefined,
@@ -82,7 +82,7 @@ export async function recordToolStubFailure(
     );
 }
 
-/** Record before recovery: a usable model response must not hide a broken fixture. */
+/** Record stub failures even when the caller recovers with fallback output. */
 export async function observeToolOutput<T>(
   tool: string,
   calls: readonly { readonly callId: string; readonly turnId?: string }[],

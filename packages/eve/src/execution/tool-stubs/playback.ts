@@ -12,7 +12,7 @@ export type StubRequest =
   | { readonly kind: "call"; readonly call: StubCall }
   | { readonly kind: "failure"; readonly callId: string; readonly error: string };
 
-/** The original workflow keeps this hook even while a successor owns its turns. */
+/** The original workflow serves stub requests even if a newer deployment takes over the session. */
 export async function withStubPlayback<T>(
   context: Record<string, unknown>,
   sessionId: string,
@@ -39,7 +39,7 @@ export async function withStubPlayback<T>(
           ? playback.fail(request.callId, request.error)
           : playback.call(request.call);
       if (result.kind === "error" && !failed) {
-        // Step completion makes the failure durable before the separate response stream.
+        // Save the failure before replying so eval verification cannot miss it.
         await publishStubFailureStep(result.error);
         failed = true;
       }
@@ -55,8 +55,7 @@ export async function withStubPlayback<T>(
     const running = run();
     const serving = serve().catch(async () => {
       await publishStubFailureStep("Tool stub playback failed.");
-      // Fail the current owner through its inbox, aborting its active turn before
-      // finalization. The owner may have moved to another workflow deployment.
+      // Stop the active turn even if a newer deployment has taken over the session.
       await failStubSessionStep(sessionId);
       return await running;
     });
