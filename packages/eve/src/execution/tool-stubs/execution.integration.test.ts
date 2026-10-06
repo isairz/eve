@@ -207,10 +207,14 @@ describe("tool replacement through the session runtime", () => {
               command: { kind: "send", payload: { message: "Hello" } },
             }),
           ).toMatchObject({ status: "session_not_active" });
+          if (handoff) {
+            await expect(run.returnValue).resolves.toEqual({ output: "" });
+          } else {
+            await expect(run.returnValue).rejects.toThrow("Agent workflow failed.");
+          }
         } finally {
           write?.mockRestore();
           stream.dispose();
-          await run.cancel();
         }
       });
     },
