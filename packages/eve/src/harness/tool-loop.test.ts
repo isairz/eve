@@ -57,7 +57,8 @@ import {
   modelFacingAuthorizationOutput,
   requestAuthorization,
 } from "#harness/authorization.js";
-import { sessionView } from "#harness/session-machine/commit.js";
+import { applyTransition, sessionView } from "#harness/session-machine/commit.js";
+import { requireSignIn } from "#harness/hitl/approvals.js";
 import { createAuthorizationRequiredEvent } from "#protocol/message.js";
 import { ownOpenRequestIds } from "#harness/session-machine/transitions.js";
 import { runtimeWait, storedProjection } from "#harness/session-machine/view.js";
@@ -1705,8 +1706,9 @@ describe("createToolLoopHarness", () => {
     expect(runtimeWait(parked.session.state)?.tasks).toEqual([
       expect.objectContaining({ callId: "delegate-1", kind: "workflow-task" }),
     ]);
-    expect(openRequestIds(parked.session).size > 0).toBe(true);
-    expect(events.filter((event) => event.type === "input.requested")).toHaveLength(1);
+    // The approval can't settle before the workflow task finishes, so asking waits until then.
+    expect(parkedSteps(parked.session).some((step) => step.requests.length > 0)).toBe(true);
+    expect(events.filter((event) => event.type === "input.requested")).toHaveLength(0);
     expect(
       parked.session.history.flatMap((message) =>
         Array.isArray(message.content)
@@ -1735,6 +1737,7 @@ describe("createToolLoopHarness", () => {
     expect(JSON.stringify(parkedSteps(reparked.session)[0]?.messages)).toContain("delegated-done");
     expect(JSON.stringify(reparked.session.history)).not.toContain("delegated-done");
     expect(reparked.held).toEqual({ kind: "request" });
+    expect(events.filter((event) => event.type === "input.requested")).toHaveLength(1);
     expect(events.at(-1)?.type).toBe("turn.waiting");
   });
 
@@ -7940,6 +7943,76 @@ describe("createToolLoopHarness", () => {
     ]);
   });
 
+  // Alice's turn waits on two approvals and on Bob signing in to statuspage.
+  async function parkedOnApprovalsAndSignIn(): Promise<HarnessSession> {
+    const approval = (requestId: string, callId: string) => ({
+      action: { callId, input: {}, kind: "tool-call" as const, toolName: "guarded_echo" },
+      allowFreeform: false,
+      display: "confirmation" as const,
+      kind: "tool-approval" as const,
+      options: [
+        { id: "approve", label: "Approve" },
+        { id: "cancel", label: "Cancel" },
+      ],
+      prompt: "Approve tool call: guarded_echo",
+      requestId,
+    });
+    const parked = parkedOnApproval({
+      requests: [approval("approval-1", "call-1"), approval("approval-2", "call-2")],
+      responseMessages: [],
+      session: createTestSession(),
+    });
+    const signIn = requireSignIn(sessionView(storedProjection(parked.state), parked.state), {
+      challenges: [
+        {
+          attemptId: "attempt-statuspage",
+          challenge: { url: "https://idp.example/authorize" },
+          hookUrl: "https://app.example/eve/v1/connections/statuspage/callback",
+          name: "statuspage",
+        },
+      ],
+    });
+    return withPublished(await applyTransition(parked, signIn, async () => {}), signIn.events);
+  }
+
+  it("answers a typed approval without withdrawing the turn's pending sign-ins", async () => {
+    const session = await parkedOnApprovalsAndSignIn();
+    const { emit, events } = createEventCollector();
+
+    const result = await createToolLoopHarness(createTestConfig(emit))(session, {
+      message: "approve",
+    });
+
+    expect(events.filter((event) => event.type === "authorization.completed")).toEqual([]);
+    const view = sessionView(storedProjection(result.session.state), result.session.state);
+    expect(view.signIns.map((challenge) => challenge.name)).toEqual(["statuspage"]);
+    // The answer to the first approval waits for the second, as a press would.
+    expect(view.turn.queued?.inputResponses).toEqual([
+      { optionId: "approve", requestId: "approval-1" },
+    ]);
+  });
+
+  it("withdraws the turn's pending sign-ins when a new message steers it", async () => {
+    setupMockAgent({
+      finishReason: "stop",
+      response: { messages: [{ content: "Sure.", role: "assistant" }] },
+      text: "Sure.",
+      toolCalls: [],
+      toolResults: [],
+    });
+    const { emit, events } = createEventCollector();
+
+    await createToolLoopHarness(createTestConfig(emit))(await parkedOnApprovalsAndSignIn(), {
+      message: "Actually, can you check the weather first?",
+    });
+
+    expect(
+      events
+        .filter((event) => event.type === "authorization.completed")
+        .map((event) => [event.data.name, event.data.outcome]),
+    ).toEqual([["statuspage", "declined"]]);
+  });
+
   it("emits compaction.requested and compaction.completed when compaction triggers", async () => {
     vi.mocked(shouldCompact).mockReturnValue(true);
     vi.mocked(compactMessages).mockResolvedValue([
@@ -8216,6 +8289,61 @@ describe("createToolLoopHarness", () => {
       { content: "old reply", role: "assistant" },
     ]);
     expect(ToolLoopAgent).not.toHaveBeenCalled();
+    expect(getCompatibilityEventTypes(events)).toEqual([
+      "compaction.requested",
+      "compaction.completed",
+      "session.waiting",
+    ]);
+  });
+
+  it("resolves a step-scoped dynamic model before manual compaction", async () => {
+    const compactedHistory: HarnessModelMessage[] = [
+      createFrameworkUserMessage("context.compaction", "Summary of our conversation so far:"),
+      { content: "summary", role: "assistant" },
+    ];
+    vi.mocked(compactMessages).mockResolvedValue(compactedHistory);
+
+    const selectedModel = new MockLanguageModelV3({
+      modelId: "gpt-5",
+      provider: "openai.chat",
+    });
+    const dispatchDynamicModelEvent: NonNullable<
+      ToolLoopHarnessConfig["dispatchDynamicModelEvent"]
+    > = vi.fn(async ({ ctx, event }) => {
+      expect(event.type).toBe("step.started");
+      ctx.setVirtualContext(LiveStepDynamicModelSelectionKey, {
+        model: selectedModel,
+        reference: {
+          contextWindowTokens: 200_000,
+          id: "openai/gpt-5",
+        },
+      });
+    });
+    const { emit, events } = createEventCollector();
+    const runStep = createToolLoopHarness(
+      createTestConfig(emit, {
+        compactOnly: true,
+        dispatchDynamicModelEvent,
+      }),
+    );
+    const session = createTestSession({
+      agent: {
+        dynamicModel: true,
+        system: "You are a test assistant.",
+        tools: [{ description: "Adds numbers", name: "add", inputSchema: { type: "object" } }],
+      },
+      history: [
+        { content: "old message", kind: "user" as const, role: "user" },
+        { content: "old reply", role: "assistant" },
+      ],
+    });
+    const ctx = new ContextContainer();
+
+    const result = await contextStorage.run(ctx, () => runStep(session));
+
+    expect(result.next).toBeNull();
+    expect(result.session.history).toEqual(compactedHistory);
+    expect(dispatchDynamicModelEvent).toHaveBeenCalledOnce();
     expect(getCompatibilityEventTypes(events)).toEqual([
       "compaction.requested",
       "compaction.completed",

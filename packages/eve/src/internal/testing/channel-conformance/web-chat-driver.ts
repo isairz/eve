@@ -108,7 +108,15 @@ export function webChatDriver(): ClientDriver {
             `one of the questions ${JSON.stringify(prompts)}`,
             async () => {
               await look();
-              for (const prompt of prompts) {
+              // The page lists requests in the order the session asked them, which is the
+              // order a typed reply answers them in. A question's prompt is its legend.
+              const texts = (await page.locator("p, legend").allInnerTexts()).map((text) =>
+                text.trim(),
+              );
+              const shown = prompts
+                .filter((prompt) => texts.includes(prompt))
+                .sort((a, b) => texts.lastIndexOf(a) - texts.lastIndexOf(b));
+              for (const prompt of shown) {
                 const options = await promptOptions(page, prompt).catch(() => undefined);
                 if (options !== undefined) return { options, prompt };
               }
@@ -145,7 +153,9 @@ export function webChatDriver(): ClientDriver {
           for (const message of await page.locator(".is-assistant").all()) {
             const links: string[] = [];
             for (const anchor of await message.locator("a[href]").all()) {
-              links.push((await anchor.getAttribute("href"))!);
+              // A re-render can drop a link after it was listed; the next look reads it again.
+              const href = await anchor.getAttribute("href", { timeout: 100 }).catch(() => null);
+              if (href !== null) links.push(href);
             }
             const text = [await message.innerText(), ...links].join("\n");
             const options = (await readButtons(message.getByRole("button"))) ?? [];
@@ -169,10 +179,16 @@ async function promptOptions(page: Page, prompt: string): Promise<RenderedOption
   );
 }
 
-/** An open-ended `ask_question` card: the prompt titles a text field while it's open. */
+/** An open-ended `ask_question` card: the prompt titles a text field and no options while it's open. */
 async function openEndedQuestion(page: Page, prompt: string): Promise<[] | undefined> {
-  const field = questionGroup(page, prompt).getByRole("textbox", { name: "Answer" });
-  return (await field.count()) > 0 && (await field.isEditable()) ? [] : undefined;
+  const group = questionGroup(page, prompt);
+  const field = group.getByRole("textbox", { name: "Answer" });
+  if ((await field.count()) === 0 || !(await field.isEditable().catch(() => false))) {
+    return undefined;
+  }
+  // A question with options also takes free text. Its card can mount after `questionOptions`
+  // looked, so check for options only once the field is known to be there.
+  return (await group.getByRole("radio").count()) === 0 ? [] : undefined;
 }
 
 /** An `ask_question` card: one radio per option, chosen and then sent with Answer. */
