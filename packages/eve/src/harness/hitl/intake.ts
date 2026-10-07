@@ -30,7 +30,7 @@ import {
 import { runApprovedCalls } from "./approved-calls.js";
 import { getApprovalAuditState, retireActiveCandidates } from "./candidates.js";
 import { coordinateApprovalDelivery } from "./coordinator.js";
-import { deliver, turnInputOnly, withoutTurnInput } from "./delivery.js";
+import { deliver, resolveTypedApproval, turnInputOnly, withoutTurnInput } from "./delivery.js";
 import { approversOf, setApprovedCallCallers } from "./approved-call-callers.js";
 import type { InputRequest } from "#shared/input.js";
 import type { InstrumentationAttempt } from "#instrumentation/runtime.js";
@@ -80,12 +80,15 @@ export async function acceptHumanInput(
   const completions = config.signInCompletions ?? [];
   if (completions.length > 0) await step.apply(completeSignIn(step.view(), { completions }));
   const delivered = deliver(step.view(), input, options);
+  // A typed approval answers like a press, so the approval's response policy decides it.
+  const typed = resolveTypedApproval(step.view(), delivered.input);
   // A new message reaching the held turn steers it: the sign-ins it waits on end, and its
-  // unanswered approvals resolve with the answers below.
+  // unanswered approvals resolve with the answers below. A typed answer is not a new message.
   const steered =
-    input?.message !== undefined || delivered.displayMessage !== undefined
-      ? await withdrawSteeredSignIns(step, delivered.input)
-      : delivered.input;
+    (input?.message !== undefined && typed?.message !== undefined) ||
+    delivered.displayMessage !== undefined
+      ? await withdrawSteeredSignIns(step, typed)
+      : typed;
   // Restoring a turn's tools runs its resolvers, so a step's tools are restored once, and again
   // only after another step's.
   const restoredTools = new Map<string, HarnessToolMap>();

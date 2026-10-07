@@ -35,6 +35,17 @@ export interface McpClientConnectionDefinition {
    */
   readonly protocolVersionDiscovery?: boolean;
   /**
+   * Whether to forward the calling turn's user and initiator to the server in
+   * the `eve-forwarded-principal` header, so an eve agent's `mcpChannel` can
+   * run its published tools as that user. The server must set
+   * `trustedForwarders` and trust this connection's route-authenticated
+   * identity; otherwise it refuses the request with 403. Anonymous callers
+   * are not forwarded. Requests carrying the header fail rather than follow
+   * a redirect.
+   * @default false
+   */
+  readonly forwardPrincipal?: boolean;
+  /**
    * Human-readable summary of the connection and its tools.
    *
    * The model sees it in the connection listing eve announces, so it
@@ -72,7 +83,7 @@ export interface McpClientConnectionDefinition {
    * - `never()`: allow all tool calls without approval
    * - `once()`: require approval only the first time per session
    * - `always()`: require approval for every tool call
-   * - `auto()`: use an evaluation model to ask about dangerous or unclear effects
+   * - `auto()`: use a decision model to ask about dangerous or unclear effects
    *
    * When omitted, tool calls execute without approval, consistent
    * with authored tools.

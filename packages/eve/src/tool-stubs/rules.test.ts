@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { StubPlayback, parseToolStubs } from "#tool-stubs/rules.js";
+import { StubPlayback } from "#tool-stubs/playback.js";
+import { parseToolStubs } from "#tool-stubs/rules.js";
 
 describe("tool stubs", () => {
   it("rejects prototype keys instead of silently dropping a match constraint", () => {
