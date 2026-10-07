@@ -107,6 +107,8 @@ const stubs = [
 
 A call for milk receives success; other valid calls receive the fallback. Reversing these rules makes the unconditional rule win every time. If no rule matches, eve executes the real tool. A selected stub failure fails the eval, even if the agent recovers; it never falls back to real execution.
 
+If eve cannot record an output-processing failure, it cancels the workflow serving stubs. The original tool error or fallback is preserved, but verification rejects the eval. Failed or cancelled stub sessions cannot pass verification.
+
 Every property listed in `match` must exist and satisfy its constraint. Extra top-level properties are allowed:
 
 ```json
@@ -140,7 +142,7 @@ Two calls within one agent turn consume two entries. Later turns continue the sa
 
 Choose the rules at session creation; they stay fixed for that session. Local subagents share playback through explicit tool paths, and deployment handoffs preserve it. An independent session starts at the first response.
 
-eve's transparent internal workflow replay preserves recorded tool results without consuming additional responses. Matcher validators are compiled when playback initializes and reused for its calls. Replay can reconstruct these in-memory validators; executable functions are never persisted or sent over the wire. A compilation failure terminates the session and fails stub verification before tools execute.
+eve's transparent internal workflow replay preserves recorded tool results without consuming additional responses. Playback creates and reuses validator objects; the library evaluates schemas on each call rather than generating compiled matcher functions. Replay can reconstruct these objects; executable functions are never persisted or sent over the wire. A validator initialization failure terminates the session and fails stub verification before tools execute.
 
 Parallel calls consume responses in arrival order, which can vary. Use separate argument matchers when particular arguments must receive particular responses.
 
@@ -213,6 +215,6 @@ eve reuses its existing bundled `@cfworker/json-schema` validator without local 
 - `contains` with `maxContains` can accept zero matches unless you explicitly set `minContains: 1`.
 - `const`, `enum`, and `uniqueItems` can confuse arrays with objects that have the same enumerable keys. Use explicit type constraints where possible; avoid mixed array/object uniqueness checks.
 - Nested `required` and dependency checks can treat inherited names such as `constructor` as present. Avoid those property names in these constraints.
-- Some `dependentRequired` maps with keys named `id` or `$id` fail compilation, including `{ id: [] }` and `{ $id: ["#"] }`. The session fails during playback initialization.
+- Some `dependentRequired` maps with keys named `id` or `$id` fail validator initialization, including `{ id: [] }` and `{ $id: ["#"] }`. The session fails before tools execute.
 
 Avoid affected constraints until the dependency is fixed. A false match can select the wrong stub; a missed match can execute the real tool. Ordinary string ID and status matching are unaffected. Regression tests retain the known failures and flag fixes when the validator is upgraded.
