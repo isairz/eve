@@ -129,3 +129,22 @@ test("allows types, the plain reader, and step code that hydrates", () => {
     [],
   );
 });
+
+test("forbids the centralized migrator in both workflow modules", () => {
+  for (const module of [READER, ACTIVE_TURN]) {
+    assert.deepEqual(
+      readerLines(
+        module,
+        'import { migrateSessionState } from "#harness/session-machine/migrate.js";',
+      ),
+      [1],
+    );
+    assert.deepEqual(
+      readerLines(
+        module,
+        'import { readState } from "#harness/session-machine/migrate-legacy.js";',
+      ),
+      [1],
+    );
+  }
+});

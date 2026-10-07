@@ -99,7 +99,7 @@ const WORKFLOW_CHECKPOINT_READERS = new Set([
 const CHECKPOINT_READER = "packages/eve/src/execution/durable-session-read.ts";
 const IMPORT_RE = /^\s*(import|export)\s+(type\s+)?[^;]*?\bfrom\s*["']([^"']+)["']/gm;
 const HYDRATING_IMPORT_RE =
-  /(?:^|\/)(?:durable-session-store|session-machine\/hydrate|hitl\/migration)\.js$/;
+  /(?:^|\/)(?:durable-session-store|session-machine\/(?:hydrate|migrate(?:-legacy)?)|hitl\/migration)\.js$/;
 
 /**
  * Rule 54: legacy-state migration pulls human input, its projections, and their
