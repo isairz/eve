@@ -67,12 +67,11 @@ needs external services or injected env is intentionally not part of this
 suite. Most fixtures use the shared model-provider credentials; dedicated
 runtime stress fixtures may use an authored deterministic model instead.
 
-Use `t.session({ stubs })` for data that is incidental to the behavior under
-test. The [subagent approval](fixtures/agent-subagents-hitl/evals/hitl.eval.ts)
-case supplies its stock quote through a plain TypeScript `stock-price/get_stock_price` stub while approval,
-child execution, and input hooks remain real. Keep real executors when their
-results and input handling are part of the contract, as in the chained lookup
-and stream-resume evals.
+The [stubbed subagent approval](fixtures/agent-subagents-hitl/evals/stubbed-approval.eval.ts)
+case uses `t.session({ stubs })` to supply a quote for `stock-price/get_stock_price`.
+It checks that the child still waits for approval and the mock quote reaches the parent.
+The [original approval eval](fixtures/agent-subagents-hitl/evals/hitl.eval.ts)
+continues to run the fixture tool's executor and check the parent input hooks.
 
 Each retained fixture package also exposes the same command as:
 
