@@ -4,7 +4,7 @@ import type { SandboxSession } from "eve/sandbox";
 
 import { validateRepositoryRoot } from "./repository-root.ts";
 import { shellQuote } from "./shell.ts";
-import { toolingPaths } from "./tooling.ts";
+import { GITHUB_TOOLING_PATHS } from "./tooling.ts";
 
 export interface GitHubPermission {
   readonly access: "write";
@@ -26,7 +26,7 @@ export interface GitHubShellOutput {
   readonly truncated: boolean;
 }
 
-interface GitHubConfig {
+export interface GitHubConfig {
   readonly broker: (
     sandbox: SandboxSession,
     rules: Readonly<Record<string, readonly GitHubLeaseRule[]>> | null,
@@ -97,7 +97,7 @@ export async function executeGitHubShell(
   if (!token)
     throw new Error(`Connect returned an empty token for ${JSON.stringify(config.connector)}.`);
 
-  const executable = executablePath(argv[0]!, sandbox);
+  const executable = executablePath(argv[0]!);
   const executionArguments = remoteRepository
     ? [
         "-c",
@@ -390,9 +390,9 @@ function repositoryNames(repositories: readonly string[], configuredOrg: string)
   return [...names];
 }
 
-function executablePath(executable: string, sandbox: Pick<SandboxSession, "resolvePath">): string {
-  if (executable === "gh") return toolingPaths(sandbox).ghReal;
-  if (executable === "gh-signed-commit") return toolingPaths(sandbox).trustedSignedCommit;
+function executablePath(executable: string): string {
+  if (executable === "gh") return GITHUB_TOOLING_PATHS.ghReal;
+  if (executable === "gh-signed-commit") return GITHUB_TOOLING_PATHS.trustedSignedCommit;
   return "git";
 }
 

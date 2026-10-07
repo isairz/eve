@@ -381,6 +381,24 @@
       "import": "./dist/src/extensions/code/extension/lib/prwatch.js",
       "default": "./dist/src/extensions/code/extension/lib/prwatch.js"
     },
+    "./extensions/git": {
+      "eve-source": "./dist/src/extensions/git/extension/extension.js",
+      "types": "./dist/src/extensions/git/extension/extension.d.ts",
+      "import": "./dist/src/extensions/git/extension/extension.js",
+      "default": "./dist/src/extensions/git/extension/extension.js"
+    },
+    "./extensions/git/tools": {
+      "eve-source": "./dist/src/extensions/git/tools.js",
+      "types": "./dist/src/extensions/git/tools.d.ts",
+      "import": "./dist/src/extensions/git/tools.js",
+      "default": "./dist/src/extensions/git/tools.js"
+    },
+    "./extensions/git/sandbox": {
+      "eve-source": "./dist/src/extensions/git/extension/lib/sandbox.js",
+      "types": "./dist/src/extensions/git/extension/lib/sandbox.d.ts",
+      "import": "./dist/src/extensions/git/extension/lib/sandbox.js",
+      "default": "./dist/src/extensions/git/extension/lib/sandbox.js"
+    },
     "./computer-use": {
       "eve-source": "./dist/src/computer-use/extension/extension.js",
       "types": "./dist/src/computer-use/extension/extension.d.ts",
@@ -662,6 +680,9 @@
       },
       "./extensions/code": {
         "dist": "./dist/src/extensions/code/extension"
+      },
+      "./extensions/git": {
+        "dist": "./dist/src/extensions/git/extension"
       },
       "./computer-use": {
         "dist": "./dist/src/computer-use/extension"

@@ -1,6 +1,10 @@
 import type { SandboxSession } from "eve/sandbox";
 
-import { GH_SIGNED_COMMIT_SOURCE, GH_SIGNED_COMMIT_VERSION } from "./signed-commit.ts";
+import {
+  GH_SIGNED_COMMIT_SOURCE,
+  GH_SIGNED_COMMIT_VERSION,
+  GITHUB_TOOLING_PATHS,
+} from "eve/extensions/git/sandbox";
 import { shellQuote } from "./shell.ts";
 
 export { GH_SIGNED_COMMIT_SOURCE, GH_SIGNED_COMMIT_VERSION };
@@ -16,11 +20,11 @@ export function toolingPaths(sandbox: Pick<SandboxSession, "resolvePath">) {
     root,
     trustedRoot,
     env: `${root}/env`,
-    ghReal: `${trustedRoot}/gh`,
+    ghReal: GITHUB_TOOLING_PATHS.ghReal,
     ghWrapper: `${root}/gh`,
     vercelWrapper: `${root}/vercel`,
     signedCommit: `${root}/gh-signed-commit`,
-    trustedSignedCommit: `${trustedRoot}/gh-signed-commit`,
+    trustedSignedCommit: GITHUB_TOOLING_PATHS.trustedSignedCommit,
     typescriptRoot: `${trustedRoot}/typescript`,
     typescriptModule: TYPESCRIPT_MODULE,
     workerSource: `${root}/diagnostics.cjs`,
