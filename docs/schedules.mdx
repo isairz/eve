@@ -7,7 +7,7 @@ A schedule starts the agent on its own clock instead of waiting for an inbound m
 
 The name comes from the path (`agent/schedules/billing/sweep.ts` → `"billing/sweep"`). An extension mount prefixes that name (`extension/schedules/sweep.ts` mounted as `crm` → `"crm__sweep"`) without changing its cron expression.
 
-Use `defineSchedule` for a fixed, code-authored cron. Use the experimental `defineScheduleSubscription` when users or agents need to create recurring or one-time schedules at runtime.
+Use `defineSchedule` for a fixed, code-authored cron. Use the experimental `defineDynamicSchedules` when users or agents need to create recurring or one-time schedules at runtime.
 
 ## `defineSchedule`
 
@@ -80,7 +80,7 @@ The channel delivers the agent's reply. To skip empty reports, check the conditi
 - `waitUntil(promise)` registers background work for the cron task to await.
 - `appAuth` is the app principal (`{ authenticator: "app", principalId: "eve:app", principalType: "runtime" }`). Use it for work on the agent's own behalf.
 
-A static handler may instead supply user auth when work needs that user's grants. The session retains schedule provenance. Unlike dynamic subscriptions, static handlers can resume a channel conversation and allow human input.
+A static handler may instead supply user auth when work needs that user's grants. The session retains schedule provenance. Unlike dynamic schedules, static handlers can resume a channel conversation and allow human input.
 
 ### Detect the app principal
 
@@ -125,22 +125,22 @@ Production builds register static schedules as Nitro scheduled tasks. Outside Ve
 
 Custom hosting that only serves HTTP and does not start the scheduled task runner will not fire static schedules. Use `eve start`, a host that supports Nitro scheduled tasks, or your own scheduler through an authenticated route or channel handoff. The dev dispatch route is not a production scheduler.
 
-## Experimental schedule subscriptions
+## Experimental dynamic schedules
 
-`defineScheduleSubscription` configures runtime schedule management and an authored occurrence callback. It does not create a schedule or set its timing. The model supplies schema-defined payload; eve captures the authenticated creator separately and resolves current execution auth whenever an occurrence fires.
+`defineDynamicSchedules` configures runtime schedule management and an authored occurrence callback. It does not create a schedule or set its timing. The model supplies schema-defined payload; eve captures the authenticated creator separately and resolves current execution auth whenever an occurrence fires.
 
 This API is experimental and may change.
 
 ```ts title="agent/schedules/requests.ts"
-import { byPrincipal, defineScheduleSubscription } from "eve/experimental/schedules";
+import { byPrincipal, defineDynamicSchedules } from "eve/experimental/schedules";
 import { z } from "zod";
 import slack from "../channels/slack";
 import { resolveCurrentUser } from "../lib/identity";
 import { resolveCreatorDm, resolveAuthorizedTeamChannel } from "../lib/schedule-policy";
 
-export default defineScheduleSubscription({
+export default defineDynamicSchedules({
   description: "Schedule Slack tasks for the creator's DM or authorized team channel.",
-  schema: z
+  inputSchema: z
     .object({
       task: z.string().min(1).max(2000),
       destination: z.enum(["my-dm", "team-channel"]),
@@ -160,7 +160,7 @@ export default defineScheduleSubscription({
 });
 ```
 
-The identity and destination helpers are application code. `schema`, `auth`, and `run` are required. `provider` is optional and defaults to `vercelScheduleProvider()`. Pass a provider explicitly to use another backend or configure the Vercel endpoint. `scope` defaults to `byPrincipal`, isolating management by authenticated principal type, authenticator, issuer, and ID, plus application and path-derived subscription identity. A custom scope resolver must authorize each operation before returning a namespace; return `null` to deny.
+The identity and destination helpers are application code. `inputSchema`, `auth`, and `run` are required. `provider` is optional and defaults to `vercelScheduleProvider()`. Pass a provider explicitly to use another backend or configure the Vercel endpoint. `scope` defaults to `byPrincipal`, isolating management by authenticated principal type, authenticator, issuer, and ID, plus application and path-derived definition identity. A custom scope resolver must authorize each operation before returning a namespace; return `null` to deny.
 
 ### Creator identity
 
@@ -170,14 +170,14 @@ The returned principal type, authenticator, issuer, ID, and subject must match t
 
 ### Payload and destinations
 
-The generated creation tool accepts your schema under `payload`. By default, eve validates it before persistence and again before dispatch. The complete provider envelope is limited to 64 KB; store JSON data and stable references, not credentials or sensitive recipient details.
+The generated creation tool validates its `payload` field with your `inputSchema`. By default, eve validates it before persistence and again before dispatch. The complete provider envelope is limited to 64 KB; store JSON data and stable references, not credentials or sensitive recipient details.
 
-Optional `prepare(input, context)` runs after input validation and scope authorization, before persistence. It validates application policy, resolves creation context, and returns the stored shape. For model calls, eve prepares before asking for approval and provides the prepared payload to `approval.create`. It prepares again before writing and rejects the call if the payload, scope, or creator differs from the approved snapshot. Preparation errors reach the model before a person is asked. Authenticated code calling the client prepares once before writing, without model approval. `auth`, `run`, and occurrence events infer the prepared return type; declare `prepare` before these callbacks or give it an explicit return type for TypeScript contextual inference. Without preparation, payload type comes from the schema.
+Optional `preparePayload(input, context)` runs after input validation and scope authorization, before persistence. It validates application policy, resolves creation context, and returns the stored shape. For model calls, eve prepares before asking for approval and provides the prepared payload to `approval.create`. It prepares again before writing and rejects the call if the payload, scope, or creator differs from the approved snapshot. Preparation errors reach the model before a person is asked. Authenticated code calling the client prepares once before writing, without model approval. `auth`, `run`, and occurrence events infer the prepared return type; declare `preparePayload` before these callbacks or give it an explicit return type for TypeScript contextual inference. Without preparation, payload type comes from the schema.
 
 The input schema does not describe prepared output. eve bounds and JSON-validates the complete persisted envelope but does not structurally revalidate prepared application data against the input schema at execution. Authored code owns that persisted contract; validate it explicitly if needed. Preparation may repeat on creation retries, so avoid irreversible effects. Reads, state changes, and occurrences never rerun it.
 
 ```ts
-prepare(input, context) {
+preparePayload(input, context) {
   const target = resolveDestination(input.destination, context);
   return { task: input.task, target };
 },
@@ -199,11 +199,11 @@ eve awaits the callback and its registered `waitUntil` promises before reporting
 
 Provider retries may repeat the callback and start new sessions. This is an at-least-once callback contract, not create-once admission or exactly-once side effects. Use `occurrence.executionId` together with the schedule/resource identity to deduplicate application effects where the destination supports it. An observer failure can also cause callback retry. `occurrence.failed` reports permanent provider failures or exhaustion of the provider retry budget.
 
-Stored payloads from the earlier request/deliveries API are rejected. Recreate those schedules using the subscription schema.
+Stored payloads from the earlier request/deliveries API are rejected. Recreate those schedules using the definition's input schema.
 
 ### Generated tools and custom clients
 
-Each subscription contributes direct tools for `create`, `get`, `list`, `enable`, `disable`, `invoke`, and `delete`. Each has its own object-rooted schema, approval policy, and readable action label. For example, `agent/schedules/billing/requests.ts` generates `schedule__billing-requests__create`, `schedule__billing-requests__list`, and the other operation names. There is no manage tool or operation field.
+Each dynamic schedules definition contributes direct tools for `create`, `get`, `list`, `enable`, `disable`, `invoke`, and `delete`. Each has its own object-rooted schema, approval policy, and readable action label. For example, `agent/schedules/billing/requests.ts` generates `schedule__billing-requests__create`, `schedule__billing-requests__list`, and the other operation names. There is no manage tool or operation field.
 
 Creation takes `{ name, expression, payload }`; listing takes optional `{ cursor, limit }`; other tools take `{ name }` using the unique identifier from receipts or reads. Timing and payload are immutable; changing either requires explicit replacement. Direct tools are the initial exposure mode; deferred catalog integration is not part of this API yet.
 
@@ -216,7 +216,7 @@ approval: {
 },
 ```
 
-Import `always` from `eve/tools/approval`; `target.audience` above is an application-owned prepared field. Set `tool: false` for code-only scheduling or `tool: true` (the default) for direct tools. Combining `tool: false` with `approval` is rejected by TypeScript and runtime validation: these policies apply only to model calls, not code using `schedules(subscription)`. Approvals do not bypass scope authorization or configure tools a future agent session uses.
+Import `always` from `eve/tools/approval`; `target.audience` above is an application-owned prepared field. Set `tool: false` for code-only scheduling or `tool: true` (the default) for direct tools. Combining `tool: false` with `approval` is rejected by TypeScript and runtime validation: these policies apply only to model calls, not code using `schedules(definition)`. Approvals do not bypass scope authorization or configure tools a future agent session uses.
 
 ```ts title="agent/tools/list-requests.ts"
 import { schedules } from "eve/experimental/schedules";
