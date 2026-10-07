@@ -10,11 +10,13 @@ const ruleSchema = z.strictObject({
   match: z.record(z.string(), z.union([z.boolean(), z.record(z.string(), z.json())])).optional(),
 });
 
+const outcomeSchema = z.strictObject({ response: z.json() });
+
 const toolStubsSchema = z
   .array(
     z.union([
-      ruleSchema.extend({ response: z.json() }),
-      ruleSchema.extend({ responses: z.tuple([z.json()]).rest(z.json()) }),
+      ruleSchema.extend({ outcome: outcomeSchema }),
+      ruleSchema.extend({ outcomes: z.tuple([outcomeSchema]).rest(outcomeSchema) }),
     ]),
   )
   .max(100);
@@ -39,7 +41,7 @@ export function parseToolStubs(value: unknown): readonly ToolStub[] {
 }
 
 /**
- * Selects stub responses and advances their sequences.
+ * Selects stub outcomes and advances their sequences.
  * The surrounding workflow orders calls and restores progress on replay.
  */
 export class StubPlayback {
@@ -89,14 +91,14 @@ export class StubPlayback {
       ),
     );
     if (rule === undefined) return this.record(call, { kind: "real" });
-    const responses = rule.responses ?? [rule.response!];
-    const position = Math.min(this.positions.get(rule.id) ?? 0, responses.length - 1);
+    const outcomes = rule.outcomes ?? [rule.outcome!];
+    const position = Math.min(this.positions.get(rule.id) ?? 0, outcomes.length - 1);
     this.positions.set(rule.id, position + 1);
     return this.record(call, {
       kind: "stub",
       ruleId: rule.id,
       position,
-      response: responses[position]!,
+      outcome: outcomes[position]!,
     });
   }
 
