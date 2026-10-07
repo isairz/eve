@@ -69,8 +69,8 @@ takes precedence; AI Gateway hashes IDs longer than 256 characters.
 
 ### Choose the model dynamically
 
-To select a model from the incoming prompt with an AI SDK evaluation model, use
-[`auto` from `eve/models`](./guides/evaluate).
+To select a model from the incoming prompt with an AI SDK decision model, use
+[`auto` from `eve/models`](./guides/decide).
 
 `model` also accepts `defineDynamic({ events })`. Each matching handler must
 return the concrete model for its scope; a dynamic model has no compiled
@@ -180,8 +180,8 @@ export default defineAgent({
 `sessionTimeoutMs` sets the lifetime for every session, including delegated
 sessions. It defaults to 30 days and starts at creation. Each successful
 deployment handoff or legacy-session import restarts the original configured
-duration. Process restarts, ordinary messages, and failed or skipped handoffs
-keep the existing deadline. At the deadline, eve lets an active turn settle,
+duration. Process restarts, ordinary messages, compaction handoffs, and failed
+or skipped handoffs keep the existing deadline. At the deadline, eve lets an active turn settle,
 then emits `session.completed` and releases every continuation address; the next
 qualifying channel message starts fresh. Set it to `false` to disable the
 timeout. Expiration does not delete stored session data.

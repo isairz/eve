@@ -10,6 +10,7 @@ import type { HarnessModelMessage } from "#harness/messages.js";
 import { nextTurnDelivery, type NextTurnInstruction } from "#execution/session/next-input.js";
 import { SessionInputQueue } from "#execution/session/input-queue.js";
 import { SessionExecution } from "#execution/session/turn.js";
+import { createTurnControl, type TurnControl } from "#execution/session/turn-control.js";
 import { SessionStateCursor } from "#execution/session/state-cursor.js";
 import { cancelWorkingTasks, sessionTaskTable } from "#execution/tasks/session.js";
 import { workingTasks } from "#execution/tasks/table.js";
@@ -17,8 +18,12 @@ import type { TurnOutcome, TurnStepPayload } from "#execution/session/turn-step-
 import { settleCancelledTurnStep } from "#execution/settle-cancelled-turn-step.js";
 import { finalizeSession, type SessionTerminalOutcome } from "#execution/session/finalization.js";
 import { type SessionInboxHandle } from "#execution/session-inbox/inbox.js";
-import { createSessionTimeoutControl } from "#execution/session/timeout-control.js";
-import { SessionHandoff, sessionAnchorToken } from "#execution/session/handoff.js";
+import type { SessionTimeoutControl } from "#execution/session/timeout-control.js";
+import {
+  type CompactionHandoff,
+  SessionHandoff,
+  sessionAnchorToken,
+} from "#execution/session/handoff.js";
 import { signalSessionAnchorStep } from "#execution/session/handoff-steps.js";
 import type { WorkflowEntryResult } from "#execution/session/entry-input.js";
 
@@ -42,19 +47,28 @@ export type SessionAnchor =
     }
   | { readonly kind: "successor" };
 
+/** What an owner does before it first waits on its inbox. */
+export type SessionStart =
+  /** Runs a turn first; `input` is absent for a session started without a message. */
+  | { readonly kind: "turn"; readonly input: DeliverHookPayload | undefined }
+  /** A prewarmed session parks on the inbox before any session-scoped lifecycle work. */
+  | { readonly kind: "first-message" }
+  /** A successor that received a settled session waits for its next input. */
+  | { readonly kind: "parked" };
+
 export interface SessionBoot {
   readonly anchor: SessionAnchor;
   readonly caller: TurnCaller | undefined;
   readonly capabilities?: SessionCapabilities;
   readonly deploymentId: string;
   readonly history: HarnessModelMessage[];
-  readonly initialInput: DeliverHookPayload | undefined;
-  /** Parks on the inbox before any session-scoped lifecycle work. */
-  readonly awaitFirstMessage: boolean;
+  readonly initialTurnControl?: TurnControl;
+  readonly start: SessionStart;
   readonly retention?: AgentWorkflowRetentionDefinition;
   readonly serializedContext: Record<string, unknown>;
   readonly sessionId: string;
   readonly sessionState: DurableSessionState;
+  readonly sessionTimeoutControl?: SessionTimeoutControl;
   readonly sessionTimeoutDeadline?: Date;
   readonly sessionTimeoutMs: number | false;
   readonly sessionWritable: WritableStream<Uint8Array>;
@@ -201,13 +215,7 @@ async function runSessionLoop(
     queue,
     sessionId: boot.sessionId,
   });
-  const sessionTimeout =
-    boot.sessionTimeoutDeadline === undefined
-      ? undefined
-      : createSessionTimeoutControl({
-          deadline: boot.sessionTimeoutDeadline,
-          sessionId: boot.sessionId,
-        });
+  const sessionTimeout = boot.sessionTimeoutControl;
 
   const nextParkedActivity = async (): Promise<
     Exclude<NextTurnInstruction, { kind: "workflow" | "cancel-working-tasks" }>
@@ -231,21 +239,49 @@ async function runSessionLoop(
     }
   };
 
+  let turnControl =
+    boot.initialTurnControl ?? (boot.anchor.kind === "self" ? createTurnControl() : undefined);
   let turnIndex = 0;
+  // Set when a turn compacts and kept until the session moves to a fresh run,
+  // so this run's event log does not keep growing.
+  let compactionHandoffDue = false;
   const runTurn = async (payload: TurnStepPayload | undefined): Promise<TurnOutcome> => {
     const caller = progress.caller;
+    const control = turnControl;
+    turnControl = undefined;
     progress.turnId = `turn_${String(turnIndex++)}`;
-    const outcome = await execution.runTurn(payload, { caller });
+    const outcome = await execution.runTurn(payload, { caller, control });
     if (outcome.caller !== undefined) progress.caller = outcome.caller;
+    if (outcome.compacted === true) compactionHandoffDue = true;
     return outcome;
+  };
+  const transferState = () => ({
+    history: cursor.history,
+    serializedContext: cursor.serializedContext,
+    sessionState: cursor.sessionState,
+  });
+  const dueCompactionHandoff = (): CompactionHandoff | undefined =>
+    compactionHandoffDue &&
+    progress.caller === undefined &&
+    workingTasks(sessionTaskTable(cursor)).length === 0
+      ? { sessionTimeoutDeadline: boot.sessionTimeoutDeadline }
+      : undefined;
+  /**
+   * Hands a session that compacted to a fresh run on this deployment while
+   * nothing is waiting. When input arrives first, the next lone delivery
+   * carries the handoff instead; see `runDeliveredTurn`.
+   */
+  const tryCompactionHandoff = async (): Promise<SessionLoopOutcome | undefined> => {
+    const compaction = dueCompactionHandoff();
+    if (compaction === undefined || queue.pendingCount > 0 || inbox.hasPending()) return undefined;
+    const transfer = await handoff.tryCompactionTransfer(transferState(), compaction);
+    return transfer.kind === "transferred" ? transfer : undefined;
   };
   const runDeliveredTurn = async (
     next: Extract<NextTurnInstruction, { kind: "turn" }>,
   ): Promise<SessionActionResult> => {
-    const transfer = await handoff.tryTransfer(next, {
-      history: cursor.history,
-      serializedContext: cursor.serializedContext,
-      sessionState: cursor.sessionState,
+    const transfer = await handoff.tryTransfer(next, transferState(), {
+      compaction: dueCompactionHandoff(),
     });
     if (transfer.kind === "transferred") return transfer;
     if (next.delivery.caller !== undefined) progress.caller = next.delivery.caller;
@@ -277,11 +313,17 @@ async function runSessionLoop(
     }
   };
   const runInitialAction = async (): Promise<SessionActionResult> => {
-    if (boot.awaitFirstMessage) return await awaitPrewarmedAction();
-    const action = await runTurn(
-      boot.initialInput === undefined ? undefined : { delivery: boot.initialInput },
-    );
-    return { action, kind: "action" };
+    switch (boot.start.kind) {
+      case "first-message":
+        return await awaitPrewarmedAction();
+      case "parked":
+        return { action: { kind: "park" }, kind: "action" };
+      case "turn": {
+        const { input } = boot.start;
+        const action = await runTurn(input === undefined ? undefined : { delivery: input });
+        return { action, kind: "action" };
+      }
+    }
   };
 
   try {
@@ -321,6 +363,9 @@ async function runSessionLoop(
         progress.caller = undefined;
       }
 
+      const transferred = await tryCompactionHandoff();
+      if (transferred !== undefined) return transferred;
+
       const next = await nextParkedActivity();
 
       switch (next.kind) {
@@ -347,6 +392,7 @@ async function runSessionLoop(
       }
     }
   } finally {
+    turnControl?.dispose();
     await sessionTimeout?.dispose();
   }
 }

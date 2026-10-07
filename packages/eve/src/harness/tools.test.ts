@@ -499,8 +499,8 @@ describe("buildToolSet", () => {
   });
 
   it.each([
-    [{ id: "openai/gpt-5.4" }, WEB_SEARCH_EXA_OUTPUT_SCHEMA],
-    [{ id: "anthropic/claude-opus-4.6" }, WEB_SEARCH_EXA_OUTPUT_SCHEMA],
+    [{ id: "openai/gpt-5.4" }, "gateway.chat", WEB_SEARCH_EXA_OUTPUT_SCHEMA],
+    [{ id: "anthropic/claude-opus-4.6" }, "gateway.chat", WEB_SEARCH_EXA_OUTPUT_SCHEMA],
     [
       {
         id: "openai.chat/gpt-5.4",
@@ -511,6 +511,7 @@ describe("buildToolSet", () => {
           sourceKind: "module",
         },
       },
+      "openai.chat",
       WEB_SEARCH_OPENAI_OUTPUT_SCHEMA,
     ],
     [
@@ -523,6 +524,7 @@ describe("buildToolSet", () => {
           sourceKind: "module",
         },
       },
+      "anthropic.messages",
       WEB_SEARCH_ANTHROPIC_OUTPUT_SCHEMA,
     ],
     [
@@ -535,12 +537,13 @@ describe("buildToolSet", () => {
           sourceKind: "module",
         },
       },
+      "google.generative-ai",
       WEB_SEARCH_GOOGLE_OUTPUT_SCHEMA,
     ],
-    [{ id: "mistral/mistral-large" }, WEB_SEARCH_EXA_OUTPUT_SCHEMA],
-  ] satisfies Array<readonly [RuntimeModelReference, JsonObject]>)(
+    [{ id: "mistral/mistral-large" }, "gateway.chat", WEB_SEARCH_EXA_OUTPUT_SCHEMA],
+  ] satisfies Array<readonly [RuntimeModelReference, string, JsonObject]>)(
     "injects the selected web_search provider output schema",
-    async (modelReference, expectedOutputSchema) => {
+    async (modelReference, modelProvider, expectedOutputSchema) => {
       const tools: HarnessToolMap = new Map<string, HarnessToolDefinition>([
         [
           "web_search",
@@ -558,6 +561,7 @@ describe("buildToolSet", () => {
 
       const result = await buildToolSetWithProviderTools({
         modelReference,
+        modelProvider,
         tools,
       });
 
@@ -583,10 +587,62 @@ describe("buildToolSet", () => {
 
     const result = await buildToolSetWithProviderTools({
       modelReference: { id: "openai/gpt-5.4" },
+      modelProvider: "gateway.chat",
       tools,
     });
 
     expect(getOutputJsonSchema(result.web_search)).toEqual(WEB_SEARCH_PARALLEL_OUTPUT_SCHEMA);
+  });
+
+  it("injects Browserbase search with its Gateway schemas and respects availability", async () => {
+    const tools: HarnessToolMap = new Map([
+      [
+        "web_search",
+        {
+          behavior: {
+            availability: [],
+            handling: { kind: "provider-tool", provider: "browserbase" },
+          },
+          description: "Search.",
+          inputSchema: jsonSchema({}),
+          name: "web_search",
+        },
+      ],
+    ]);
+    const result = await buildToolSetWithProviderTools({
+      modelReference: { id: "openai/gpt-5.4" },
+      modelProvider: "gateway.chat",
+      tools,
+    });
+    const search = result.web_search!;
+    expect(search).toMatchObject({ type: "provider", id: "gateway.browserbase_search" });
+    expect(search.execute).toBeUndefined();
+    expect(search.outputSchema).toBeDefined();
+    await expect(
+      asSchema(search.outputSchema!).validate?.({ error: "rate_limit", message: "Try again." }),
+    ).resolves.toMatchObject({ success: true });
+    await expect(
+      asSchema(search.outputSchema!).validate?.({
+        query: "example",
+        requestId: "search-1",
+        results: [{ id: "one", title: "Example Domain", url: "https://example.com" }],
+      }),
+    ).resolves.toMatchObject({ success: true });
+
+    const disabled = await buildToolSetWithProviderTools({
+      modelReference: { id: "openai/gpt-5.4" },
+      modelProvider: "gateway.chat",
+      tools,
+      disabledProviderTools: new Set(["web_search"]),
+    });
+    expect(disabled.web_search).toBeUndefined();
+
+    const direct = await buildToolSetWithProviderTools({
+      modelReference: { id: "gpt-5.4" },
+      modelProvider: "openai.chat",
+      tools,
+    });
+    expect(direct.web_search).toMatchObject({ id: "openai.web_search" });
   });
 
   it("omits provider-managed web_search when no provider backend is available", async () => {
@@ -615,6 +671,7 @@ describe("buildToolSet", () => {
           sourceKind: "module",
         },
       },
+      modelProvider: "some-provider",
       tools,
     });
 

@@ -135,6 +135,8 @@ import { search } from "@acme/crm/tools";
 const crmSearch = toolResultFrom(event.data.result, search); // typed; matches crm__search
 ```
 
+When one definition is mounted under more than one tool name, for example when a subagent re-exports an extension tool, `toolResultFrom` matches results from every mounted name.
+
 ### Persist events to your own database
 
 Every event carries a `meta` envelope with `meta.id`, a unique, sortable identifier for that event. It makes a natural primary key for an events table:
@@ -225,7 +227,7 @@ The remaining subscribers for the event still run. Then eve cancels the turn the
 
 Subagents may carry their own `agent/hooks/` directory. Subagent hooks fire only inside the subagent scope. Parent-agent hooks do not fire for subagent turns, and subagent hooks see only the subagent's own context.
 
-Interactive events such as `input.requested` and `authorization.required` are also published on the parent stream. Parent hooks observe these events after the parent channel handler and stream write, with the parent's session, agent, and channel context. The event retains the child's turn coordinates, so `event.data.turnId` can differ from `ctx.session.turn.id`. The parent follows a proxied `input.requested` or `authorization.required` with `turn.waiting` for its own open turn, which stays open until the running call finishes. A proxied `authorization.completed` is not followed by a parent turn event. These parent events also invoke parent hooks; they do not resolve pending input requests.
+Interactive events such as `input.requested` and `authorization.required` are also published on the parent stream. Parent hooks observe these events after the parent channel handler and stream write, with the parent's session, agent, and channel context. The event retains the child's turn coordinates, so `event.data.turnId` can differ from `ctx.session.turn.id`. A proxied `input.requested` also carries `event.data.callId`, the parent call that waits on it. The parent follows a proxied `input.requested` or `authorization.required` with `turn.waiting` for its own open turn, which stays open until the running call finishes. A proxied `authorization.completed` is not followed by a parent turn event. These parent events also invoke parent hooks; they do not resolve pending input requests.
 
 ## Hook vs tool vs provider
 

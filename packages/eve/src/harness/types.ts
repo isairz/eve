@@ -1,3 +1,4 @@
+import type { AuthorizationChallenge } from "#harness/authorization.js";
 import type { LanguageModel, ModelMessage, UserContent } from "ai";
 
 import type { SessionAuthContext, SessionCapabilities } from "#channel/types.js";
@@ -303,6 +304,13 @@ export interface ToolLoopHarnessConfig {
    * Omitted in production until an instrumentation runtime opts in.
    */
   readonly instrumentation?: SessionInstrumentation;
+  /** Attribute work that must finish before cumulative model usage is persisted. */
+  readonly titleAttributeWrite?: Promise<void>;
+  /**
+   * Sign-in callbacks the step's delivery carried. Each completes before anything else runs, and
+   * a connection's sign-in resumes the turn that asked for it.
+   */
+  readonly signInCompletions?: readonly AuthorizationChallenge[];
   /** Restores runtime resources for the originating turn before approval work. */
   readonly prepareApprovalTurn?: (event: {
     readonly sequence: number;

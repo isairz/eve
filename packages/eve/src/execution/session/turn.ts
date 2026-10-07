@@ -38,6 +38,7 @@ import type {
 } from "#execution/session/turn-step-types.js";
 import { turnStep } from "#execution/session/turn-step.js";
 import { ActiveTurn } from "#execution/session/active-turn.js";
+import type { TurnControl } from "#execution/session/turn-control.js";
 import {
   findBlockingWorkflowToolRun,
   getBlockingWorkflowToolRuns,
@@ -46,6 +47,10 @@ import {
 import { resolveRuntimeActionResultsForCallIds } from "#runtime/actions/results.js";
 import type { RuntimeActionResult } from "#shared/action-types.js";
 import type { TokenUsage } from "#shared/token-usage.js";
+import {
+  startTaskToolCallsStep,
+  traceTaskToolCallStep,
+} from "#execution/session/task-tool-tracing-step.js";
 
 /** True when a delegating parent (local or remote) receives this session's input requests. */
 export function hasDelegatedCallerContext(serializedContext: Record<string, unknown>): boolean {
@@ -92,12 +97,23 @@ export class SessionExecution {
        * input carries no caller. The turn's first step binds it into the context.
        */
       readonly caller?: TurnCaller;
+      readonly control?: TurnControl;
     } = {},
   ): Promise<TurnOutcome> {
-    const turn = new ActiveTurn(this.input, {
-      caller: options.caller,
-      principal: resolveTurnPrincipal(delivery, this.input.cursor.serializedContext),
-    });
+    let turn: ActiveTurn;
+    try {
+      turn = new ActiveTurn(
+        this.input,
+        {
+          caller: options.caller,
+          principal: resolveTurnPrincipal(delivery, this.input.cursor.serializedContext),
+        },
+        options.control,
+      );
+    } catch (error) {
+      options.control?.dispose();
+      throw error;
+    }
     try {
       const outcome = await this.runTurnSteps(turn, delivery);
       // Tasks run beside the turn, and a run can open a session after its call
@@ -108,7 +124,11 @@ export class SessionExecution {
       if (outcome.kind === "park" && outcome.settled !== undefined) {
         await cancelWorkingTasks(this.input.cursor, "turn_ended");
       }
-      return turn.caller === undefined ? outcome : { ...outcome, caller: turn.caller };
+      return {
+        ...outcome,
+        ...(turn.caller !== undefined && { caller: turn.caller }),
+        ...(turn.compacted && { compacted: true }),
+      };
     } finally {
       turn.dispose();
     }
@@ -158,6 +178,7 @@ export class SessionExecution {
           steeringSignal: turn.steeringSignal,
         }),
       );
+      if (result.compacted === true) turn.compacted = true;
       const pendingCallIds =
         result.action === "park" ? result.pendingCoordinationCallIds : undefined;
       const turnCompleted = result.action === "park" && result.settled !== undefined;
@@ -266,7 +287,10 @@ export class SessionExecution {
   async cancelTurnWork(): Promise<void> {
     const { cursor } = this.input;
     if (mayWaitOnWorkflowToolRuns(cursor.sessionState)) {
-      await cancelDescendantTurnsStep({ sessionState: cursor.sessionState });
+      await cancelDescendantTurnsStep({
+        serializedContext: cursor.serializedContext,
+        sessionState: cursor.sessionState,
+      });
     }
     await cancelWorkingTasks(cursor, "turn_cancelled");
   }
@@ -325,7 +349,7 @@ export class SessionExecution {
     while (true) {
       const callbacks = this.input.queue.takeAuthorizations(attemptIds);
       if (callbacks !== undefined) return { kind: "deliver", payloads: callbacks };
-      const answer = turn.takeInputResponses(requestIds);
+      const answer = await turn.takeInputResponses(requestIds);
       if (answer !== undefined) return answer;
       const steering = await turn.takeSteering({ heldOnPerson: true });
       if (steering !== undefined) return steering;
@@ -356,73 +380,76 @@ export class SessionExecution {
       acceptedAtMsByCallId.set(result.callId, Date.now());
     };
     let taskWaits = await this.answerTaskToolCalls(input.taskToolCalls, accept);
-
-    while (true) {
-      taskWaits = this.resolveTaskWaits(taskWaits, interrupted, accept);
-      const ready = resolveRuntimeActionResultsForCallIds({
-        pendingCallIds: input.pendingCallIds,
-        results,
-      });
-      if (ready !== undefined) {
-        const delegatedUsage = ready.flatMap((result) => {
-          const usage = delegatedUsageByCallId.get(result.callId);
-          return usage === undefined ? [] : [usage];
+    try {
+      while (true) {
+        taskWaits = await this.resolveTaskWaits(taskWaits, interrupted, accept);
+        const ready = resolveRuntimeActionResultsForCallIds({
+          pendingCallIds: input.pendingCallIds,
+          results,
         });
-        return {
-          acceptedAtMsByCallId: Object.fromEntries(
-            ready.map((result) => [result.callId, acceptedAtMsByCallId.get(result.callId)!]),
-          ),
-          ...(delegatedUsage.length > 0 && { delegatedUsage }),
-          results: ready,
-        };
-      }
-
-      const timers = taskWaits.flatMap((wait) => (wait.timer === undefined ? [] : [wait.timer]));
-      const next = await input.turn.nextRuntimeEvent(timers);
-      if (next === "cancelled") return next;
-      if (next.kind === "timeout") {
-        for (const wait of taskWaits) {
-          if (wait.callId === next.callId) wait.timedOut = true;
+        if (ready !== undefined) {
+          const delegatedUsage = ready.flatMap((result) => {
+            const usage = delegatedUsageByCallId.get(result.callId);
+            return usage === undefined ? [] : [usage];
+          });
+          return {
+            acceptedAtMsByCallId: Object.fromEntries(
+              ready.map((result) => [result.callId, acceptedAtMsByCallId.get(result.callId)!]),
+            ),
+            ...(delegatedUsage.length > 0 && { delegatedUsage }),
+            results: ready,
+          };
         }
-        continue;
-      }
-      if (next.kind === "input") continue;
-      if (next.kind === "steering") {
-        // Only the first steering message interrupts; later ones wait for the calls anyway.
-        if (!interrupted) await this.interruptWaitedWorkflowCalls(input.pendingCallIds, results);
-        interrupted = true;
-        continue;
-      }
-      if (next.kind === "runtime-action-result") {
-        const snapshot = this.input.cursor.sessionState.snapshot.session.state;
-        const accepted = next.results.filter(
-          (result) =>
-            result.kind === "tool-result" &&
-            isInboxToolResultFromRecordedWorkflowToolRun(snapshot, result),
-        );
-        if (accepted.length > 0) {
-          const acceptedAtMs = Date.now();
-          results.push(...accepted);
-          for (const result of accepted) acceptedAtMsByCallId.set(result.callId, acceptedAtMs);
-        }
-        continue;
-      }
 
-      const result = await this.handleWorkflowMessage(next.message);
-      if (result === undefined) continue;
-      accept(result);
-      if (next.message.kind === "outcome" && next.message.usage !== undefined) {
-        delegatedUsageByCallId.set(result.callId, next.message.usage);
+        const timers = taskWaits.flatMap((wait) => (wait.timer === undefined ? [] : [wait.timer]));
+        const next = await input.turn.nextRuntimeEvent(timers);
+        if (next === "cancelled") return next;
+        if (next.kind === "timeout") {
+          for (const wait of taskWaits) {
+            if (wait.callId === next.callId) wait.timedOut = true;
+          }
+          continue;
+        }
+        if (next.kind === "input") continue;
+        if (next.kind === "steering") {
+          // Only the first steering message interrupts; later ones wait for the calls anyway.
+          if (!interrupted) await this.interruptWaitedWorkflowCalls(input.pendingCallIds, results);
+          interrupted = true;
+          continue;
+        }
+        if (next.kind === "runtime-action-result") {
+          const snapshot = this.input.cursor.sessionState.snapshot.session.state;
+          const accepted = next.results.filter(
+            (result) =>
+              result.kind === "tool-result" &&
+              isInboxToolResultFromRecordedWorkflowToolRun(snapshot, result),
+          );
+          if (accepted.length > 0) {
+            const acceptedAtMs = Date.now();
+            results.push(...accepted);
+            for (const result of accepted) acceptedAtMsByCallId.set(result.callId, acceptedAtMs);
+          }
+          continue;
+        }
+
+        const result = await this.handleWorkflowMessage(next.message);
+        if (result === undefined) continue;
+        accept(result);
+        if (next.message.kind === "outcome" && next.message.usage !== undefined) {
+          delegatedUsageByCallId.set(result.callId, next.message.usage);
+        }
       }
+    } finally {
+      for (const wait of taskWaits) await this.traceTaskWait(wait, undefined, true);
     }
   }
 
   /** Answers every `task_wait` that can return now; returns the ones still waiting. */
-  private resolveTaskWaits(
+  private async resolveTaskWaits(
     waits: readonly TaskWait[],
     interrupted: boolean,
     accept: (result: RuntimeActionResult) => void,
-  ): TaskWait[] {
+  ): Promise<TaskWait[]> {
     const table = sessionTaskTable(this.input.cursor);
     const waiting: TaskWait[] = [];
     for (const wait of waits) {
@@ -435,6 +462,7 @@ export class SessionExecution {
         continue;
       }
       const text = renderTaskWaitResult(result, Date.now() - wait.startedAtMs);
+      await this.traceTaskWait(wait, text, interrupted);
       accept(taskToolResult(wait.callId, TASK_WAIT_TOOL_NAME, text));
     }
     return waiting;
@@ -452,13 +480,56 @@ export class SessionExecution {
     accept: (result: RuntimeActionResult) => void,
   ): Promise<TaskWait[]> {
     const waits: TaskWait[] = [];
+    const startedAtMs = calls.length === 0 ? 0 : await startTaskToolCallsStep();
     for (const call of calls) {
-      if (call.kind === "task_wait") waits.push(startTaskWait(call));
-      else accept(await answerTaskCancel(this.input.cursor, call));
+      if (call.kind === "task_wait") waits.push(startTaskWait(call, startedAtMs));
+      else {
+        let result: RuntimeActionResult;
+        try {
+          result = await answerTaskCancel(this.input.cursor, call);
+        } catch (error) {
+          await this.input.cursor.advance((state) =>
+            traceTaskToolCallStep(state, {
+              callId: call.callId,
+              toolName: call.kind,
+              startedAtMs,
+              completedAtMs: Date.now(),
+              input: { taskId: call.taskId },
+              failed: true,
+            }),
+          );
+          throw error;
+        }
+        await this.input.cursor.advance((state) =>
+          traceTaskToolCallStep(state, {
+            callId: call.callId,
+            toolName: call.kind,
+            startedAtMs,
+            completedAtMs: Date.now(),
+            input: { taskId: call.taskId },
+            output: result.output,
+          }),
+        );
+        accept(result);
+      }
     }
-    const parked = this.resolveTaskWaits(waits, false, accept);
+    const parked = await this.resolveTaskWaits(waits, false, accept);
     if (parked.length > 0) await this.input.cursor.advance(publishTurnWaitingStep);
     return parked;
+  }
+
+  private async traceTaskWait(wait: TaskWait, output?: string, failed = false): Promise<void> {
+    await this.input.cursor.advance((state) =>
+      traceTaskToolCallStep(state, {
+        callId: wait.callId,
+        toolName: "task_wait",
+        startedAtMs: wait.startedAtMs,
+        completedAtMs: Date.now(),
+        input: wait.input,
+        output,
+        failed,
+      }),
+    );
   }
 
   /** Aborts the `abortSignal` of every workflow tool call the wait has no result for yet. */
@@ -482,6 +553,7 @@ export class SessionExecution {
  * the turn races against the inbox; nothing polls.
  */
 interface TaskWait {
+  readonly input: { readonly timeoutSeconds?: number };
   readonly callId: string;
   readonly startedAtMs: number;
   /** Resolves with the call's id once the timeout passes; absent without a timeout. */
@@ -489,10 +561,19 @@ interface TaskWait {
   timedOut: boolean;
 }
 
-function startTaskWait(call: Extract<TaskToolCall, { readonly kind: "task_wait" }>): TaskWait {
+function startTaskWait(
+  call: Extract<TaskToolCall, { readonly kind: "task_wait" }>,
+  startedAtMs: number,
+): TaskWait {
   const { callId, timeoutMs } = call;
   const timer = timeoutMs === undefined ? undefined : sleep(timeoutMs).then(() => callId);
-  return { callId, startedAtMs: Date.now(), timedOut: false, timer };
+  return {
+    callId,
+    startedAtMs,
+    input: timeoutMs === undefined ? {} : { timeoutSeconds: timeoutMs / 1_000 },
+    timedOut: timeoutMs === 0,
+    timer,
+  };
 }
 
 /** An unreadable run registry counts as waiting, so the step runs and logs it. */

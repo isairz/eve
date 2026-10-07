@@ -1,3 +1,5 @@
+import { queuedInput, storedProjection } from "#harness/session-machine/view.js";
+import { openInputs, openSignIns } from "#protocol/session-projection.js";
 import { getBlockingWorkflowToolRuns } from "#harness/workflow-tool-runs.js";
 import {
   EntityConflictError,
@@ -22,8 +24,10 @@ import { isObject } from "#shared/guards.js";
 const log = createLogger("execution.handoff");
 
 /** Parses retained work with this deployment's code before deciding whether it can move. */
-export function isSessionStateIdleForHandoff(sessionState: DurableSessionState): boolean {
-  const { state } = readDurableSession(sessionState);
+export function isSessionStateIdleForHandoff(input: {
+  readonly sessionState: DurableSessionState;
+}): boolean {
+  const { state } = readDurableSession(input.sessionState);
   // Decoding the run registry rejects corrupt state before any busy-work shortcut.
   const workflowToolRuns = getBlockingWorkflowToolRuns(state);
 
@@ -45,7 +49,14 @@ export function isSessionStateIdleForHandoff(sessionState: DurableSessionState):
     (!isObject(proxyRequests) || Object.keys(proxyRequests).length > 0)
   )
     return false;
-  return workflowToolRuns.length === 0;
+  const projection = storedProjection(state);
+  return (
+    workflowToolRuns.length === 0 &&
+    projection.activeTurnId === undefined &&
+    openInputs(projection).length === 0 &&
+    openSignIns(projection).length === 0 &&
+    queuedInput(state) === undefined
+  );
 }
 
 /** Reads durable work using the source deployment's handoff contract. */
@@ -53,7 +64,7 @@ export async function isSessionIdleForHandoffStep(input: {
   readonly sessionState: DurableSessionState;
 }): Promise<boolean> {
   "use step";
-  return isSessionStateIdleForHandoff(input.sessionState);
+  return isSessionStateIdleForHandoff(input);
 }
 
 export type SessionCheckpointValidation =
@@ -99,7 +110,13 @@ export async function validateSessionCheckpointStep(input: {
   const bundle = context.require(BundleKey);
   const session = readDurableSession(checkpoint.sessionState);
   const sandboxState = session.sandboxState?.session;
-  if (sandboxState !== null && sandboxState !== undefined) {
+  // A record without `providerName` predates the provider redesign (eve 0.64)
+  // and is ignored at runtime, so it must not block the handoff.
+  if (
+    sandboxState !== null &&
+    sandboxState !== undefined &&
+    sandboxState.providerName !== undefined
+  ) {
     const definition =
       getResolvedRuntimeAgentNode(bundle.graph, bundle.nodeId).sandboxRegistry.sandbox.inheritance
         ?.definition ??
@@ -115,7 +132,7 @@ export async function validateSessionCheckpointStep(input: {
       throw new Error("Session checkpoint sandbox provider state is incompatible.");
     }
   }
-  if (!isSessionStateIdleForHandoff(checkpoint.sessionState)) {
+  if (!isSessionStateIdleForHandoff(checkpoint)) {
     throw new Error("Session checkpoint contains pending work and cannot be handed off.");
   }
   return { kind: "valid" };

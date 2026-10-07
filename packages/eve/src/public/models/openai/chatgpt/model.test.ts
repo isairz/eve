@@ -69,7 +69,7 @@ describe("Codex model", () => {
       { role: "user", content: [{ type: "input_text", text: "hello" }] },
       {
         role: "assistant",
-        content: [{ type: "output_text", text: "previous answer" }],
+        content: "previous answer",
         phase: "final_answer",
       },
     ]);
@@ -121,6 +121,26 @@ describe("Codex model", () => {
     // Stateless reasoning requires the encrypted reasoning payload to be
     // echoed back, so `include` must carry it whenever reasoning is set.
     expect(body.include).toContain("reasoning.encrypted_content");
+  });
+
+  it("requests Fast mode with the service tier the Codex backend accepts", async () => {
+    const requests: RecordedRequest[] = [];
+    const model = createCodexSubscriptionModel(
+      { model: "gpt-6.1-sol" },
+      {
+        broker: fakeBroker(),
+        fetch: createRecordingFetch(requests),
+      },
+    );
+
+    await model.doGenerate({
+      prompt: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
+      providerOptions: { openai: { serviceTier: "fast" } },
+    });
+
+    // OpenAI documents `fast` as an alias of `priority`, but the Codex backend
+    // rejects `fast` with `400 Unsupported service_tier: fast`.
+    expect(JSON.parse(requests[0]?.body ?? "{}").service_tier).toBe("priority");
   });
 
   it("groups summaries by reasoning item and preserves encrypted-only items", async () => {

@@ -4,6 +4,7 @@ import type { DurableSessionState } from "#execution/durable-session-store.js";
 import type { SessionInbox, SessionInboxPayload } from "#execution/session-inbox/inbox.js";
 import { SessionInputQueue } from "#execution/session/input-queue.js";
 import { SessionExecution } from "#execution/session/turn.js";
+import { createTurnControl } from "#execution/session/turn-control.js";
 import { SessionStateCursor } from "#execution/session/state-cursor.js";
 import { cancelDescendantTurnsStep } from "#execution/cancel-descendant-turns-step.js";
 import { turnStep } from "#execution/session/turn-step.js";
@@ -38,6 +39,7 @@ import type {
   WorkflowToolRunRef,
 } from "#execution/tools/workflow/messages.js";
 import type { TokenUsage } from "#shared/token-usage.js";
+import { traceTaskToolCallStep } from "#execution/session/task-tool-tracing-step.js";
 
 vi.mock("#compiled/@workflow/core/index.js", async (importOriginal) => ({
   ...(await importOriginal()),
@@ -60,12 +62,17 @@ vi.mock("#execution/tools/workflow/interrupt.js", () => ({
 vi.mock("#execution/session/turn-waiting-step.js", () => ({
   publishTurnWaitingStep: vi.fn(async () => ({ stateDelta: {} })),
 }));
+vi.mock("#execution/session/task-tool-tracing-step.js", () => ({
+  startTaskToolCallsStep: vi.fn(async () => Date.now()),
+  traceTaskToolCallStep: vi.fn(async () => ({ stateDelta: {} })),
+}));
 vi.mock("#execution/tools/workflow/emit-workflow-tool-run-report-step.js", () => ({
   emitAgentStartedStep: vi.fn(),
   emitWorkflowToolRunReportStep: vi.fn(),
 }));
 
 beforeEach(() => {
+  vi.mocked(traceTaskToolCallStep).mockClear();
   vi.mocked(routeDeliverToChildren)
     .mockReset()
     .mockImplementation(
@@ -99,19 +106,31 @@ const dispatchWork = stepWork<
 const routeWork = stepWork<Parameters<typeof routeDeliverToChildren>[0], RoutedDeliverResult>;
 
 describe("SessionExecution checkpoints", () => {
+  it("uses prepared cancellation and steering controls for the first step", async () => {
+    const control = createTurnControl();
+    vi.mocked(turnStep)
+      .mockReset()
+      .mockImplementationOnce(
+        turnStepWork(async (input) => {
+          expect(input.abortSignal).toBe(control.cancellation.signal);
+          expect(input.steeringSignal).toBe(control.steering.signal);
+          return {
+            action: "done",
+            serializedContext: input.serializedContext,
+            sessionState: input.sessionState,
+          };
+        }),
+      );
+
+    await createExecution({ inbox: idleInbox(), sessionState: state("") }).runTurn(undefined, {
+      control,
+    });
+
+    expect(turnStep).toHaveBeenCalledOnce();
+  });
+
   it("retains the durable steering signal across steps until a correction uses it", async () => {
-    const inbox: SessionInbox = {
-      claimedTokens: [],
-      claimSessionHook: vi.fn(),
-      claimSessionHooks: vi.fn(),
-      drain: () => [],
-      hasPending: () => false,
-      whenPending: () => new Promise<void>(() => {}),
-      next: vi.fn(),
-      restore: vi.fn(),
-      onDelivery: () => () => {},
-      onInterrupt: () => () => {},
-    };
+    const inbox = idleInbox();
     let signal: AbortSignal | undefined;
     vi.mocked(turnStep)
       .mockReset()
@@ -137,6 +156,32 @@ describe("SessionExecution checkpoints", () => {
       );
     await createExecution({ inbox, sessionState: state("") }).runTurn(undefined);
     expect(turnStep).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a compaction from an earlier step when the turn settles", async () => {
+    vi.mocked(turnStep)
+      .mockReset()
+      .mockImplementationOnce(
+        turnStepWork(async (input) => ({
+          action: "continue",
+          compacted: true,
+          serializedContext: input.serializedContext,
+          sessionState: input.sessionState,
+        })),
+      )
+      .mockImplementationOnce(
+        turnStepWork(async (input) => ({
+          action: "park",
+          serializedContext: input.serializedContext,
+          sessionState: input.sessionState,
+          settled: { output: "Alice's plan is ready." },
+        })),
+      );
+    const outcome = await createExecution({
+      inbox: idleInbox(),
+      sessionState: state(""),
+    }).runTurn(undefined);
+    expect(outcome).toMatchObject({ compacted: true, kind: "park" });
   });
   it("binds the delegated caller on the turn's first step only", async () => {
     const inbox: SessionInbox = {
@@ -503,7 +548,10 @@ describe("SessionExecution checkpoints", () => {
     ).resolves.toMatchObject({ cancelled: true, kind: "park" });
     expect(dispatchCoordinationStep).toHaveBeenCalledTimes(1);
     expect(inbox.next).not.toHaveBeenCalled();
-    expect(cancelDescendantTurnsStep).toHaveBeenCalledWith({ sessionState });
+    expect(cancelDescendantTurnsStep).toHaveBeenCalledWith({
+      serializedContext: {},
+      sessionState,
+    });
   });
 
   it("consumes the cancelling command while retaining accepted follow-ups", async () => {
@@ -983,6 +1031,16 @@ describe("SessionExecution checkpoints", () => {
     // no workflow tool run to stop.
     expect(dispatchCoordinationStep).not.toHaveBeenCalled();
     expect(cancelDescendantTurnsStep).not.toHaveBeenCalled();
+    expect(traceTaskToolCallStep).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        callId: "wait-call",
+        toolName: "task_wait",
+        failed: true,
+        startedAtMs: expect.any(Number),
+        completedAtMs: expect.any(Number),
+      }),
+    );
   });
 
   it("admits an idle agent task's usage report while the turn waits and counts it", async () => {
@@ -1424,6 +1482,21 @@ function createCursor(input: {
   });
 }
 
+function idleInbox(): SessionInbox {
+  return {
+    claimedTokens: [],
+    claimSessionHook: vi.fn(),
+    claimSessionHooks: vi.fn(),
+    drain: () => [],
+    hasPending: () => false,
+    whenPending: () => new Promise<void>(() => {}),
+    next: vi.fn(),
+    restore: vi.fn(),
+    onDelivery: () => () => {},
+    onInterrupt: () => () => {},
+  };
+}
+
 function createExecution(input: {
   readonly capabilities?: SessionCapabilities;
   readonly cursor?: SessionStateCursor;
@@ -1461,7 +1534,6 @@ function stateWithBlockingRun(): DurableSessionState {
 function state(continuationToken: string): DurableSessionState {
   return createTestSessionState({
     continuationToken,
-    emissionState: { sequence: 0, sessionStarted: true, stepIndex: 0, turnId: "turn_0" },
     hasProxyInputRequests: false,
     sessionId: "session-1",
   });

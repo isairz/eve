@@ -1,11 +1,9 @@
 import type { CompiledToolDefinition } from "#compiler/manifest.js";
+import { isFrameworkTool, frameworkTool } from "#tools/provided/framework-tool.js";
 import type { CompiledModuleMap } from "#compiler/module-map.js";
 import { expectFunction, expectObjectRecord } from "#internal/authored-module.js";
 import { normalizeApproval } from "#internal/authored-definition/approval.js";
-import {
-  registerDefinitionSource,
-  stampDefinitionKey,
-} from "#internal/authored-definition/source-identity.js";
+import { registerDefinitionSource } from "#internal/authored-definition/source-identity.js";
 import { isToolSchema, toInputSchema, toOutputSchema } from "#tools/schema.js";
 import { toErrorMessage } from "#shared/errors.js";
 import { loadResolvedModuleExport, ResolveAgentError } from "#runtime/resolve-helpers.js";
@@ -29,7 +27,7 @@ export async function resolveToolDefinition(
   owner: AgentSourceOwner,
 ): Promise<ResolvedToolDefinition> {
   if (!definition.hasExecute) {
-    return {
+    const resolved: ResolvedToolDefinition = {
       availableInSubagents: definition.availableInSubagents,
       behavior: definition.behavior,
       description: definition.description,
@@ -41,6 +39,9 @@ export async function resolveToolDefinition(
       sourceId: definition.sourceId,
       sourceKind: "module",
     };
+    return definition.behavior?.handling?.kind === "provider-tool"
+      ? frameworkTool(resolved)
+      : resolved;
   }
   try {
     const resolvedExportValue = await loadResolvedModuleExport({
@@ -54,17 +55,11 @@ export async function resolveToolDefinition(
       describe(definition, "to return an object"),
     );
 
-    const sourceEntry = {
-      kind: "tool",
-      logicalPath: definition.logicalPath,
-      name: definition.name,
-      owner,
-    } as const;
-
-    const sourceKey = `tool-source:${definition.sourceId}`;
-    stampDefinitionKey(resolvedRecord, sourceKey);
-    registerDefinitionSource(sourceKey, sourceEntry);
-    registerDefinitionSource(`tool:${resolvedRecord.description}`, sourceEntry);
+    registerDefinitionSource(
+      resolvedRecord,
+      { kind: "tool", logicalPath: definition.logicalPath, name: definition.name },
+      `tool:${resolvedRecord.description}`,
+    );
 
     // A workflow tool's entry point runs from the workflow registry, never in process.
     const execute =
@@ -86,7 +81,7 @@ export async function resolveToolDefinition(
         ? undefined
         : (input: unknown) => createWorkflowProgramExecuteInput(workflowProgram, input);
 
-    return {
+    const resolved: ResolvedToolDefinition = {
       availableInSubagents: definition.availableInSubagents,
       behavior: definition.behavior,
       description: definition.description,
@@ -102,6 +97,7 @@ export async function resolveToolDefinition(
       sourceKind: "module",
       ...extractOptionalHooks(resolvedRecord, definition),
     };
+    return isFrameworkTool(resolvedRecord) ? frameworkTool(resolved) : resolved;
   } catch (error) {
     if (error instanceof ResolveAgentError) {
       throw error;

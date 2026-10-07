@@ -54,6 +54,7 @@ import {
 } from "#public/channels/slack/slackChannel.js";
 import type { SessionContext } from "#public/definitions/callback-context.js";
 import { type InputResponse, parseInputResponses } from "#shared/input.js";
+import { mockAgentRouteArgs } from "#internal/testing/mocks/mock-route-args.js";
 
 function slackRespondTypeChecks(
   interaction: SlackInteractionContext,
@@ -479,6 +480,7 @@ async function firePost(
   const waitUntil = vi.fn();
 
   const response = await post.handler(request, {
+    ...mockAgentRouteArgs(),
     from,
     resolveSession: (address) =>
       (overrides.resolveSession?.(address) ?? Promise.resolve({ id: "s1" })) as never,
@@ -4446,6 +4448,35 @@ describe("slackChannel() HITL interaction pipeline", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("passes the click's trigger_id to onInteraction", async () => {
+    const triggerIds: (string | undefined)[] = [];
+    const channel = slackChannel({
+      credentials: { botToken: "xoxb-test" },
+      async onInteraction(action) {
+        triggerIds.push(action.triggerId);
+      },
+    });
+
+    await firePost(
+      channel,
+      buildSignedInteractionRequest({
+        type: "block_actions",
+        trigger_id: "13345224609.738474920.8088930838d88f008e0",
+        team: { id: "T01" },
+        user: { id: "U01", username: "ada" },
+        channel: { id: "C01" },
+        message: {
+          ts: "1700000000.000010",
+          thread_ts: "1700000000.000001",
+          blocks: [],
+        },
+        actions: [{ action_id: "edit", text: { type: "plain_text", text: "Edit" } }],
+      }),
+    );
+
+    expect(triggerIds).toEqual(["13345224609.738474920.8088930838d88f008e0"]);
+  });
+
   it("gives a Slack Connect user one principal across messages and button clicks", async () => {
     const botToken = vi.fn((_context: { readonly teamId?: string }) => "xoxb-test");
     fetchMock.mockImplementation(
@@ -5792,6 +5823,7 @@ describe("slackChannel().receive", () => {
     if (!post) throw new Error("expected POST route");
     const waitUntil = vi.fn();
     await post.handler(req, {
+      ...mockAgentRouteArgs(),
       attachSession: vi.fn() as any,
       ...mockChannelContext(inboundSend),
       waitUntil,

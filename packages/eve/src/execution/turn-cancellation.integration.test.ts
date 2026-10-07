@@ -28,6 +28,7 @@ import type { ToolContext } from "#tools/definition.js";
 import type { ResolvedToolDefinition } from "#runtime/types.js";
 import { toInputSchema } from "#tools/schema.js";
 import { captureConsoleOutput } from "#internal/testing/log-records.js";
+import { mockAgentRouteArgs } from "#internal/testing/mocks/mock-route-args.js";
 
 /**
  * Turn cancellation settles as `turn.cancelled` → `session.waiting` with
@@ -296,6 +297,7 @@ function createCancelRouteCaller(): (
       },
     );
     const args = {
+      ...mockAgentRouteArgs(),
       ...mockChannelContext(() => {
         throw new Error("cancel route must not send through a channel address");
       }),
@@ -632,6 +634,8 @@ describe("turn cancellation integration", () => {
         ).toBe(true);
         expect(filterEventsByType(cancelledTurn, "turn.started")).toHaveLength(1);
         expect(filterEventsByType(cancelledTurn, "turn.cancelled")).toHaveLength(1);
+        // v26 cancellation ends the turn without inventing a tool result.
+        expect(filterEventsByType(cancelledTurn, "action.result")).toEqual([]);
         // The superseding step attempt settles before any model work, so
         // the cancelled turn streams exactly one step.
         expect(filterEventsByType(cancelledTurn, "step.started")).toHaveLength(1);

@@ -2,7 +2,7 @@ import { jsonSchema } from "ai";
 import { MockLanguageModelV3 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 import { createToolLoopHarness } from "#harness/tool-loop.js";
-import { getHarnessEmissionState, setHarnessEmissionState } from "#harness/emission-state.js";
+import { foldingHandler, positionOf, withOpenTurn } from "#internal/testing/session-machine.js";
 import {
   createFrameworkUserMessage,
   createUserMessage,
@@ -136,10 +136,10 @@ describe("generation steering with the real AI SDK", () => {
           ],
         ]),
         resolveModel: async () => model,
-        handleEvent: async (event) => {
+        handleEvent: foldingHandler(async (event) => {
           events.push(event);
           if (event.type === boundary) steering.abort();
-        },
+        }),
       });
       const ctx = new ContextContainer();
       ctx.set(SessionKey, {
@@ -240,7 +240,7 @@ describe("generation steering with the real AI SDK", () => {
     const interrupted = await running;
     expect(providerSignal?.aborted).toBe(true);
     expect(interrupted.steered).toBe(true);
-    expect(getHarnessEmissionState(interrupted.session.state).turnId).toBe("turn_0");
+    expect(positionOf(interrupted.session).turnId).toBe("turn_0");
     // The provider ignores abort and finishes its obsolete request anyway.
     firstStream!.enqueue({
       type: "tool-call",
@@ -266,6 +266,54 @@ describe("generation steering with the real AI SDK", () => {
     expect(JSON.stringify(doStream.mock.calls[1]?.[0].prompt)).toContain("Who won in 2026?");
     expect(JSON.stringify(doStream.mock.calls[1]?.[0].prompt)).toContain("Actually 2025");
     expect(JSON.stringify(doStream.mock.calls[1]?.[0].prompt)).not.toContain("Stale");
+  });
+
+  it("ends the superseded step with a terminal step event before the next step starts", async () => {
+    const steering = new AbortController();
+    const pending = Promise.withResolvers<void>();
+    const events: UnstampedMessageStreamEvent[] = [];
+    const doStream = vi
+      .fn<MockLanguageModelV3["doStream"]>()
+      .mockImplementationOnce(async () => {
+        pending.resolve();
+        return { stream: new ReadableStream<Part>() };
+      })
+      .mockImplementationOnce(async () => ({
+        stream: new ReadableStream<Part>({
+          start(controller) {
+            finish(controller, "Corrected 2025 report");
+          },
+        }),
+      }));
+    const model = new MockLanguageModelV3({ doStream });
+    const createStep = (signal?: AbortSignal) =>
+      createToolLoopHarness({
+        resolveModel: async () => model,
+        tools: new Map(),
+        steeringSignal: signal,
+        handleEvent: async (event) => {
+          events.push(event);
+        },
+      });
+    const running = createStep(steering.signal)(session(), {
+      message: "Alice is preparing the 2026 report.",
+    });
+    await pending.promise;
+    steering.abort();
+    const interrupted = await running;
+    expect(interrupted.steered).toBe(true);
+    await createStep()(interrupted.session, {
+      message: "Alice corrected the report year to 2025.",
+    });
+    const stepEvents = events
+      .filter((event) => ["step.started", "step.completed", "step.failed"].includes(event.type))
+      .map((event) => `${event.type}:${(event.data as { stepIndex: number }).stepIndex}`);
+    expect(stepEvents).toEqual([
+      "step.started:0",
+      expect.stringMatching(/^step\.(completed|failed):0$/),
+      "step.started:1",
+      "step.completed:1",
+    ]);
   });
 
   it("finishes a local tool once and preserves its result for the corrected model call", async () => {
@@ -350,7 +398,7 @@ describe("generation steering with the real AI SDK", () => {
         },
       }),
     }));
-    const heldTurn = setHarnessEmissionState(
+    const heldTurn = withOpenTurn(
       {
         ...session(),
         history: [
@@ -373,7 +421,7 @@ describe("generation steering with the real AI SDK", () => {
           createFrameworkUserMessage("context.state", "Alice's reports are due Monday."),
         ],
       },
-      { sessionStarted: true, sequence: 0, stepIndex: 1, turnId: "turn_0" },
+      { sequence: 0, stepIndex: 1, turnId: "turn_0" },
     );
     await createToolLoopHarness({
       handleEvent: async () => {},

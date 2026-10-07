@@ -392,6 +392,18 @@ export const INTEGRATIONS: readonly IntegrationEntry[] = [
     },
   },
   {
+    slug: "dataforseo",
+    name: "DataForSEO",
+    kind: "connection",
+    tagline: "Run SEO, keyword, and SERP data lookups through DataForSEO's MCP server.",
+    surfaces: { scaffoldable: false, registry: true, gallery: false },
+    connection: {
+      description:
+        "DataForSEO: run SEO, keyword, and SERP data lookups through DataForSEO's MCP server.",
+      mcp: { url: "https://mcp.dataforseo.com/v3/mcp" },
+    },
+  },
+  {
     slug: "vercel",
     name: "Vercel",
     kind: "connection",
@@ -739,6 +751,18 @@ export const INTEGRATIONS: readonly IntegrationEntry[] = [
     connection: {
       description: "Razorpay: payments, settlements, and dashboard data.",
       mcp: { url: "https://mcp.razorpay.com/mcp" },
+    },
+  },
+  {
+    slug: "sanity",
+    name: "Sanity",
+    kind: "connection",
+    tagline: "Query and edit Sanity content, inspect schemas, and manage releases.",
+    surfaces: { scaffoldable: false, registry: true, gallery: true },
+    connection: {
+      description:
+        "Sanity: query content with GROQ, edit documents, inspect schemas, and manage releases.",
+      mcp: { url: "https://mcp.sanity.io" },
     },
   },
   {

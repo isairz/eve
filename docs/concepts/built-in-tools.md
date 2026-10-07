@@ -38,6 +38,23 @@ eve add tool/bash
 export { default } from "eve/tools/bash";
 ```
 
+`bash` waits up to 30 seconds for a command. A command that finishes in time returns `status: "completed"` with `exitCode`, `stdout`, `stderr`, and `truncated`. A command that is still running keeps running in the sandbox as its own process group and returns `status: "running"` with:
+
+- `pid`: the process group id
+- `outputDirectory`: a directory under `/tmp/.eve/jobs/`
+- `stdout`, `stderr`, and `truncated`: the output so far
+- `message`: instructions for the model
+
+The command keeps writing to `stdout` and `stderr` files in `outputDirectory` and writes its exit code to an `exit` file when it finishes. The model checks on or stops it with ordinary shell commands in later `bash` calls, so the tool's approval policy applies to them:
+
+```sh
+tail /tmp/.eve/jobs/3f9a1c2e/stdout   # latest output
+cat /tmp/.eve/jobs/3f9a1c2e/exit      # exit code, once the command has finished
+kill -- -4312                         # stop the command's whole process group
+```
+
+The command keeps running across turns until it exits, the model stops it, or the sandbox stops. Its output files stay in the sandbox until the sandbox stops. Cancelling a turn stops a command that has not yet returned `running`. The `just-bash` provider has no background processes, so it runs every command to completion.
+
 Override its description, approval policy, or executor by wrapping the exported definition:
 
 ```ts title="agent/tools/bash.ts"
@@ -64,7 +81,7 @@ export default disableTool();
 
 ### `read_file`
 
-`read_file` reads text files from the sandbox with line-numbered output. It accepts absolute paths and paths beginning with `$HOME/`.
+`read_file` reads text files from the sandbox with line-numbered output, and shows PNG, JPEG, GIF, and WebP images up to 3 MiB to the model as images. Images are detected from their bytes, so a missing or mismatched filename extension does not matter, and text files are always read as text. It accepts absolute paths and paths beginning with `$HOME/`.
 
 ```sh
 eve add tool/read_file
@@ -191,6 +208,18 @@ import { webSearch } from "eve/tools/web_search";
 export default webSearch({ provider: "parallel" });
 ```
 
+Select Browserbase Search in the same slot:
+
+```ts title="agent/tools/web_search.ts"
+import { webSearch } from "eve/tools/web_search";
+
+export default webSearch({ provider: "browserbase" });
+```
+
+Use a [Gateway model ID](../agent-config#set-the-model) to route searches through Browserbase. AI Gateway executes the search using `AI_GATEWAY_API_KEY` or Vercel project OIDC credentials; no `BROWSERBASE_API_KEY` is needed. See [Browserbase Search on AI Gateway](https://vercel.com/docs/ai-gateway/models-and-providers/web-search#using-browserbase-search).
+
+The `provider` setting applies only to AI Gateway models. Unsupported direct providers omit `web_search`.
+
 Replace provider-managed search with an authored implementation:
 
 ```ts title="agent/tools/web_search.ts"
@@ -269,9 +298,9 @@ export default disableTool();
 
 `connection_search` and `connection_execute` give the model every tool from the agent's [connections](../connections) without adding each tool to the model's tool list. eve adds both when the agent has a static connection or a dynamic connection resolver, even when `defaultTools` is `false`, so there is no add command.
 
-- `connection_search({ query?, connection?, signIn?, limit?, offset? })` returns matching tools with their connection, name, description, and a TypeScript signature rendered from the tool's schemas. Omit `query` to list every tool, or pair it with `connection` to list one connection's tools. A plain search never asks the user to sign in. For a connection the user has not signed in to, the result tells the model that sign-in is needed before its tools can be listed: the connection appears under `unavailable` with `requiresSignIn: true` and an error that points to `signIn: true`. Tools from the other connections are still returned.
+- `connection_search({ query?, connection?, signIn?, limit?, offset? })` returns matching tools with their connection, name, description, and a TypeScript signature rendered from the tool's schemas. Omit `query` to list every tool, or pair it with `connection` to list one connection's tools. A plain search never asks the user to sign in. For a connection whose server will not list its tools until the user signs in, the result tells the model that sign-in is needed: the connection appears under `unavailable` with `requiresSignIn: true` and an error that points to `signIn: true`. Tools from the other connections are still returned.
 - `connection_search({ connection, signIn: true, query? })` asks the user to sign in to that one connection when they have not yet, then returns its matching tools. Without `connection` it fails, so the user is asked about one service at a time.
-- `connection_execute({ connection, tool, input })` checks `input` against the tool's input schema, calls the tool, and returns its result. When the connection needs the user's authorization, it also asks the user to sign in and the call parks until sign-in completes. The stream reports the call as a nested action named `<connection>__<tool>`, such as `linear__list_issues`, whose `parentCallId` is the `connection_execute` call id.
+- `connection_execute({ connection, tool, input })` checks `input` against the tool's input schema, calls the tool, and returns its result. When the server asks for the user's authorization, it also asks the user to sign in and the call parks until sign-in completes. The stream reports the call as a nested action named `<connection>__<tool>`, such as `linear__list_issues`, whose `parentCallId` is the `connection_execute` call id.
 
 The definitions of both tools never change during a session. eve lists connection names and descriptions in append-only context messages rather than in the system prompt, so finding a tool, signing in, or resolving a dynamic connection keeps the cached prompt prefix.
 

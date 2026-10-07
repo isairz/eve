@@ -218,8 +218,8 @@ describe("TerminalRenderer (inline scrollback)", () => {
     renderer.shutdown();
 
     const lines = screen.snapshot().trimEnd().split("\n");
-    expect(lines.at(-1)).toMatch(/^☰eve {2}v\d+\.\d+\.\d+/u);
-    expect(screen.rawOutput()).toContain(`\x1b[2m☰eve  v`);
+    expect(lines.at(-1)).toMatch(/^☰eve v\d+\.\d+\.\d+/u);
+    expect(screen.rawOutput()).toContain(`\x1b[2m☰eve v`);
     // Once, ever — repeated teardown must not repeat the tag.
     renderer.shutdown();
     expect(screen.snapshot().match(/☰eve/gu)).toHaveLength(1);
@@ -240,7 +240,7 @@ describe("TerminalRenderer (inline scrollback)", () => {
     renderer.shutdown();
 
     const lines = screen.snapshot().trimEnd().split("\n");
-    expect(lines.at(-1)).toMatch(/^☰eve {2}v\d+\.\d+\.\d+ · session ses_0123456789$/u);
+    expect(lines.at(-1)).toMatch(/^☰eve v\d+\.\d+\.\d+ · session ses_0123456789$/u);
 
     // Repeated reports keep the latest id; a renderer that never received
     // one prints the bare tag.
@@ -1838,6 +1838,7 @@ describe("TerminalRenderer (inline scrollback)", () => {
       approvalId: "a1",
       toolCallId: "c1",
       toolName: "random_color",
+      prompt: "Approve random_color?",
       input: {},
     });
 
@@ -1869,6 +1870,7 @@ describe("TerminalRenderer (inline scrollback)", () => {
       approvalId: "a2",
       toolCallId: "c2",
       toolName: "random_number",
+      prompt: "Approve random_number?",
       input: {},
       context: { position: { index: 2, total: 10 }, requester: "subagent(number_picker:13)" },
     });
@@ -1887,6 +1889,7 @@ describe("TerminalRenderer (inline scrollback)", () => {
       approvalId: "a1",
       toolCallId: "c1",
       toolName: "random_color",
+      prompt: "Approve random_color?",
       input: {},
     });
     expect(screen.snapshot()).toContain("Approve random_color?");
@@ -1910,6 +1913,7 @@ describe("TerminalRenderer (inline scrollback)", () => {
         approvalId: "a1",
         toolCallId: "c1",
         toolName: "read_file",
+        prompt: "Approve read_file?",
         input: { path: "README.md" },
       });
       input.type("y");
@@ -1931,6 +1935,7 @@ describe("TerminalRenderer (inline scrollback)", () => {
         approvalId: "a2",
         toolCallId: "c2",
         toolName: "write_file",
+        prompt: "Approve write_file?",
         input: { path: "README.md" },
       });
       const approvalOutputLength = screen.rawOutput().length;
@@ -1950,6 +1955,7 @@ describe("TerminalRenderer (inline scrollback)", () => {
       approvalId: "a1",
       toolCallId: "c1",
       toolName: "delete_files",
+      prompt: "Approve delete_files?",
       input: { path: "/" },
     });
 
@@ -1968,6 +1974,7 @@ describe("TerminalRenderer (inline scrollback)", () => {
         approvalId: "a1",
         toolCallId: "c1",
         toolName: "delete_files",
+        prompt: "Approve delete_files?",
         input: { path: "/" },
       });
 
@@ -1998,9 +2005,8 @@ describe("TerminalRenderer (inline scrollback)", () => {
     // Every runtime-artifacts change re-sends the header; an identical one
     // must not stack another banner under the transcript.
     renderer.renderAgentHeader({ name: "Weather Agent", serverUrl: "http://localhost:3000" });
-    renderer.shutdown();
-
     expect(countOccurrences(screen.snapshot(), "☰eve v")).toBe(1);
+    renderer.shutdown();
   });
 
   it("reset clears committed transcript rows", () => {
@@ -3703,13 +3709,13 @@ describe("TerminalRenderer status line", () => {
       model: "xai/grok-4.5",
       reasoning: "xhigh" as const,
       providerOptions: { gateway: { serviceTier: "priority" } },
-      expected: "grok-4.5 · xhigh · ⚡︎",
+      expected: "grok-4.5 · xhigh · ↯",
     },
     {
       model: "openai/gpt-6-luna-fast",
       reasoning: "high" as const,
       providerOptions: {},
-      expected: "gpt-6-luna · high · ⚡︎",
+      expected: "gpt-6-luna · high · ↯",
     },
   ])("renders model metadata from the header: $expected", (selection) => {
     const { screen, renderer } = makeRenderer(100);
@@ -3751,7 +3757,7 @@ describe("TerminalRenderer status line", () => {
     const snapshot = screen.snapshot();
     expect(snapshot).toContain("grok-4.5");
     expect(snapshot).not.toContain("provider-default");
-    expect(snapshot).not.toContain("⚡︎");
+    expect(snapshot).not.toContain("↯");
     renderer.shutdown();
   });
 });
@@ -3857,6 +3863,7 @@ describe("TerminalRenderer conversation", () => {
       approvalId: "approval_1",
       toolCallId: "child_tool",
       toolName: "wait_random_number",
+      prompt: "Approve wait_random_number?",
       input: {},
     });
     expect(screen.snapshot()).toContain("Approve wait_random_number?");
@@ -4057,7 +4064,7 @@ describe("TerminalRenderer conversation", () => {
     renderer.renderConversation(
       conversationOf([turn("turn_1")], { data: { modelId: "openai/gpt-6-luna-fast" } }),
     );
-    expect(screen.snapshot()).toContain("dynamic model · gpt-6-luna · ⚡︎");
+    expect(screen.snapshot()).toContain("dynamic model · gpt-6-luna · ↯");
     renderer.requestInterrupt();
     await prompt.catch(() => {});
   });

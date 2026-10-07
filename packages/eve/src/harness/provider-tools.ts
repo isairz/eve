@@ -15,7 +15,7 @@ import type { WebSearchProvider } from "#shared/web-search.js";
 /**
  * The provider backend resolved for one web search tool invocation.
  */
-type WebSearchBackend = "anthropic" | "exa" | "google" | "openai" | "parallel";
+type WebSearchBackend = "anthropic" | "exa" | "google" | "openai" | "parallel" | "browserbase";
 
 /**
  * Maps an upstream provider tool type (the literal `type` string the AI SDK
@@ -53,7 +53,9 @@ export function resolveFrameworkToolFromUpstreamType(type: string): string | nul
  * Returns the output schema for the provider-managed web search tool that
  * will be injected for `backend`.
  */
-export function resolveWebSearchOutputSchema(backend: WebSearchBackend): JsonObject {
+export function resolveWebSearchOutputSchema(
+  backend: Exclude<WebSearchBackend, "browserbase">,
+): JsonObject {
   switch (backend) {
     case "anthropic":
       return WEB_SEARCH_ANTHROPIC_OUTPUT_SCHEMA;
@@ -76,16 +78,23 @@ export function resolveWebSearchOutputSchema(backend: WebSearchBackend): JsonObj
  * - Direct/BYO Anthropic models: native Anthropic search
  * - Direct/BYO Google models: native Google search grounding
  * - Other BYO models: not available (returns `null`)
+ *
+ * `modelProvider` is the provider of the resolved AI SDK model. It is needed
+ * for live dynamic selections because their runtime reference has no source
+ * metadata to distinguish a direct provider from AI Gateway.
  */
 export function resolveWebSearchBackend(
   modelRef: RuntimeModelReference,
   gatewayProvider: WebSearchProvider = "exa",
+  modelProvider?: string,
 ): WebSearchBackend | null {
-  if (modelRef.source === undefined) {
+  const providerId =
+    modelProvider?.split(".")[0] ??
+    (modelRef.source === undefined ? "gateway" : (modelRef.id.split("/")[0] ?? ""));
+
+  if (providerId === "gateway") {
     return gatewayProvider;
   }
-
-  const providerId = modelRef.id.split("/")[0] ?? "";
 
   if (providerId === "openai" || providerId.startsWith("openai.")) {
     return "openai";
@@ -95,7 +104,7 @@ export function resolveWebSearchBackend(
     return "anthropic";
   }
 
-  if (providerId.startsWith("google.")) {
+  if (providerId === "google" || providerId.startsWith("google.")) {
     return "google";
   }
 
@@ -113,6 +122,10 @@ export async function resolveWebSearchProviderTool(
   backend: WebSearchBackend,
 ): Promise<ToolSet[string]> {
   switch (backend) {
+    case "browserbase": {
+      const { gateway } = await import("ai");
+      return gateway.tools.browserbaseSearch();
+    }
     case "openai": {
       const { openai } = await import("#compiled/@ai-sdk/openai/index.js");
       return attachWebSearchOutputSchema(openai.tools.webSearch({}) as ToolSet[string], backend);
@@ -154,7 +167,7 @@ export async function resolveWebSearchProviderTool(
 
 function attachWebSearchOutputSchema(
   tool: ToolSet[string],
-  backend: WebSearchBackend,
+  backend: Exclude<WebSearchBackend, "browserbase">,
 ): ToolSet[string] {
   return {
     ...tool,

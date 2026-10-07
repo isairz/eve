@@ -144,7 +144,8 @@ export type AgentTUIToolApprovalRequest = {
   approvalId: string;
   toolCallId: string;
   toolName: string;
-  title?: string;
+  /** The server's question for this approval, such as `Approve Deploy release?`. */
+  prompt: string;
   input: unknown;
   context?: AgentTUIInputContext;
 };
@@ -1572,6 +1573,16 @@ export class EveTUIRunner {
           });
         }
         break;
+      // A task call's receipt never fails; its task's outcome does.
+      case "task.settled":
+        if (event.data.status === "failed") {
+          diagnostics.append({
+            source: "tool",
+            summary: `${this.#store.snapshot.conversation.tasks[event.data.taskId]?.name ?? "A task"} failed`,
+            detail: event.data.error?.message ?? "Task failed.",
+          });
+        }
+        break;
       case "agent.started":
         diagnostics.recordSubagentDispatch(event.data.callId);
         break;
@@ -1699,6 +1710,7 @@ function toAgentTUIToolApprovalRequest(
     approvalId: request.requestId,
     toolCallId: request.action.callId,
     toolName: request.action.toolName,
+    prompt: request.prompt,
     input: request.action.input,
   };
   if (context !== undefined) approval.context = context;

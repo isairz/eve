@@ -8,18 +8,15 @@ import { resolveWebSearchBackend, resolveWebSearchProviderTool } from "#harness/
 import type { HarnessToolMap } from "#harness/types.js";
 import { buildCallbackContext } from "#context/build-callback-context.js";
 import { loadContext } from "#context/container.js";
-import {
-  authorizationPendingModelText,
-  isAuthorizationPendingModelOutput,
-  isAuthorizationSignal,
-  modelFacingAuthorizationOutput,
-} from "#harness/authorization.js";
+import { isAuthorizationSignal, modelFacingAuthorizationOutput } from "#harness/authorization.js";
 import { stashToolInterrupt } from "#harness/tool-interrupts.js";
 import { isApprovedToolCall, markApprovalRecheck } from "#harness/approval-recheck.js";
 import { toModelSchema } from "#tools/schema.js";
-import { normalizeToolJsonOutput, normalizeToolModelOutput } from "#harness/tool-model-output.js";
+import { normalizeToolJsonOutput } from "#harness/tool-model-output.js";
+import { toolCallModelOutput } from "#harness/tool-call-io.js";
 import type { ToolExecuteOptions } from "#tools/definition.js";
 import { isAsyncIterable } from "#shared/async-iterable.js";
+import { iterateAsApprover, runAsApprover } from "#harness/hitl/approved-call-callers.js";
 
 type NativeApprovalStatus = Exclude<ApprovalStatus, boolean>;
 
@@ -64,54 +61,17 @@ export function buildToolSet(input: {
       inputSchema: toModelSchema(definition.inputSchema, "input"),
       strict: false,
       outputSchema: toModelSchema(definition.outputSchema, "output"),
-      ...(definition.execute !== undefined
+      ...(definition.execute !== undefined || authorToModelOutput !== undefined
         ? {
-            toModelOutput: async ({
+            toModelOutput: ({
               output,
               toolCallId,
             }: {
               readonly output: unknown;
               readonly toolCallId?: string;
-            }) => {
-              if (isAuthorizationPendingModelOutput(output)) {
-                return {
-                  type: "text" as const,
-                  value: authorizationPendingModelText(output.connections),
-                };
-              }
-              if (authorToModelOutput !== undefined) {
-                return normalizeToolModelOutput({
-                  output: await authorToModelOutput(output),
-                  toolCallId,
-                  toolName: definition.name,
-                });
-              }
-              if (typeof output === "string") {
-                return { type: "text" as const, value: output };
-              }
-              return normalizeToolModelOutput({
-                output: { type: "json" as const, value: output ?? null },
-                toolCallId,
-                toolName: definition.name,
-              });
-            },
+            }) => toolCallModelOutput(definition, output, toolCallId),
           }
-        : authorToModelOutput !== undefined
-          ? {
-              toModelOutput: async ({
-                output,
-                toolCallId,
-              }: {
-                readonly output: unknown;
-                readonly toolCallId?: string;
-              }) =>
-                normalizeToolModelOutput({
-                  output: await authorToModelOutput(output),
-                  toolCallId,
-                  toolName: definition.name,
-                }),
-            }
-          : {}),
+        : {}),
     });
     tools[definition.name] = aiTool;
     if (definition.approval !== undefined) {
@@ -162,13 +122,17 @@ export function wrapToolExecute(
   return (input, options) => {
     let output: unknown;
     try {
-      output = execute(input, options);
+      output = runAsApprover(options.toolCallId, () => execute(input, options));
     } catch (error) {
       return Promise.reject(error);
     }
 
     if (isAsyncIterable(output)) {
-      return normalizeToolExecuteIterable(output, definition.name, options);
+      return normalizeToolExecuteIterable(
+        iterateAsApprover(options.toolCallId, output),
+        definition.name,
+        options,
+      );
     }
 
     return Promise.resolve(output).then((value) =>
@@ -227,6 +191,7 @@ export async function buildToolSetWithProviderTools(input: {
   readonly approvedTools?: ReadonlySet<string>;
   readonly disabledProviderTools?: ReadonlySet<string>;
   readonly modelReference: RuntimeModelReference;
+  readonly modelProvider?: string;
   readonly tools: HarnessToolMap;
 }): Promise<ToolSet> {
   const disabled = input.disabledProviderTools;
@@ -245,7 +210,11 @@ export async function buildToolSetWithProviderTools(input: {
       definition.execute === undefined &&
       !disabled?.has(definition.name)
     ) {
-      const backend = resolveWebSearchBackend(input.modelReference, handling.provider);
+      const backend = resolveWebSearchBackend(
+        input.modelReference,
+        handling.provider,
+        input.modelProvider,
+      );
       if (backend === null) {
         delete tools[definition.name];
       } else {
@@ -279,6 +248,32 @@ function buildApprovalFn(
     );
     return typeof status === "boolean" ? (status ? "user-approval" : "not-applicable") : status;
   };
+}
+
+/**
+ * Re-runs a tool's approval policy for a call a person approved, just before eve runs it, so the
+ * policy can still refuse it, as when the connection it was approved against changed.
+ */
+export async function recheckApprovedCall(
+  definition: HarnessToolDefinition,
+  call: {
+    readonly callId: string;
+    readonly input: unknown;
+    readonly abortSignal?: AbortSignal;
+    readonly approvedTools?: ReadonlySet<string>;
+  },
+): Promise<{ readonly denied: boolean; readonly reason?: string }> {
+  const status = await buildApprovalFn(definition, { approvedTools: call.approvedTools })(
+    call.input,
+    call.callId,
+    call.abortSignal,
+    true,
+  );
+  if (status === "denied") return { denied: true };
+  if (typeof status === "object" && status !== null && status.type === "denied") {
+    return { denied: true, reason: status.reason };
+  }
+  return { denied: false };
 }
 
 /** Builds the AI SDK 7 call-level approval policy for an assembled tool set. */
