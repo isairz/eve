@@ -275,7 +275,7 @@ describe("tool stubs", () => {
   it.each([
     [{ minimum: "1" }, "#/minimum", "number"],
     [{ properties: { count: { minimun: 1 } } }, "#/properties/count/minimun", "Unsupported"],
-    [{ pattern: "milk" }, "#/pattern", "Unsupported"],
+    [{ pattern: "[" }, "#/pattern", "regex"],
   ])("identifies the rule, property, and invalid schema keyword: %j", (schema, path, detail) => {
     expect(() =>
       parseToolStubs([

@@ -42,6 +42,7 @@ const constraintSchema = new Validator(
           exclusiveMaximum: { type: "number" },
           minLength: nonnegativeInteger,
           maxLength: nonnegativeInteger,
+          pattern: { type: "string", format: "regex" },
           minItems: nonnegativeInteger,
           maxItems: nonnegativeInteger,
           items: schema,
