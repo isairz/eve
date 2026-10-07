@@ -155,7 +155,6 @@ export default defineScheduleSubscription({
         : await resolveAuthorizedTeamChannel(auth);
     await to(slack, target).send(
       `Perform this task now. Do not create another schedule.\nSchedule: ${occurrence.displayName}\nScheduled for: ${occurrence.scheduledAt}\nTask: ${payload.task}`,
-      { auth },
     );
   },
 });
@@ -173,7 +172,7 @@ The returned principal type, authenticator, issuer, ID, and subject must match t
 
 The generated creation tool accepts your schema under `payload`. By default, eve validates it before persistence and again before dispatch. The complete provider envelope is limited to 64 KB; store JSON data and stable references, not credentials or sensitive recipient details.
 
-Optional `prepare(input, context)` runs on the shared creation path after scope authorization and input validation, before the provider write. It can validate application policy, resolve current channel context, and return a different stored shape. Both included tools (after approval) and authenticated clients use it. `auth`, `run`, and occurrence events infer the prepared return type; declare `prepare` before these callbacks or give it an explicit return type for TypeScript contextual inference. Without preparation, payload type comes from the schema.
+Optional `prepare(input, context)` runs after input validation and scope authorization, before persistence. It validates application policy, resolves creation context, and returns the stored shape. For model calls, eve prepares before asking for approval and provides the prepared payload to `approval.create`. It prepares again before writing and rejects the call if the payload, scope, or creator differs from the approved snapshot. Preparation errors reach the model before a person is asked. Authenticated code calling the client prepares once before writing, without model approval. `auth`, `run`, and occurrence events infer the prepared return type; declare `prepare` before these callbacks or give it an explicit return type for TypeScript contextual inference. Without preparation, payload type comes from the schema.
 
 The input schema does not describe prepared output. eve bounds and JSON-validates the complete persisted envelope but does not structurally revalidate prepared application data against the input schema at execution. Authored code owns that persisted contract; validate it explicitly if needed. Preparation may repeat on creation retries, so avoid irreversible effects. Reads, state changes, and occurrences never rerun it.
 
@@ -194,7 +193,7 @@ The original creation conversation is not captured automatically. To support “
 
 ### Callback execution and retries
 
-`run` receives `payload`, `occurrence`, `auth`, `to`, and `waitUntil`. It may start zero or several sessions or perform application work directly. `to` sends through an authored channel and starts fresh, unattended sessions as the resolved creator, even when the target names an existing thread. It does not steer an existing conversation or accept a different execution identity.
+`run` receives `payload`, `occurrence`, `auth`, `to`, and `waitUntil`. It may start zero or several sessions or perform application work directly. `to(channel, target).send(message)` is bound to the resolved creator; no auth argument is needed or accepted. It starts fresh, unattended sessions through an authored channel, even when the target names an existing thread. It does not steer an existing conversation.
 
 eve awaits the callback and its registered `waitUntil` promises before reporting `occurrence.dispatched`. That event includes `sessionIds`; it means dispatch succeeded, not that the agent completed its task or delivered a successful result. Channels own output delivery and session-level failure reporting. Unattended sessions cannot wait for approvals or questions; configure tools accordingly.
 
@@ -204,21 +203,20 @@ Stored payloads from the earlier request/deliveries API are rejected. Recreate t
 
 ### Generated tools and custom clients
 
-Each subscription exposes one tool: `schedule__<subscription>__manage`, with an `operation` of `create`, `get`, `list`, `enable`, `disable`, `invoke`, or `delete`. For example, `agent/schedules/billing/requests.ts` generates `schedule__billing-requests__manage`. Action labels remain operation-specific, such as “Create schedule: daily-digest”. Timing and payload are immutable; changing either requires a replacement.
+Each subscription contributes direct tools for `create`, `get`, `list`, `enable`, `disable`, `invoke`, and `delete`. Each has its own object-rooted schema, approval policy, and readable action label. For example, `agent/schedules/billing/requests.ts` generates `schedule__billing-requests__create`, `schedule__billing-requests__list`, and the other operation names. There is no manage tool or operation field.
+
+Creation takes `{ name, expression, payload }`; listing takes optional `{ cursor, limit }`; other tools take `{ name }` using the unique identifier from receipts or reads. Timing and payload are immutable; changing either requires explicit replacement. Direct tools are the initial exposure mode; deferred catalog integration is not part of this API yet.
+
+Reads need no approval by default; mutations require user approval. Configure top-level `approval`, keyed by operation, with ordinary request/response policies. Separate tool identities keep `once()` grants independent. Create policies additionally receive a typed `payload` containing prepared data; their `toolInput.payload` also contains prepared rather than raw data.
 
 ```ts
-// Create with a readable label and schema-defined payload.
-{ operation: "create", name: "daily-digest", expression: { type: "delay", minutes: 5 }, payload: { task: "Write a digest", destination: "my-dm" } }
-// Read your first page of schedules.
-{ operation: "list", limit: 20 }
-// Use the exact unique name returned by create/get/list.
-{ operation: "invoke", name: "daily-digest--<uuid>" }
-{ operation: "delete", name: "daily-digest--<uuid>" }
+approval: {
+  create: ({ payload }) => payload.target.audience === "private" ? "not-applicable" : "user-approval",
+  delete: always(),
+},
 ```
 
-Only `create` accepts `expression` and `payload`; named operations require `name`, and only `list` accepts `cursor` and `limit`. Missing or incompatible fields are rejected before client/provider side effects. The tool schema remains object-rooted for model-provider portability.
-
-Reads need no extra tool approval by default; mutations require approval. The tool routes request and response approval policies by operation, and approval keys are operation-scoped so `once()` for invoke never grants deletion approval. Override individual generated operations with `tools: { approval: { create: auto() } }`, importing `auto` from `eve/tools/approval`. Overrides do not bypass scope authorization or configure the tools a future scheduled session uses. Set `tools: false` to omit generated tools while retaining the authenticated client.
+Import `always` from `eve/tools/approval`; `target.audience` above is an application-owned prepared field. Set `tool: false` for code-only scheduling or `tool: true` (the default) for direct tools. Combining `tool: false` with `approval` is rejected by TypeScript and runtime validation: these policies apply only to model calls, not code using `schedules(subscription)`. Approvals do not bypass scope authorization or configure tools a future agent session uses.
 
 ```ts title="agent/tools/list-requests.ts"
 import { schedules } from "eve/experimental/schedules";
@@ -235,7 +233,7 @@ export default defineTool({
 });
 ```
 
-Call the client inside an active eve context, not at module scope. Client creation accepts `{ name, expression, payload }`. The supplied `name` is a display label and may repeat. eve appends a UUID to allocate a unique management name without a name-availability check in approval policy. Receipts and reads include `name` (use this exact value for management) and `displayName`; labels longer than 219 characters are truncated to fit the provider identifier limit. Callbacks and events keep the unique management identifier in `occurrence.name` and expose the readable label as `occurrence.displayName`. Approval still applies to the unchanged label, timing, and payload; the generated storage identifier does not change those effects. Both the management tool and authored clients check authorization on every operation. Schedule management is unavailable during scheduled execution, including delegated work.
+Call the client inside an active eve context, not at module scope. Client creation accepts `{ name, expression, payload }`. The supplied `name` is a display label and may repeat. eve appends a UUID to allocate a unique management name without a name-availability check in approval policy. Receipts and reads include `name` (use this exact value for management) and `displayName`; labels longer than 219 characters are truncated to fit the provider identifier limit. Callbacks and events keep the unique management identifier in `occurrence.name` and expose the readable label as `occurrence.displayName`. Approval still applies to the unchanged label, timing, and payload; the generated storage identifier does not change those effects. Both direct tools and authored clients check authorization on every operation. Schedule management is unavailable during scheduled turns, including local delegated work. Authored tools, hooks, and channel events can read `ctx.session.schedule`: `undefined` for ordinary work, or `{ definition, instance?, occurrenceId? }` for scheduled work. Static schedules that run as a user are included; this is framework provenance, not an auth attribute. A new ordinary inbound message clears the scheduled-turn context; approval/input responses preserve it.
 
 ### Timing, reads, and replacement
 
