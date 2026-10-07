@@ -382,7 +382,7 @@ it("leaves unknown answers and unrelated delivery fields available to intake", (
   const decision = decideRelayDelivery({ payload });
   expect(decision.effects).toEqual([]);
   expect(decision.transition.events).toEqual([]);
-  expect(decision.decision.commands).toEqual([]);
+  expect(decision.decision.transition.events).toEqual([]);
   expect(payload).toEqual(before);
 });
 

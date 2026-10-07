@@ -1,7 +1,7 @@
 import { applyTransition, sessionView, type Transition } from "#harness/session-machine/commit.js";
 import { receiveRelayedAnswer } from "#harness/session-machine/transitions.js";
 import { storedProjection } from "#harness/session-machine/view.js";
-import { adaptHumanInput, type EffectCommand } from "#harness/hitl/index.js";
+import type { EffectCommand } from "#harness/hitl/index.js";
 import { beforeStep } from "#harness/hitl/index.js";
 import { dispatchHumanInputEffects, effectHandlers } from "#harness/hitl/index.js";
 import { foldSession } from "#protocol/session-projection.js";
@@ -71,21 +71,23 @@ async function routeProxiedDeliver(
   let cancelled = false;
   for (const [index, payload] of delivery.payloads.entries()) {
     const text = readAnswerText(payload);
-    const decision = beforeStep(view, [
-      {
-        type: "delivery.received",
-        responses: payload.inputResponses ?? [],
-        ...(text !== undefined && { message: { text, delegated } }),
-      },
-    ]);
-    cancelled ||= decision.commands.some((command) => command.type === "cancelTurn");
+    const decision = beforeStep(
+      view,
+      [
+        {
+          type: "delivery.received",
+          responses: payload.inputResponses ?? [],
+          ...(text !== undefined && { message: { text, delegated } }),
+        },
+      ],
+      undefined,
+      { deferCancellation: true },
+    );
+    cancelled ||= decision.cancelled;
     // This step does not own history. The owner settles a Stop through its history-bearing
     // cancellation step, which commits the stopped model response exactly once.
-    const adapted = adaptHumanInput(view, {
-      ...decision,
-      commands: decision.commands.filter((command) => command.type !== "cancelTurn"),
-    });
-    const consumed = decision.commands.some((command) => command.type === "consumeMessage");
+    const adapted = decision;
+    const consumed = decision.consumedMessage;
     const forwarded = new Set(
       adapted.effects.flatMap((effect) =>
         effect.type === "forwardAnswer"
@@ -133,7 +135,7 @@ async function routeProxiedDeliver(
     };
   }
   if (events.length > 0 && kept.length === 0 && !cancelled && view.relayedRequestIds.size > 0) {
-    const waiting = adaptHumanInput(view, beforeStep(view, [{ type: "turn.waiting" }]));
+    const waiting = beforeStep(view, [{ type: "turn.waiting" }]);
     events.push(...waiting.transition.events);
     view = { ...view, turn: waiting.transition.turn };
   }

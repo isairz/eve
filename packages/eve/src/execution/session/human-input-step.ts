@@ -9,7 +9,6 @@ import {
 } from "#execution/publish-session-events.js";
 import { applyTransition, sessionView } from "#harness/session-machine/commit.js";
 import { storedProjection } from "#harness/session-machine/view.js";
-import { adaptHumanInput } from "#harness/hitl/index.js";
 import { beforeStep, type BeforeStepArrival } from "#harness/hitl/index.js";
 import { dispatchHumanInputEffects, effectHandlers } from "#harness/hitl/index.js";
 import type { UnstampedMessageStreamEvent } from "#protocol/message.js";
@@ -21,7 +20,7 @@ export async function commitSessionStep(
 ): Promise<PublishedSessionEvents> {
   const session = readDurableSession(target.sessionState);
   const view = sessionView(storedProjection(session.state), session.state);
-  const adapted = adaptHumanInput(view, beforeStep(view, arrivals));
+  const adapted = beforeStep(view, arrivals);
   const events: UnstampedMessageStreamEvent[] = [];
   const applied = await applyTransition(session, adapted.transition, async (event) => {
     events.push(event);

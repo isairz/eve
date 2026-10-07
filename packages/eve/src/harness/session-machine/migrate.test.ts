@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { adaptHumanInput } from "#harness/hitl/adapter.js";
 import { beforeStep, afterStep } from "#harness/hitl/decisions.js";
 import { LEGACY_PARKING_KEYS } from "#harness/session-machine/migrate-legacy.js";
 import { HumanInput } from "#internal/testing/hitl-observer.js";
@@ -61,7 +60,7 @@ describe("machine hydration upgrades", () => {
         responses: [{ requestId: "deploy", optionId: "approve" }],
       },
     ]);
-    expect(resumed.turn.suspended[0]?.approved).toEqual([approval]);
+    expect(resumed.transition.turn.suspended[0]?.approved).toEqual([approval]);
   });
 
   it("resumes runtime work parked under eve.runtime.pendingCoordinationBatch", () => {
@@ -91,8 +90,8 @@ describe("machine hydration upgrades", () => {
         },
       ],
     });
-    expect(resumed.turn.suspended).toEqual([]);
-    expect(resumed.turn.queued?.message).toBe("next");
+    expect(resumed.transition.turn.suspended).toEqual([]);
+    expect(resumed.transition.turn.queued?.message).toBe("next");
   });
 
   it("retains session grants from eve.runtime.hitl.approvedTools", () => {
@@ -112,16 +111,13 @@ describe("machine hydration upgrades", () => {
         },
       },
     });
-    const resumed = adaptHumanInput(
-      view,
-      beforeStep(view, [
-        {
-          type: "delivery.received",
-          responses: [],
-          message: { delegated: false, text: "yes" },
-        },
-      ]),
-    );
+    const resumed = beforeStep(view, [
+      {
+        type: "delivery.received",
+        responses: [],
+        message: { delegated: false, text: "yes" },
+      },
+    ]);
     expect(resumed.effects).toEqual([
       {
         type: "forwardAnswer",

@@ -62,3 +62,8 @@ export type Next =
   /** Run the held step's approved calls (`approvedCalls`), post-step. */
   | { readonly run: "approved" }
   | { readonly waiting: "input" };
+
+export type EffectCommand = Extract<
+  Command,
+  { readonly type: "forwardAnswer" | "withdrawQuestion" | "resumeAuthorization" }
+>;

@@ -546,11 +546,11 @@ it("preserves an explicit cancellation over approval text", () => {
       },
     }),
   );
-  expect(decision.turn.suspended.flatMap((step) => step.approved ?? [])).toEqual([]);
+  expect(decision.transition.turn.suspended.flatMap((step) => step.approved ?? [])).toEqual([]);
   expect(
-    decision.commands.flatMap((command) =>
-      command.type === "publish" && command.event.type === "input.resolved"
-        ? command.event.data.resolutions.map((resolution) => resolution.outcome)
+    decision.transition.events.flatMap((event) =>
+      event.type === "input.resolved"
+        ? event.data.resolutions.map((resolution) => resolution.outcome)
         : [],
     ),
   ).toEqual(["denied"]);

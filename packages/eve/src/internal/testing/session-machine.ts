@@ -4,7 +4,6 @@ import type { ModelMessage } from "ai";
 import { contextStorage } from "#context/container.js";
 import { grantedApprovalKeys } from "#harness/hitl/projection.js";
 import { afterStep, beforeStep } from "#harness/hitl/decisions.js";
-import { adaptHumanInput } from "#harness/hitl/adapter.js";
 import { renderPendingApprovalsSnippet } from "#harness/hitl/index.js";
 import { createFrameworkUserMessage } from "#harness/messages.js";
 import type { Transition } from "#harness/session-machine/commit.js";
@@ -213,7 +212,7 @@ export function parkOnApprovals(
         : [{ type: "actions.dispatched" as const, at: input.event, messages, tasks: input.tasks }]),
     ],
   });
-  const transition = adaptHumanInput(view, decision).transition;
+  const transition = decision.transition;
   return {
     ...transition,
     commit: [
@@ -238,10 +237,7 @@ export function withRelayedRequests<
   let current = session;
   for (const batch of batches) {
     const view = sessionView(storedProjection(current.state), current.state);
-    const { transition } = adaptHumanInput(
-      view,
-      beforeStep(view, [{ ...batch, type: "relayed.requested" }]),
-    );
+    const { transition } = beforeStep(view, [{ ...batch, type: "relayed.requested" }]);
     current = saveTransition(
       {
         ...current,
@@ -276,5 +272,5 @@ export function decideRelayDelivery(input: {
       ...(text !== undefined && { message: { text, delegated: input.resolveMessage !== true } }),
     },
   ]);
-  return { decision, ...adaptHumanInput(view, decision) };
+  return { decision, ...decision };
 }

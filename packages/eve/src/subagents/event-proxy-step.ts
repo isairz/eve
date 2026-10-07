@@ -15,7 +15,6 @@ import {
 } from "#execution/session/state-delta.js";
 import { applyTransition, sessionView } from "#harness/session-machine/commit.js";
 import { currentProjection } from "#harness/session-machine/current.js";
-import { adaptHumanInput } from "#harness/hitl/index.js";
 import { beforeStep, type BeforeStepArrival } from "#harness/hitl/index.js";
 import type { WorkflowAskRoute } from "#harness/hitl/index.js";
 
@@ -92,7 +91,7 @@ export async function emitProxiedSubagentEvent(
               event: hookPayload.event,
               runId: runId ?? hookPayload.childSessionId,
             };
-      const adapted = adaptHumanInput(view, beforeStep(view, [arrival]));
+      const adapted = beforeStep(view, [arrival]);
       if (adapted.effects.length !== 0)
         throw new TypeError("Relaying a child event must not send transport effects.");
       return await applyTransition(session, adapted.transition, emit);

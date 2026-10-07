@@ -60,11 +60,9 @@ describe("an approval settled before its answer reached the step", () => {
   ] as const)("applies a recorded %s settlement (%s audit) as its answer", (outcome, where) => {
     const state = migrateSessionState({ state: settledButWaiting(outcome, where) }).state;
     const decision = beforeStep(sessionView(storedProjection(state), state), []);
-    expect(decision.turn.suspended.flatMap((step) => step.requests)).toEqual([]);
-    const resolved = decision.commands.flatMap((command) =>
-      command.type === "publish" && command.event.type === "input.resolved"
-        ? command.event.data.resolutions
-        : [],
+    expect(decision.transition.turn.suspended.flatMap((step) => step.requests)).toEqual([]);
+    const resolved = decision.transition.events.flatMap((event) =>
+      event.type === "input.resolved" ? event.data.resolutions : [],
     );
     expect(resolved).toEqual([
       expect.objectContaining({
@@ -73,22 +71,22 @@ describe("an approval settled before its answer reached the step", () => {
       }),
     ]);
     // Nothing is settled again: the recorded settlement and its approver stand.
-    expect(
-      decision.commands.some(
-        (command) => command.type === "publish" && command.event.type === "approval.settled",
-      ),
-    ).toBe(false);
-    expect(decision.turn.hitl?.audit?.settlements[request.requestId]).toEqual(settlement(outcome));
+    expect(decision.transition.events.some((event) => event.type === "approval.settled")).toBe(
+      false,
+    );
+    expect(decision.transition.turn.hitl?.audit?.settlements[request.requestId]).toEqual(
+      settlement(outcome),
+    );
     if (outcome === "allowed") {
-      expect(decision.turn.suspended[0]?.approved).toEqual([request]);
+      expect(decision.transition.turn.suspended[0]?.approved).toEqual([request]);
       expect(
-        approversOf(decision.turn.suspended[0]!.approved!, {
+        approversOf(decision.transition.turn.suspended[0]!.approved!, {
           ...sessionView(storedProjection(state), state),
-          turn: decision.turn,
+          turn: decision.transition.turn,
         }),
       ).toEqual({ [request.action.callId]: ALICE });
     } else {
-      expect(decision.turn.suspended[0]?.approved ?? []).toEqual([]);
+      expect(decision.transition.turn.suspended[0]?.approved ?? []).toEqual([]);
     }
   });
 
@@ -96,9 +94,9 @@ describe("an approval settled before its answer reached the step", () => {
     const state = settledButWaiting("allowed", "machine");
     const view = sessionView(storedProjection(state), state);
     const first = beforeStep(view, []);
-    const again = beforeStep({ ...view, turn: first.turn }, []);
-    expect(again.commands).toEqual([]);
-    expect(again.turn).toEqual(first.turn);
+    const again = beforeStep({ ...view, turn: first.transition.turn }, []);
+    expect(again.transition.events).toEqual([]);
+    expect(again.transition.turn).toEqual(first.transition.turn);
   });
 
   it("leaves an unsettled approval waiting", () => {
@@ -111,8 +109,8 @@ describe("an approval settled before its answer reached the step", () => {
       },
     };
     const decision = beforeStep(sessionView(storedProjection(unsettled), unsettled), []);
-    expect(decision.commands).toEqual([]);
-    expect(decision.turn.suspended[0]?.requests).toEqual([request]);
+    expect(decision.transition.events).toEqual([]);
+    expect(decision.transition.turn.suspended[0]?.requests).toEqual([request]);
   });
 });
 

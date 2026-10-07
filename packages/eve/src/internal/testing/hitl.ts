@@ -13,7 +13,6 @@ import {
   policyChecksBeforeStep,
   type BeforeStepArrival,
 } from "#harness/hitl/decisions.js";
-import { adaptHumanInput } from "#harness/hitl/adapter.js";
 import { saveTransition, sessionView, dropClosedRecords } from "#harness/session-machine/commit.js";
 import { storedProjection, SESSION_PROJECTION_STATE_KEY } from "#harness/session-machine/view.js";
 import { migrateSessionState } from "#harness/session-machine/migrate.js";
@@ -89,7 +88,7 @@ export class Turn {
           at: "at" in input ? input.at : (view.turn.suspended[0]?.event ?? AT),
         } as FromStep & { at: RequestAt })
       : beforeStep(view, [input as BeforeStepArrival]);
-    const { transition: adapted } = adaptHumanInput(view, decision);
+    const { transition: adapted } = decision;
     // Intake consumes the resumed delivery between commits, just as acceptHumanInput does.
     const transition =
       input.type === "input.resumed"
@@ -111,13 +110,42 @@ export class Turn {
       },
       projection,
     );
-    const published = decision.commands.filter((command) => command.type === "publish");
-    const added = transition.events.filter(
-      (event) => !published.some((command) => command.event === event),
-    );
+    const relayed = input.type === "relayed.requested" || input.type === "relayed.authorization";
     const events: Command[] = [
-      ...added.map((event): Command => ({ type: "publish", event })),
-      ...decision.commands,
+      ...(decision.consumedMessage ? [{ type: "consumeMessage" } as const] : []),
+      ...transition.events.map((event): Command => ({
+        type: "publish",
+        event,
+        ...(relayed && { relayed: true }),
+      })),
+      ...decision.effects,
+      ...(transition.commit ?? []).map((message): Command => ({ type: "appendHistory", message })),
+      ...(transition.grantBudget === true ? [{ type: "grantBudget" } as const] : []),
+      ...transition.events.flatMap((event): Command[] =>
+        event.type === "input.resolved"
+          ? event.data.resolutions.flatMap((resolution) =>
+              resolution.kind === "session-limit" && resolution.response?.optionId === "stop"
+                ? [{ type: "declineBudget", requestId: resolution.requestId }]
+                : [],
+            )
+          : [],
+      ),
+      ...((relayed &&
+        transition.events.some(
+          (event) => event.type === "input.requested" || event.type === "authorization.required",
+        )) ||
+      transition.events.some((event) => event.type === "turn.waiting")
+        ? [{ type: "waitTurn", ...(relayed && { relayed: true as const }) } as const]
+        : []),
+      ...(input.type === "input.resumed" && view.turn.queued !== undefined
+        ? [{ type: "resumeInput", input: view.turn.queued } as const]
+        : []),
+      ...(transition.turn.queued?.context ?? [])
+        .slice(view.turn.queued?.context?.length ?? 0)
+        .map((text): Command => ({ type: "addNote", text })),
+      ...(decision.cancelled && input.type === "delivery.received"
+        ? [{ type: "cancelTurn" } as const]
+        : []),
     ];
     return new Turn(committed.state, events);
   }

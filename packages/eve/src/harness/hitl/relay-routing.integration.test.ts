@@ -490,7 +490,7 @@ describe("subagent HITL proxy → concurrent-descendant routing", () => {
           resolutions: event.data.resolutions,
         })),
     ).toEqual([]);
-    expect(unrouted.decision.commands).toEqual([]);
+    expect(unrouted.decision.transition.events).toEqual([]);
     expect(unrouted.transition.events).toEqual([]);
   });
 });

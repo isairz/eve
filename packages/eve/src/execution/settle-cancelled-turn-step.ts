@@ -9,7 +9,6 @@ import {
   type WithSessionStateDelta,
 } from "#execution/session/state-delta.js";
 import type { HarnessModelMessage } from "#harness/messages.js";
-import { adaptHumanInput } from "#harness/hitl/index.js";
 import { beforeStep } from "#harness/hitl/index.js";
 import { dispatchHumanInputEffects, effectHandlers } from "#harness/hitl/index.js";
 import { applyTransition, sessionView } from "#harness/session-machine/commit.js";
@@ -60,7 +59,7 @@ export async function settleCancelledTurn(
     origin: "own",
     async publish(emit, session) {
       const view = sessionView(currentProjection(step.ctx), session.state);
-      const adapted = adaptHumanInput(view, beforeStep(view, [{ type: "cancel.requested" }]));
+      const adapted = beforeStep(view, [{ type: "cancel.requested" }]);
       const cancelled = await applyTransition(session, adapted.transition, emit);
       await dispatchHumanInputEffects(adapted.effects, effectHandlers({ context: step.ctx }));
       return cancelled;

@@ -159,7 +159,7 @@ it("never restores the old approval key when resumed candidates expire", () => {
   const decision = beforeStep(sessionView(storedProjection(resumed), resumed), [
     { type: "time", now: 1_001 },
   ]);
-  const saved = writeTurnState({ state: resumed }, decision.turn).state;
+  const saved = writeTurnState({ state: resumed }, decision.transition.turn).state;
   expect(saved).not.toHaveProperty("eve.runtime.hitl.approvalState");
   const upgraded = sessionView(storedProjection(saved), saved).turn.hitl!.audit!;
   expect(upgraded.activeCandidates).toEqual({});
@@ -231,11 +231,14 @@ it.each(["allowed", "cancelled"] as const)(
     expect(migrateSessionState(saved)).toEqual(saved);
     const view = sessionView(storedProjection(saved.state), saved.state);
     const decision = beforeStep(view, [{ type: "time", now: 101 }]);
-    expect(decision.turn.suspended.flatMap((step) => step.requests)).toEqual([]);
+    expect(decision.transition.turn.suspended.flatMap((step) => step.requests)).toEqual([]);
     if (outcome === "allowed") {
-      expect(decision.turn.suspended[0]?.approved).toEqual([gated]);
+      expect(decision.transition.turn.suspended[0]?.approved).toEqual([gated]);
       expect(
-        approversOf(decision.turn.suspended[0]!.approved!, { ...view, turn: decision.turn }),
+        approversOf(decision.transition.turn.suspended[0]!.approved!, {
+          ...view,
+          turn: decision.transition.turn,
+        }),
       ).toEqual({ [gated.action.callId]: alice });
     }
   },

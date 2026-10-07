@@ -5,11 +5,7 @@ import type { HarnessSession } from "#harness/types.js";
 import { applyTransition, sessionView } from "#harness/session-machine/commit.js";
 import { readTurnState } from "#harness/session-machine/state.js";
 import type { SessionView } from "#harness/session-machine/view.js";
-import {
-  createTurnStartedEvent,
-  createInputRequestedEvent,
-  createInputResolvedEvent,
-} from "#protocol/message.js";
+import { createTurnStartedEvent, createInputRequestedEvent } from "#protocol/message.js";
 import { foldSession, initialSessionProjection } from "#protocol/session-projection.js";
 import {
   ALICE,
@@ -23,9 +19,8 @@ import {
   message,
   stepResponse,
 } from "#internal/testing/hitl.js";
-import { adaptHumanInput } from "./adapter.js";
 import { HumanInput } from "#internal/testing/hitl-observer.js";
-import { beforeStep, afterStep, type HumanInputDecision } from "./decisions.js";
+import { beforeStep, afterStep } from "./decisions.js";
 import { projectHumanInput } from "./projection.js";
 import { migrateSessionState } from "#harness/session-machine/migrate.js";
 import {
@@ -33,7 +28,6 @@ import {
   LEGACY_GRANTS_KEY,
   STATE_KEY,
 } from "#harness/session-machine/migrate-legacy.js";
-import type { Command } from "./command.js";
 import { reduce } from "./reducer.js";
 
 function view(): SessionView {
@@ -45,12 +39,6 @@ function view(): SessionView {
     usage: { cacheReadTokens: 0, cacheWriteTokens: 0, inputTokens: 12, outputTokens: 3 },
   };
 }
-function decision(v: SessionView, commands: readonly Command[]): HumanInputDecision {
-  return { turn: v.turn, signIns: v.signIns, commands };
-}
-function adapt(commands: readonly Command[], v = view()) {
-  return adaptHumanInput(v, decision(v, commands));
-}
 function session(): HarnessSession {
   return {
     sessionId: "s",
@@ -61,175 +49,9 @@ function session(): HarnessSession {
     limits: { maxInputTokensPerSession: 100 },
   };
 }
-const text: ModelMessage = { role: "user", content: "hello" };
 const route = { childContinuationToken: "child" };
-const effectResult = {
-  name: "github",
-  attemptId: "attempt",
-  hookUrl: "https://example.test/hook",
-  callback: { params: {}, method: "GET" as const },
-};
 
-// Adding a Command variant requires both the adapter switch and this coverage table to change.
-const examples = {
-  publish: {
-    type: "publish",
-    event: createInputRequestedEvent({ ...AT, requests: [approval("a")] }),
-    relayed: true,
-  },
-  appendHistory: { type: "appendHistory", message: text },
-  resumeInput: { type: "resumeInput", input: { message: "next" } },
-  consumeMessage: { type: "consumeMessage" },
-  resumeAuthorization: { type: "resumeAuthorization", requester: ALICE, result: effectResult },
-  forwardAnswer: {
-    type: "forwardAnswer",
-    route,
-    responses: [{ requestId: "a", optionId: "approve" }],
-  },
-  withdrawQuestion: { type: "withdrawQuestion", control: "control", requestId: "a" },
-  waitTurn: { type: "waitTurn" },
-  grantBudget: { type: "grantBudget" },
-  declineBudget: { type: "declineBudget", requestId: "limit" },
-  addNote: { type: "addNote", text: "note" },
-  cancelTurn: { type: "cancelTurn" },
-} satisfies { [T in Command["type"]]: Extract<Command, { type: T }> };
-
-describe("HumanInput adapter", () => {
-  it.each(Object.entries(examples))("maps %s without executing effects", (name, command) => {
-    const original = {
-      ...view(),
-      turn: { ...view().turn, queued: { message: "old", context: ["existing"] } },
-    };
-    const { transition, effects } = adapt([command], original);
-    switch (name) {
-      case "publish":
-        expect(transition.events).toEqual([examples.publish.event]);
-        break;
-      case "appendHistory":
-        expect(transition.commit).toEqual([text]);
-        // Only results of calls a person decided hold later arrivals.
-        expect(transition.turn.hitl?.readsResults).toBeUndefined();
-        break;
-      case "resumeInput":
-        expect(transition.turn.queued).toEqual({ message: "next" });
-        break;
-      case "consumeMessage":
-        expect(transition.turn.queued).toEqual({ message: "old", context: ["existing"] });
-        break;
-      case "addNote":
-        expect(transition.turn.queued).toEqual({ message: "old", context: ["existing", "note"] });
-        break;
-      case "grantBudget":
-        expect(transition.grantBudget).toBe(true);
-        break;
-      case "waitTurn":
-        expect(transition.events.map((event) => event.type)).toEqual(["turn.waiting"]);
-        break;
-      case "cancelTurn":
-      case "declineBudget":
-        expect(transition.events.map((event) => event.type)).toEqual([
-          "turn.cancelled",
-          "session.waiting",
-        ]);
-        break;
-      default:
-        expect(effects).toEqual([command]);
-        return;
-    }
-    expect(effects).toEqual([]);
-  });
-
-  it("publishes and persists the transition before a scripted caller dispatches the ordered outbox", async () => {
-    const adapted = adapt([
-      examples.forwardAnswer,
-      examples.publish,
-      examples.withdrawQuestion,
-      examples.resumeAuthorization,
-    ]);
-    const order: string[] = [];
-    let saved = session();
-    saved = await applyTransition(
-      saved,
-      { ...adapted.transition, turn: { ...adapted.transition.turn, grants: ["proof"] } },
-      async (event) => {
-        order.push(event.type);
-      },
-    );
-    for (const effect of adapted.effects) {
-      expect(readTurnState(saved.state).grants).toEqual(["proof"]);
-      order.push(effect.type);
-    }
-    expect(order).toEqual([
-      "input.requested",
-      "forwardAnswer",
-      "withdrawQuestion",
-      "resumeAuthorization",
-    ]);
-  });
-
-  it("folds input commands and events in original order", () => {
-    const first = examples.publish.event;
-    const second = createInputResolvedEvent({
-      ...AT,
-      resolutions: [{ requestId: "a", kind: "tool-approval", outcome: "approved" }],
-    });
-    const result = adapt([
-      { type: "publish", event: first },
-      examples.resumeInput,
-      examples.addNote,
-      examples.consumeMessage,
-      { type: "publish", event: second },
-      examples.waitTurn,
-    ]);
-    expect(result.transition.events.map((event) => event.type)).toEqual([
-      "input.requested",
-      "input.resolved",
-      "turn.waiting",
-    ]);
-    expect(result.transition.turn.queued).toEqual({ message: "next", context: ["note"] });
-  });
-
-  it("uses the machine cancel after already published resolutions without withdrawing them twice", () => {
-    const request = approval("a");
-    const base = view();
-    const v = {
-      ...base,
-      projection: foldSession(
-        base.projection,
-        createInputRequestedEvent({ ...AT, requests: [request] }),
-      ),
-    };
-    const result = adapt(
-      [
-        {
-          type: "publish",
-          event: createInputResolvedEvent({
-            ...AT,
-            resolutions: [{ requestId: "a", kind: "tool-approval", outcome: "cancelled" }],
-          }),
-        },
-        examples.cancelTurn,
-      ],
-      v,
-    );
-    expect(result.transition.events.map((event) => event.type)).toEqual([
-      "input.resolved",
-      "turn.cancelled",
-      "session.waiting",
-    ]);
-  });
-
-  it("records budget grants through machine apply, leaving the source session untouched", async () => {
-    const original = session();
-    const applied = await applyTransition(
-      original,
-      adapt([examples.grantBudget]).transition,
-      async () => {},
-    );
-    expect(original.state).toBeUndefined();
-    expect(applied.state?.["eve.harness.sessionRuntimeTokenLimit"]).toEqual({ inputTokens: 100 });
-  });
-
+describe("HumanInput boundary transitions", () => {
   it("aggregates multiple suspended steps in suspended-array order, not answer order", () => {
     let v = view();
     for (const [stepIndex, name] of [
@@ -238,25 +60,27 @@ describe("HumanInput adapter", () => {
     ] as const) {
       const response = approvalsRequested([approval(name)], { at: { ...AT, stepIndex } });
       const next = afterStep(v, response);
-      const adapted = adaptHumanInput(v, next);
+      const adapted = next;
       v = {
         ...v,
         turn: adapted.transition.turn,
         projection: adapted.transition.events.reduce(foldSession, v.projection),
-        signIns: next.signIns,
+        signIns: next.transition.signIns ?? v.signIns,
       };
     }
     const next = beforeStep(v, [answers({ b: "approve", a: "approve" })]);
-    const events = adaptHumanInput(v, next).transition.events;
+    const events = next.transition.events;
     expect(
       events
         .filter((event) => event.type === "input.resolved")
         .map((event) => event.data.stepIndex),
     ).toEqual([0, 1]);
     expect(
-      next.turn.suspended.map((step) => step.approved?.map((request) => request.requestId)),
+      next.transition.turn.suspended.map((step) =>
+        step.approved?.map((request) => request.requestId),
+      ),
     ).toEqual([["a"], ["b"]]);
-    expect(next.turn.grants).toEqual(["a", "b"]);
+    expect(next.transition.turn.grants).toEqual(["a", "b"]);
   });
 
   it("reconstructs each held lens solely from persisted TurnState after restart", async () => {
@@ -267,11 +91,7 @@ describe("HumanInput adapter", () => {
       v,
       approvalsRequested([a, b], { approvalKeys: { a: "a-key" }, responsePolicyRequestIds: ["a"] }),
     );
-    const stored = await applyTransition(
-      session(),
-      adaptHumanInput(v, next).transition,
-      async () => {},
-    );
+    const stored = await applyTransition(session(), next.transition, async () => {});
     const restarted = sessionView(
       initialSessionProjection(),
       JSON.parse(JSON.stringify(stored.state)),
@@ -290,13 +110,9 @@ describe("HumanInput adapter", () => {
   it("preserves partial answers and candidate audit across a restart", async () => {
     const v = view();
     const opened = afterStep(v, approvalsRequested([approval("a"), approval("b")]));
-    const waiting = { ...v, turn: opened.turn };
+    const waiting = { ...v, turn: opened.transition.turn };
     const answered = beforeStep(waiting, [answer("approve", "a")]);
-    const stored = await applyTransition(
-      session(),
-      adaptHumanInput(waiting, answered).transition,
-      async () => {},
-    );
+    const stored = await applyTransition(session(), answered.transition, async () => {});
     const restart = sessionView(
       initialSessionProjection(),
       JSON.parse(JSON.stringify(stored.state)),
@@ -306,10 +122,9 @@ describe("HumanInput adapter", () => {
     });
     expect(restart.turn.hitl?.audit?.settlements.a?.approver).toEqual(ALICE);
     const finished = beforeStep(restart, [answer("approve", "b")]);
-    expect(finished.turn.suspended[0]?.approved?.map((request) => request.requestId)).toEqual([
-      "a",
-      "b",
-    ]);
+    expect(
+      finished.transition.turn.suspended[0]?.approved?.map((request) => request.requestId),
+    ).toEqual(["a", "b"]);
   });
 
   it("projects the old coordination batch and grants without changing or deleting legacy records", () => {
@@ -386,21 +201,30 @@ describe("HumanInput adapter", () => {
     };
     const approvedCallId = deploy.action.kind === "tool-call" ? deploy.action.callId : "";
     expect(
-      adapt([{ type: "appendHistory", message: result(approvedCallId) }], held).transition.turn.hitl
-        ?.readsResults,
+      afterStep(held, {
+        type: "actions.settled",
+        at: AT,
+        results: [result(approvedCallId)],
+        approved: {},
+      }).transition.turn.hitl?.readsResults,
     ).toBe(true);
     expect(
-      adapt([{ type: "appendHistory", message: result("task-call") }], held).transition.turn.hitl
-        ?.readsResults,
+      afterStep(
+        {
+          ...held,
+          turn: { ...held.turn, suspended: [{ ...held.turn.suspended[0]!, approved: undefined }] },
+        },
+        { type: "actions.settled", at: AT, results: [result("task-call")] },
+      ).transition.turn.hitl?.readsResults,
     ).toBeUndefined();
   });
 
   it("keeps arrivals behind the result-reading barrier", () => {
     const v = { ...view(), turn: { ...view().turn, hitl: { readsResults: true as const } } };
     const result = beforeStep(v, [message("later")]);
-    expect(result.commands).toEqual([]);
-    expect(result.turn.queued).toEqual({ message: "later", messageAuth: ALICE });
-    expect(result.turn.hitl?.readsResults).toBe(true);
+    expect(result.transition.events).toEqual([]);
+    expect(result.transition.turn.queued).toEqual({ message: "later", messageAuth: ALICE });
+    expect(result.transition.turn.hitl?.readsResults).toBe(true);
   });
   it("preserves candidate settlements after commit/restart without asking the policy again", async () => {
     const base = view();
@@ -408,7 +232,7 @@ describe("HumanInput adapter", () => {
       base,
       approvalsRequested([approval("a")], { responsePolicyRequestIds: ["a"] }),
     );
-    const waiting = { ...base, turn: open.turn };
+    const waiting = { ...base, turn: open.transition.turn };
     const response = answer("approve", "a");
     const projected = projectHumanInput(waiting, waiting.turn.suspended[0]);
     const checks: string[] = [];
@@ -423,11 +247,7 @@ describe("HumanInput adapter", () => {
         verdicts: { [checks[0]!]: { kind: "returned", value: { status: "allowed" } } },
       },
     ]);
-    const saved = await applyTransition(
-      session(),
-      adaptHumanInput(waiting, allowed).transition,
-      async () => {},
-    );
+    const saved = await applyTransition(session(), allowed.transition, async () => {});
     const restart = sessionView(
       initialSessionProjection(),
       JSON.parse(JSON.stringify(saved.state)),
@@ -435,7 +255,7 @@ describe("HumanInput adapter", () => {
     expect(restart.turn.hitl?.audit?.settlements.a?.approver).toEqual(ALICE);
     expect(restart.turn.hitl?.audit?.activeCandidates).toEqual({});
     expect(restart.turn.suspended[0]?.approved?.map((request) => request.requestId)).toEqual(["a"]);
-    expect(beforeStep(restart, [response]).commands).toEqual([]);
+    expect(beforeStep(restart, [response]).transition.events).toEqual([]);
   });
 
   it("settles an originating step without touching a sibling with reused call ids", () => {
@@ -447,10 +267,10 @@ describe("HumanInput adapter", () => {
       [1, b],
     ] as const) {
       const opened = afterStep(v, approvalsRequested([request], { at: { ...AT, stepIndex } }));
-      v = { ...v, turn: opened.turn };
+      v = { ...v, turn: opened.transition.turn };
     }
     const approved = beforeStep(v, [answers({ a: "approve", b: "approve" })]);
-    v = { ...v, turn: approved.turn };
+    v = { ...v, turn: approved.transition.turn };
     const result: ModelMessage = {
       role: "tool",
       content: [
@@ -468,18 +288,18 @@ describe("HumanInput adapter", () => {
       results: [result],
       approved: {},
     });
-    expect(settled.turn.suspended).toHaveLength(1);
-    expect(settled.turn.suspended[0]?.event.stepIndex).toBe(1);
-    expect(settled.turn.suspended[0]?.approved?.[0]?.requestId).toBe("b");
+    expect(settled.transition.turn.suspended).toHaveLength(1);
+    expect(settled.transition.turn.suspended[0]?.event.stepIndex).toBe(1);
+    expect(settled.transition.turn.suspended[0]?.approved?.[0]?.requestId).toBe("b");
   });
 
   it("keeps the result barrier through effect completions and clears it on a whole model response", () => {
     const v = { ...view(), turn: { ...view().turn, hitl: { readsResults: true as const } } };
     const effectsCompleted = afterStep(v, { type: "actions.settled", at: AT, results: [] });
-    expect(effectsCompleted.turn.hitl?.readsResults).toBe(true);
+    expect(effectsCompleted.transition.turn.hitl?.readsResults).toBe(true);
     const modelCompleted = afterStep(v, { at: AT, inputs: [] });
-    expect(modelCompleted.turn.hitl?.readsResults).toBeUndefined();
-    const cancelled = adapt([examples.cancelTurn], v);
+    expect(modelCompleted.transition.turn.hitl?.readsResults).toBeUndefined();
+    const cancelled = beforeStep(v, [{ type: "cancel.requested" }]);
     expect(cancelled.transition.turn.hitl?.readsResults).toBeUndefined();
   });
 
@@ -488,15 +308,15 @@ describe("HumanInput adapter", () => {
     const asked = beforeStep(v, [{ type: "budget.exceeded", at: AT, request: BUDGET_QUESTION }]);
     const waiting = {
       ...v,
-      projection: adaptHumanInput(v, asked).transition.events.reduce(foldSession, v.projection),
+      projection: asked.transition.events.reduce(foldSession, v.projection),
       turn: {
-        ...asked.turn,
+        ...asked.transition.turn,
         hitl: { readsResults: true as const },
         queued: { message: "Answer this after continuing." },
       },
     };
     const answered = beforeStep(waiting, [message("approve")]);
-    const adapted = adaptHumanInput(waiting, answered);
+    const adapted = answered;
     expect(adapted.transition.grantBudget).toBe(true);
     expect(
       openLimit({
@@ -510,7 +330,7 @@ describe("HumanInput adapter", () => {
   it("holds and stops a budget question with one resolution while preserving unrelated state", async () => {
     const v = view();
     const asked = beforeStep(v, [{ type: "budget.exceeded", at: AT, request: BUDGET_QUESTION }]);
-    const first = adaptHumanInput(v, asked);
+    const first = asked;
     const saved = await applyTransition(
       { ...session(), state: { unrelated: 1 } },
       first.transition,
@@ -522,10 +342,7 @@ describe("HumanInput adapter", () => {
       "session-limit",
     );
     expect(first.transition.events.some((event) => event.type === "turn.completed")).toBe(false);
-    const stopped = adaptHumanInput(
-      restarted,
-      beforeStep(restarted, [answer("stop", BUDGET_QUESTION.requestId)]),
-    );
+    const stopped = beforeStep(restarted, [answer("stop", BUDGET_QUESTION.requestId)]);
     expect(
       stopped.transition.events.filter((event) => event.type === "input.resolved"),
     ).toHaveLength(1);
@@ -547,11 +364,11 @@ describe("HumanInput adapter", () => {
       );
       v = {
         ...v,
-        turn: opened.turn,
-        projection: adaptHumanInput(v, opened).transition.events.reduce(foldSession, v.projection),
+        turn: opened.transition.turn,
+        projection: opened.transition.events.reduce(foldSession, v.projection),
       };
     }
-    const cancelled = adaptHumanInput(v, beforeStep(v, [{ type: "cancel.requested" }]));
+    const cancelled = beforeStep(v, [{ type: "cancel.requested" }]);
     const resolutions = cancelled.transition.events.flatMap((event) =>
       event.type === "input.resolved" ? event.data.resolutions.map((item) => item.requestId) : [],
     );
@@ -567,8 +384,8 @@ describe("HumanInput adapter", () => {
   it("queues attributed answers as well as messages behind results", () => {
     const v = { ...view(), turn: { ...view().turn, hitl: { readsResults: true as const } } };
     const result = beforeStep(v, [answer("approve", "a"), message("later")]);
-    expect(result.commands).toEqual([]);
-    expect(result.turn.queued?.attributedInputResponses).toEqual([
+    expect(result.transition.events).toEqual([]);
+    expect(result.transition.turn.queued?.attributedInputResponses).toEqual([
       { auth: ALICE, response: { optionId: "approve", requestId: "a" } },
     ]);
   });
@@ -579,7 +396,7 @@ describe("HumanInput adapter", () => {
       { type: "relayed.requested", at: AT, requests: [approval("child")], route },
       { type: "delivery.received", responses: [{ requestId: "child", optionId: "approve" }] },
     ]);
-    const result = adaptHumanInput(v, next);
+    const result = next;
     expect(result.effects).toEqual([
       { type: "forwardAnswer", route, responses: [{ requestId: "child", optionId: "approve" }] },
     ]);
@@ -615,24 +432,24 @@ describe("HumanInput adapter", () => {
   it("projects saved-step cancel closures without re-publishing them on rollback cleanup", () => {
     const v = view();
     const held = afterStep(v, approvalsRequested([approval("a")]));
-    const saved = { ...v, turn: held.turn };
+    const saved = { ...v, turn: held.transition.turn };
     const carried = beforeStep(saved, [{ type: "cancel.replayed" }]);
-    expect(carried.commands.some((command) => command.type === "publish")).toBe(false);
-    expect(carried.turn.suspended[0]?.requests).toEqual([]);
-    expect(carried.turn.suspended[0]?.messages).toEqual(stepResponse([approval("a")]));
-    const cleanup = beforeStep({ ...saved, turn: carried.turn }, [{ type: "cancel.requested" }]);
-    expect(
-      cleanup.commands.filter(
-        (command) => command.type === "publish" && command.event.type === "input.resolved",
-      ),
-    ).toEqual([]);
-    expect(cleanup.turn.suspended).toEqual([]);
+    expect(carried.transition.events.length > 0).toBe(false);
+    expect(carried.transition.turn.suspended[0]?.requests).toEqual([]);
+    expect(carried.transition.turn.suspended[0]?.messages).toEqual(stepResponse([approval("a")]));
+    const cleanup = beforeStep({ ...saved, turn: carried.transition.turn }, [
+      { type: "cancel.requested" },
+    ]);
+    expect(cleanup.transition.events.filter((event) => event.type === "input.resolved")).toEqual(
+      [],
+    );
+    expect(cleanup.transition.turn.suspended).toEqual([]);
   });
   it("includes a new message immediately after a cancelled approval turn (#4396)", async () => {
     const initial = view();
     const parked = afterStep(initial, approvalsRequested([approval("deploy")]));
-    const waiting = { ...initial, turn: parked.turn };
-    const cancelled = adaptHumanInput(waiting, beforeStep(waiting, [{ type: "cancel.requested" }]));
+    const waiting = { ...initial, turn: parked.transition.turn };
+    const cancelled = beforeStep(waiting, [{ type: "cancel.requested" }]);
     let projection = initial.projection;
     const saved = await applyTransition(session(), cancelled.transition, async (event) => {
       projection = foldSession(projection, event);
@@ -648,9 +465,9 @@ describe("HumanInput adapter", () => {
   it("keeps approved work ahead of the next message, unlike a cancelled approval (#4396)", () => {
     const initial = view();
     const parked = afterStep(initial, approvalsRequested([approval("deploy")]));
-    const waiting = { ...initial, turn: parked.turn };
+    const waiting = { ...initial, turn: parked.transition.turn };
     const approved = beforeStep(waiting, [answer("approve", "deploy")]);
-    const input = HumanInput.fromView({ ...waiting, turn: approved.turn });
+    const input = HumanInput.fromView({ ...waiting, turn: approved.transition.turn });
     expect(input.next()).toEqual({ run: "approved" });
     expect(input.approverOfRequest("deploy")?.principalId).toBe("alice");
   });
@@ -663,14 +480,16 @@ describe("HumanInput adapter", () => {
         responsePolicyRequestIds: ["deploy"],
       }),
     );
-    const waiting = { ...v, turn: opened.turn };
+    const waiting = { ...v, turn: opened.transition.turn };
     const pending = beforeStep(waiting, [answer("approve", "deploy")], () => undefined);
-    expect(Object.keys(pending.turn.hitl?.audit?.activeCandidates ?? {})).toHaveLength(1);
-    const cancelled = beforeStep({ ...waiting, turn: pending.turn }, [
+    expect(Object.keys(pending.transition.turn.hitl?.audit?.activeCandidates ?? {})).toHaveLength(
+      1,
+    );
+    const cancelled = beforeStep({ ...waiting, turn: pending.transition.turn }, [
       { type: "cancel.requested" },
     ]);
-    expect(cancelled.turn.hitl?.audit?.activeCandidates).toEqual({});
-    expect(cancelled.turn.hitl?.audit?.candidateHistory).toEqual([
+    expect(cancelled.transition.turn.hitl?.audit?.activeCandidates).toEqual({});
+    expect(cancelled.transition.turn.hitl?.audit?.candidateHistory).toEqual([
       expect.objectContaining({ status: "stale", reason: "Cancelled." }),
     ]);
   });

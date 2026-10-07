@@ -6,7 +6,7 @@ import { PendingAuthorizationResultKey } from "#harness/authorization.js";
 import type { Step } from "#harness/step/context.js";
 import type { InputResponse } from "#shared/input.js";
 import type { ToolInputResponseResponder } from "#tools/definition.js";
-import { adaptHumanInput, type EffectCommand } from "./adapter.js";
+import type { EffectCommand } from "./command.js";
 import { beforeStep, type BeforeStepArrival, type HumanInputDecision } from "./decisions.js";
 
 type EffectOf<T extends EffectCommand["type"]> = Extract<EffectCommand, { readonly type: T }>;
@@ -77,7 +77,7 @@ export async function dispatchHumanInputEffects(
 /** Apply the decision before executing any effect; feed outcomes to the next pure decision. */
 export async function applyHumanInputDecision(
   step: Pick<Step, "view" | "apply" | "ctx">,
-  decision: HumanInputDecision,
+  decision: Pick<HumanInputDecision, "transition" | "effects" | "authorizations">,
   handlers?: HumanInputEffectHandlers,
   history?: {
     readonly commit?: readonly ModelMessage[];
@@ -85,7 +85,7 @@ export async function applyHumanInputDecision(
     readonly delivery?: DeliverHookPayload;
   },
 ): Promise<void> {
-  const adapted = adaptHumanInput(step.view(), decision);
+  const adapted = decision;
   await step.apply(
     history?.commit === undefined
       ? adapted.transition
@@ -113,7 +113,7 @@ export async function applyHumanInputDecision(
   installAuthorizations(step.ctx, decision.authorizations ?? []);
   if (arrivals.length === 0) return;
   const completion = beforeStep(step.view(), arrivals);
-  const completed = adaptHumanInput(step.view(), completion);
+  const completed = completion;
   // Transport completions are facts, not more transport intents.
   if (completed.effects.length > 0)
     throw new TypeError("Human input effect completion produced another effect batch.");

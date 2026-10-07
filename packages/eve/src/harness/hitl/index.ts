@@ -213,7 +213,7 @@ export { beforeStep, afterStep } from "./decisions.js";
 
 export { applyHumanInputDecision } from "./effects.js";
 
-export { adaptHumanInput, type EffectCommand } from "./adapter.js";
+export type { EffectCommand } from "./command.js";
 export { dispatchHumanInputEffects, effectHandlers } from "./effects.js";
 export type { BeforeStepArrival } from "./decisions.js";
 

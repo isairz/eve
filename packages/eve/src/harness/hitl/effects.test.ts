@@ -6,7 +6,7 @@ import { PendingAuthorizationResultKey } from "#harness/authorization.js";
 import { applyTransition, sessionView } from "#harness/session-machine/commit.js";
 import { initialSessionProjection } from "#protocol/session-projection.js";
 import type { HarnessSession } from "#harness/types.js";
-import type { EffectCommand } from "./adapter.js";
+import type { EffectCommand } from "./command.js";
 import { beforeStep } from "./decisions.js";
 import {
   applyHumanInputDecision,
@@ -132,9 +132,8 @@ describe("HumanInput ordered effects", () => {
     await applyHumanInputDecision(
       b.step,
       {
-        turn: { ...b.step.view().turn, grants: ["proof"] },
-        signIns: [],
-        commands: [forward, resume],
+        transition: { turn: { ...b.step.view().turn, grants: ["proof"] }, signIns: [], events: [] },
+        effects: [forward, resume],
       },
       h,
     );
@@ -158,9 +157,12 @@ describe("HumanInput ordered effects", () => {
       applyHumanInputDecision(
         b.step,
         {
-          turn: { ...b.step.view().turn, grants: ["proof"] },
-          signIns: [],
-          commands: [forward, withdraw],
+          transition: {
+            turn: { ...b.step.view().turn, grants: ["proof"] },
+            signIns: [],
+            events: [],
+          },
+          effects: [forward, withdraw],
         },
         h,
       ),

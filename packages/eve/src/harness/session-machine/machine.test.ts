@@ -21,7 +21,6 @@ import { createSessionLimitContinuationRequest } from "#harness/hitl/budget-ques
 import { grantedApprovalKeys } from "#harness/hitl/projection.js";
 import { parkOnApprovals as parkOnApprovalsTransition } from "#internal/testing/session-machine.js";
 import { beforeStep, afterStep } from "#harness/hitl/decisions.js";
-import { adaptHumanInput } from "#harness/hitl/adapter.js";
 import { arrivalsOf } from "#harness/hitl/input-arrival.js";
 import { deliver } from "#harness/hitl/intake.js";
 import { applyTransition, sessionView, type Transition } from "./commit.js";
@@ -141,17 +140,14 @@ async function respond(machine: Machine, input: StepInput) {
       stepInput: delivered.input,
     }),
   );
-  await machine.apply(adaptHumanInput(ready, decision).transition);
+  await machine.apply(decision.transition);
   return decision;
 }
 
 function requestLimit(view: ReturnType<Machine["view"]>, input: { request: InputRequest }) {
-  return adaptHumanInput(
-    view,
-    beforeStep(view, [
-      { type: "budget.exceeded", at: turnPosition(view.projection), request: input.request },
-    ]),
-  ).transition;
+  return beforeStep(view, [
+    { type: "budget.exceeded", at: turnPosition(view.projection), request: input.request },
+  ]).transition;
 }
 
 /** A turn whose model step called `callIds`, each needing approval. */
@@ -215,7 +211,7 @@ describe("session machine", () => {
     const decision = await respond(machine, {
       inputResponses: [{ optionId: "approve", requestId: "approval-call-1" }],
     });
-    expect(decision.commands.some((command) => command.type === "waitTurn")).toBe(false);
+    expect(decision.transition.events.some((event) => event.type === "turn.waiting")).toBe(false);
     expect(machine.eventsSince(before)).toEqual([
       expect.objectContaining({
         data: expect.objectContaining({
@@ -265,7 +261,9 @@ describe("session machine", () => {
       inputResponses: [{ optionId: "approve", requestId: "approval-call-1" }],
     });
     expect(
-      partial.turn.hitl?.steps?.[hitlStepKey(partial.turn.suspended[0]!.event)]?.answers,
+      partial.transition.turn.hitl?.steps?.[
+        hitlStepKey(partial.transition.turn.suspended[0]!.event)
+      ]?.answers,
     ).toEqual({
       "approval-call-1": { optionId: "approve", requestId: "approval-call-1" },
     });
@@ -284,7 +282,7 @@ describe("session machine", () => {
     await parkOnApprovals(machine, "call-1");
 
     const decision = await respond(machine, { message: "Actually, what time is it?" });
-    expect(decision.commands.some((command) => command.type === "waitTurn")).toBe(false);
+    expect(decision.transition.events.some((event) => event.type === "turn.waiting")).toBe(false);
     expect(resolutions(decision).map((input) => input.outcome)).toEqual(["ignored"]);
     expect(callStatus(machine.projection, "call-1")).toBe("rejected");
     await machine.apply(receive(machine.view(), { message: "Actually, what time is it?" }));
@@ -354,7 +352,7 @@ describe("session machine", () => {
 
     // Nothing else can run: the turn holds for the open approval.
     const parked = await respond(machine, {});
-    expect(parked.turn.suspended[0]?.requests).toHaveLength(1);
+    expect(parked.transition.turn.suspended[0]?.requests).toHaveLength(1);
     expect(machine.projection.activeTurnId).toBe("turn_0");
 
     await respond(machine, {
@@ -422,17 +420,14 @@ describe("session machine", () => {
     };
 
     await machine.apply(
-      adaptHumanInput(
-        machine.view(),
-        afterStep(machine.view(), {
-          type: "authorization.required",
-          at: position,
-          callIds: ["call-1"],
-          challenges: [challenge],
-          messages: [],
-          requester: null,
-        }),
-      ).transition,
+      afterStep(machine.view(), {
+        type: "authorization.required",
+        at: position,
+        callIds: ["call-1"],
+        challenges: [challenge],
+        messages: [],
+        requester: null,
+      }).transition,
     );
     await machine.apply(hold(machine.view(), { on: "input" }));
     expect(machine.eventsSince(0).some((event) => event.type === "action.result")).toBe(false);
@@ -535,7 +530,7 @@ describe("answers", () => {
 
     const decision = await respond(machine, { message: "Approve" });
 
-    expect(decision.commands.some((command) => command.type === "consumeMessage")).toBe(true);
+    expect(decision.consumedMessage).toBe(true);
     expect(resolutions(decision)[0]?.outcome).toBe("approved");
   });
 
@@ -619,11 +614,7 @@ describe("answers", () => {
         const decision = await respond(machine, {
           inputResponses: [{ optionId, requestId: request.requestId }],
         });
-        expect(
-          decision.commands.some(
-            (command) => command.type === (granted ? "grantBudget" : "declineBudget"),
-          ),
-        ).toBe(true);
+        expect(granted ? decision.transition.grantBudget === true : decision.cancelled).toBe(true);
         expect(machine.projection.inputs[request.requestId]?.status).toBe("settled");
       }
     });
@@ -715,9 +706,7 @@ function park(
 }
 
 function resolutions(decision: ReturnType<typeof beforeStep>) {
-  return decision.commands.flatMap((command) =>
-    command.type === "publish" && command.event.type === "input.resolved"
-      ? command.event.data.resolutions
-      : [],
+  return decision.transition.events.flatMap((event) =>
+    event.type === "input.resolved" ? event.data.resolutions : [],
   );
 }

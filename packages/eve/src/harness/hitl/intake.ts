@@ -216,7 +216,11 @@ export async function acceptHumanInput(
   }
   const requestedChecks = policyChecksBeforeStep(view, arrivals);
   const dry = beforeStep(view, arrivals, () => undefined);
-  const readyView = { ...view, turn: dry.turn, signIns: dry.signIns };
+  const readyView = {
+    ...view,
+    turn: dry.transition.turn,
+    signIns: dry.transition.signIns ?? view.signIns,
+  };
   const existing = new Set(Object.keys(starting.turn.hitl?.audit?.activeCandidates ?? {}));
   const byId = new Map(
     readyView.turn.suspended
@@ -245,9 +249,7 @@ export async function acceptHumanInput(
     })),
   ];
   const decision = beforeStep(view, checked, (check) => verdicts[check.candidateId]);
-  const resolved = decision.commands.flatMap((command) =>
-    command.type === "publish" && command.event.type === "input.resolved" ? [command.event] : [],
-  );
+  const resolved = decision.transition.events.filter((event) => event.type === "input.resolved");
   for (const event of resolved) {
     await step.instrumentation?.publishInputResolutions({
       batch: {
@@ -280,11 +282,7 @@ export async function acceptHumanInput(
     });
   }
   await applyHumanInputDecision(step, decision);
-  if (
-    decision.commands.some(
-      (command) => command.type === "declineBudget" || command.type === "cancelTurn",
-    )
-  )
+  if (decision.cancelled)
     return { kind: "stop", result: { cancelled: true, next: null, session: step.session } };
 
   if (requestedChecks.some((check) => !existing.has(check.candidateId))) {
@@ -295,15 +293,12 @@ export async function acceptHumanInput(
   for (const parked of step.view().turn.suspended) {
     if ((parked.approved?.length ?? 0) > 0) await restoreTools(parked);
   }
-  const queuedAfterBudget = decision.commands.some((command) => command.type === "grantBudget")
-    ? step.view().turn.queued
-    : undefined;
+  const queuedAfterBudget =
+    decision.transition.grantBudget === true ? step.view().turn.queued : undefined;
   if (queuedAfterBudget !== undefined) {
     await step.apply({ turn: { ...step.view().turn, queued: undefined }, events: [] });
   }
-  const consumedMessage =
-    queuedAfterBudget === undefined &&
-    decision.commands.some((command) => command.type === "consumeMessage");
+  const consumedMessage = queuedAfterBudget === undefined && decision.consumedMessage;
   const answered = resolved.some(
     (event) =>
       event.data.resolutions.some((resolution) => resolution.kind === "tool-approval") &&
