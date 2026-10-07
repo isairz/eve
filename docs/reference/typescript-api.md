@@ -61,6 +61,8 @@ Tool-wide authoring helpers and types such as `defineTool`, `defineWorkflowTool`
 
 `AgentReasoningDefinition` is exported from `eve` for the top-level `defineAgent({ reasoning })` setting. `AgentLimitsDefinition` is exported for `defineAgent({ limits })`. `AgentWorkflowDefinition`, `AgentWorkflowRetentionDefinition`, and `AgentWorkflowWorldDefinition` are exported from `eve` for the `defineAgent({ experimental: { workflow } })` config shape. `WebSearchToolInput` and `WebSearchProvider` are exported from `eve/tools/web_search`.
 
+`webSearch({ provider })` selects `"exa"`, `"parallel"`, or `"browserbase"` for AI Gateway search using the Gateway model's credentials. Direct provider models keep their native search implementation when supported. See [Built-in tools](../concepts/built-in-tools#web_search) for setup and provider behavior.
+
 `defineInstructions` accepts `{ content: string, role?: "system" | "user" }`; omitted `role` means `"system"`. Its `eve/instructions` version of `defineDynamic` accepts only `session.started` and `turn.started` handlers returning `defineInstructions(...)` or `null`. The legacy `{ markdown: string }` definition remains available as a deprecated system-role form.
 
 The `eve/connections` version of `defineDynamic` accepts `session.started` and
@@ -141,10 +143,10 @@ Tool definitions accept `availableInSubagents: false` to restrict the tool to to
 | `eve/instrumentation`                                                             | `defineInstrumentation`, `disableInstrumentation`, `isChannel`, lifecycle provider types                                       |
 | `eve/instrumentation/otel`                                                        | `otel`, `otelIntegration`, `localTraces`, `agentRuns`, OpenTelemetry policy types                                              |
 | `eve/local-dev`                                                                   | `getLocalDevCapability`, `LocalDevCapability`                                                                                  |
-| [`eve/models`](../guides/evaluate)                                                | Automatic model selection with `auto`                                                                                          |
+| [`eve/models`](../guides/decide)                                                  | Automatic model selection with `auto`                                                                                          |
 | `eve/models/openai`                                                               | `openai`, `chatgpt`, deprecated `experimental_chatgpt`                                                                         |
 | `eve/models/anthropic`                                                            | `anthropic`                                                                                                                    |
-| [`eve/ai`](../guides/evaluate#evaluate-inside-a-tool)                             | Standalone `evaluate`                                                                                                          |
+| [`eve/ai`](../guides/decide#decide-inside-a-tool)                                 | Standalone `decide`                                                                                                            |
 | `eve/evals`                                                                       | `defineEval`, `defineEvalConfig`, `mockModel`, eval types                                                                      |
 | `eve/evals/expect`                                                                | `includes`, `equals`, `matches`, `similarity`                                                                                  |
 | `eve/evals/reporters`                                                             | `Braintrust`, `JUnit`, `EvalReporter`                                                                                          |

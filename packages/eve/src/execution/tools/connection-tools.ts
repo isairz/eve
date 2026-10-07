@@ -162,27 +162,31 @@ export function resolveConnectionTools(): DynamicToolSet | null {
     .filter((approval): approval is Approval => approval !== undefined);
 
   return {
-    [CONNECTION_SEARCH_TOOL_NAME]: defineTool({
-      description: CONNECTION_SEARCH_DESCRIPTION,
-      inputSchema: CONNECTION_SEARCH_INPUT_SCHEMA,
-      execute: defineDurableCallback({ callback: searchConnectionTools, closure: {} }),
-      label: {
-        start: defineDurableCallback({ callback: connectionSearchLabel, closure: {} }),
-      },
-    }),
-    [CONNECTION_EXECUTE_TOOL_NAME]: defineTool({
-      description: CONNECTION_EXECUTE_DESCRIPTION,
-      inputSchema: CONNECTION_EXECUTE_INPUT_SCHEMA,
-      execute: defineDurableCallback({ callback: executeConnectionTool, closure: {} }),
-      label: {
-        start: defineDurableCallback({ callback: connectionToolLabel, closure: {} }),
-      },
-      toModelOutput: defineDurableCallback({
-        callback: (_closure: object, output: unknown) => connectionToolModelOutput(output),
-        closure: {},
+    [CONNECTION_SEARCH_TOOL_NAME]: frameworkTool(
+      defineTool({
+        description: CONNECTION_SEARCH_DESCRIPTION,
+        inputSchema: CONNECTION_SEARCH_INPUT_SCHEMA,
+        execute: defineDurableCallback({ callback: searchConnectionTools, closure: {} }),
+        label: {
+          start: defineDurableCallback({ callback: connectionSearchLabel, closure: {} }),
+        },
       }),
-      ...connectionExecuteApproval(approvals),
-    }),
+    ),
+    [CONNECTION_EXECUTE_TOOL_NAME]: frameworkTool(
+      defineTool({
+        description: CONNECTION_EXECUTE_DESCRIPTION,
+        inputSchema: CONNECTION_EXECUTE_INPUT_SCHEMA,
+        execute: defineDurableCallback({ callback: executeConnectionTool, closure: {} }),
+        label: {
+          start: defineDurableCallback({ callback: connectionToolLabel, closure: {} }),
+        },
+        toModelOutput: defineDurableCallback({
+          callback: (_closure: object, output: unknown) => connectionToolModelOutput(output),
+          closure: {},
+        }),
+        ...connectionExecuteApproval(approvals),
+      }),
+    ),
   };
 }
 
@@ -350,6 +354,8 @@ async function executeConnectionTool(
   const auth = createAuthorizationExecution();
   if (scoped !== undefined) await auth.complete(scoped);
   const client = registry.getClient(connection.connectionName);
+  // A client that connected anonymously before sign-in must reconnect with the new token.
+  if (scoped !== undefined && auth.isJustAuthorized(scoped)) await client.close();
 
   let tools: readonly ConnectionToolMetadata[];
   try {
@@ -463,7 +469,10 @@ async function completePendingAuthorizations(
   for (const connection of connections) {
     if (!results.some((result) => result.name === connection.connectionName)) continue;
     const scoped = await resolveInteractiveAuthorization(registry, connection.connectionName);
-    if (scoped !== undefined) await auth.complete(scoped);
+    if (scoped === undefined) continue;
+    await auth.complete(scoped);
+    // A client that connected anonymously before sign-in must reconnect with the new token.
+    if (auth.isJustAuthorized(scoped)) await registry.getClient(connection.connectionName).close();
   }
 }
 
@@ -505,3 +514,4 @@ function requireConnection(
       : `Connection "${name}" is not available. Available connections: ${available.join(", ")}.`,
   );
 }
+import { frameworkTool } from "#tools/provided/framework-tool.js";

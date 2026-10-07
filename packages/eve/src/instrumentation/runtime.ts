@@ -12,7 +12,8 @@ import type {
   InstrumentationTraceSeed,
   InstrumentationTurnStartedEvent,
 } from "#instrumentation/lifecycle.js";
-import { attemptIdempotencyKey } from "#instrumentation/lifecycle.js";
+import { attemptIdempotencyKey, toolCallIdempotencyKey } from "#instrumentation/lifecycle.js";
+import { findInstrumentationActionScopeForCall } from "#instrumentation/state.js";
 import {
   buildTelemetryRuntimeContext,
   snapshotInstrumentationRuntimeContext,
@@ -28,7 +29,7 @@ import {
   publishInputResolutions,
   type CreateInstrumentationHandleEventInput,
 } from "#instrumentation/native-events.js";
-import type { ResolvedInputBatch } from "#harness/input-requests.js";
+import type { ResolvedInputBatch } from "#harness/input-request-resolution.js";
 import type { HandleEventFn } from "#harness/types.js";
 import {
   instrumentChannelDelivery,
@@ -96,6 +97,7 @@ export interface InstrumentationStepScope<TSession> {
     >,
   ) => HandleEventFn | undefined;
   readonly prepareAttempt: (input: {
+    readonly isFrameworkTool?: (name: string) => boolean;
     readonly attemptIndex: number;
     readonly runtimeContext?: Readonly<Record<string, unknown>>;
     readonly stepIndex: number;
@@ -173,6 +175,15 @@ export interface SessionInstrumentation {
 }
 
 export interface ExecutionInstrumentation {
+  readonly instrumentTaskToolCall: (input: {
+    readonly callId: string;
+    readonly toolName: "task_wait" | "task_cancel";
+    readonly startedAtMs: number;
+    readonly completedAtMs: number;
+    readonly input: unknown;
+    readonly output?: unknown;
+    readonly failed?: boolean;
+  }) => Promise<void>;
   readonly createHandleEvent: (input: {
     readonly handleEvent?: HandleEventFn;
     readonly turnId?: string;
@@ -435,6 +446,7 @@ export function bindInstrumentationRuntime(
                 hooks,
                 runtime.runInContext,
                 attemptInput.runtimeContext,
+                attemptInput.isFrameworkTool,
               );
               return {
                 complete: () =>
@@ -496,6 +508,31 @@ export function bindInstrumentationRuntime(
     };
   };
   return {
+    async instrumentTaskToolCall(input) {
+      const correlation = findInstrumentationActionScopeForCall(
+        boundSession.sessionId,
+        input.callId,
+      );
+      if (correlation === undefined) return;
+      const hooks = bindHooks(readSessionContext());
+      const scope = correlation.scope;
+      const idempotencyKey = toolCallIdempotencyKey(scope, input.callId, 0);
+      await runtime.runInContext(
+        {
+          type: "tool.call",
+          callId: input.callId,
+          idempotencyKey,
+          scope,
+          toolName: input.toolName,
+          startedAtMs: input.startedAtMs,
+          frameworkTool: true,
+          input: (hooks.capturesInputs ?? hooks.capturesContent) ? input.input : undefined,
+          completedAtMs: input.completedAtMs,
+          failed: input.failed,
+        },
+        () => Promise.resolve(),
+      );
+    },
     createHandleEvent: (input) => {
       const sessionContext = readSessionContext();
       return createInstrumentationHandleEvent({

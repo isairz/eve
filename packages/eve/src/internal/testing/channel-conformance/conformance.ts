@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   type ContractRule,
-  type HitlRule,
-  hitlContract,
-  hitlContractSections,
+  type ContractRuleName,
+  channelContract,
+  channelContractSections,
 } from "#internal/testing/channel-conformance/contract.js";
 import {
   type ChannelCapability,
@@ -52,7 +52,10 @@ const answeredPromptRules = {
     cleared: "answering a question by text clears its buttons",
     named: "answering a question by text names who answered on the question",
   },
-} as const satisfies Record<string, { readonly cleared: HitlRule; readonly named: HitlRule }>;
+} as const satisfies Record<
+  string,
+  { readonly cleared: ContractRuleName; readonly named: ContractRuleName }
+>;
 
 type AnsweredPrompt = keyof typeof answeredPromptRules;
 
@@ -60,7 +63,7 @@ type AnsweredPrompt = keyof typeof answeredPromptRules;
 function staleAnsweredPrompts(
   reason: string,
   groups: readonly AnsweredPrompt[],
-): Partial<Record<HitlRule, BrokenCell>> {
+): Partial<Record<ContractRuleName, BrokenCell>> {
   return Object.fromEntries(
     groups
       .flatMap((group) => Object.values(answeredPromptRules[group]))
@@ -78,7 +81,7 @@ function staleAnsweredPrompts(
 function unnamedAnsweredPrompts(
   reason: string,
   groups: readonly AnsweredPrompt[],
-): Partial<Record<HitlRule, BrokenCell>> {
+): Partial<Record<ContractRuleName, BrokenCell>> {
   return Object.fromEntries(
     groups.map((group) => [
       answeredPromptRules[group].named,
@@ -90,8 +93,8 @@ function unnamedAnsweredPrompts(
 /** Presses reach a response policy without the presser's identity, so eve refuses them all. */
 function anonymousPresses(
   reason: string,
-  rules: readonly HitlRule[],
-): Partial<Record<HitlRule, BrokenCell>> {
+  rules: readonly ContractRuleName[],
+): Partial<Record<ContractRuleName, BrokenCell>> {
   return Object.fromEntries(
     rules.map((rule) => [
       rule,
@@ -107,15 +110,17 @@ interface ConformanceChannel {
    * whose behavior varies by conversation; the shared column covers the rest.
    */
   readonly dm?: true;
-  readonly broken?: Partial<Record<HitlRule, BrokenCell>>;
+  readonly broken?: Partial<Record<ContractRuleName, BrokenCell>>;
   /** Rules this client deliberately doesn't offer, with why, beyond what its capabilities rule out. */
-  readonly unsupported?: Partial<Record<HitlRule, string>>;
+  readonly unsupported?: Partial<Record<ContractRuleName, string>>;
 }
 
 const SIGN_IN_NOT_SHOWN = /Timed out waiting for the bot to show/u;
 
 /** The channel has no default `authorization.required` renderer, so a sign-in shows nothing. */
-function noSignInRenderer(...rules: HitlRule[]): Partial<Record<HitlRule, BrokenCell>> {
+function noSignInRenderer(
+  ...rules: ContractRuleName[]
+): Partial<Record<ContractRuleName, BrokenCell>> {
   return Object.fromEntries(
     rules.map((rule) => [
       rule,
@@ -137,7 +142,7 @@ const SIGN_IN_ONLY_IN_DMS = Object.fromEntries(
       symptom: SIGN_IN_NOT_SHOWN,
     },
   ]),
-) satisfies Partial<Record<HitlRule, BrokenCell>>;
+) satisfies Partial<Record<ContractRuleName, BrokenCell>>;
 
 const UNNAMED_RESPONDER =
   "a resolved prompt doesn't say who answered; input.resolved carries no responder";
@@ -159,6 +164,7 @@ const DISCORD_BROKEN = {
       "the requester pressing Approve on a requester-only approval runs the tool",
       "another person pressing Approve on a requester-only approval leaves it pending",
       "another person pressing Cancel on a requester-only approval leaves it pending",
+      "another person pressing Approve on an open approval runs the tool",
     ],
   ),
   ...noSignInRenderer(
@@ -169,6 +175,11 @@ const DISCORD_BROKEN = {
   ),
 };
 
+const DISCORD_UNSUPPORTED = {
+  "a file sent earlier in the conversation is still there on a later message":
+    "each slash command starts its own session, so no later message shares one with the file",
+} satisfies Partial<Record<ContractRuleName, string>>;
+
 const SLACK_BROKEN = {
   ...staleAnsweredPrompts(
     "only the button interaction handler edits a question; a typed answer leaves it",
@@ -178,11 +189,11 @@ const SLACK_BROKEN = {
     reason: "the card loses its buttons after a typed approval but doesn't say who approved",
     symptom: /the answered prompt never names who answered/,
   },
-} satisfies Partial<Record<HitlRule, BrokenCell>>;
+} satisfies Partial<Record<ContractRuleName, BrokenCell>>;
 
 const TEAMS_BROKEN = {
   ...unnamedAnsweredPrompts(UNNAMED_RESPONDER, ["approvalText", "questionPress", "questionText"]),
-} satisfies Partial<Record<HitlRule, BrokenCell>>;
+} satisfies Partial<Record<ContractRuleName, BrokenCell>>;
 
 /** The sign-in prompt, link included, goes to the whole thread. */
 const SIGN_IN_LINK_POSTED_TO_THREAD = {
@@ -190,7 +201,7 @@ const SIGN_IN_LINK_POSTED_TO_THREAD = {
     reason: "the sign-in prompt, link included, is posted to the whole thread",
     symptom: /a message everyone sees carried the sign-in (link|code)/u,
   },
-} satisfies Partial<Record<HitlRule, BrokenCell>>;
+} satisfies Partial<Record<ContractRuleName, BrokenCell>>;
 
 const TELEGRAM_BROKEN = {
   ...unnamedAnsweredPrompts(UNNAMED_RESPONDER, [
@@ -208,8 +219,8 @@ const WEB_CHAT_SINGLE_PERSON =
   "one person answers in their own browser tab; there's nobody else to tell";
 
 /**
- * Every first-party channel's and client's place in the HITL contract, keyed by
- * the directory whose `hitl-conformance.integration.test.ts` runs it (`web-chat`
+ * Every first-party channel's and client's place in the channel contract, keyed by
+ * the directory whose `conformance.integration.test.ts` runs it (`web-chat`
  * runs from `test/browser`, since it needs a browser). Each cell is one of:
  *
  * - must pass;
@@ -219,14 +230,21 @@ const WEB_CHAT_SINGLE_PERSON =
  *   the rule fails with the recorded `symptom`, so a fix or an unrelated
  *   failure (such as harness breakage) both turn it red.
  */
-const hitlConformance = {
+const channelConformance = {
   "chat-sdk": [
     { driver: chatSdkDriver, broken: { ...CHAT_SDK_BROKEN, ...SIGN_IN_ONLY_IN_DMS } },
     { driver: chatSdkTextDriver },
   ],
   "chat-sdk-dm": [{ dm: true, driver: () => chatSdkDriver("private"), broken: CHAT_SDK_BROKEN }],
-  discord: [{ driver: discordDriver, broken: DISCORD_BROKEN }],
-  "discord-dm": [{ dm: true, driver: () => discordDriver("private"), broken: DISCORD_BROKEN }],
+  discord: [{ driver: discordDriver, broken: DISCORD_BROKEN, unsupported: DISCORD_UNSUPPORTED }],
+  "discord-dm": [
+    {
+      dm: true,
+      driver: () => discordDriver("private"),
+      broken: DISCORD_BROKEN,
+      unsupported: DISCORD_UNSUPPORTED,
+    },
+  ],
   github: [
     {
       driver: githubDriver,
@@ -276,11 +294,7 @@ const hitlConformance = {
       },
     },
   ],
-  twilio: [
-    {
-      driver: twilioDriver,
-    },
-  ],
+  twilio: [{ driver: twilioDriver }],
   "web-chat": [
     {
       driver: webChatDriver,
@@ -309,16 +323,17 @@ type Cell =
   | { readonly kind: "broken"; readonly broken: BrokenCell };
 
 const CAPABILITY_NAMES: Record<ChannelCapability, string> = {
+  attachments: "files a person can send",
   "another-person": "second person who can act",
   buttons: "buttons a person can press",
   "text-replies": "plain-text replies",
 };
 
-function variesByConversation(rule: (typeof hitlContract)[number]): boolean {
+function variesByConversation(rule: (typeof channelContract)[number]): boolean {
   return (rule as ContractRule).variesByConversation === true;
 }
 
-function cellOf(entry: ConformanceChannel, rule: (typeof hitlContract)[number]): Cell {
+function cellOf(entry: ConformanceChannel, rule: (typeof channelContract)[number]): Cell {
   if (entry.dm === true && !variesByConversation(rule)) {
     return {
       kind: "unsupported",
@@ -346,16 +361,16 @@ function cellOf(entry: ConformanceChannel, rule: (typeof hitlContract)[number]):
 }
 
 /**
- * Declares the HITL contract cells for one channel directory. Each channel gets
+ * Declares the channel contract cells for one channel directory. Each channel gets
  * its own test file because conversations can't overlap within a process, and
  * separate files let vitest run channels in parallel workers.
  */
-export function describeHitlConformance(channel: keyof typeof hitlConformance): void {
-  const entries: readonly ConformanceChannel[] = hitlConformance[channel];
+export function describeChannelConformance(channel: keyof typeof channelConformance): void {
+  const entries: readonly ConformanceChannel[] = channelConformance[channel];
   describe.each(entries.map((entry) => ({ entry, name: entry.driver().name })))(
-    "$name HITL contract",
+    "$name channel contract",
     ({ entry }) => {
-      for (const rule of hitlContract) {
+      for (const rule of channelContract) {
         const cell = cellOf(entry, rule);
         const { agent } = rule as ContractRule;
         const run = (options?: { readonly waitTimeoutMs: number }) =>
@@ -386,8 +401,8 @@ const MATRIX_SYMBOLS = { broken: "❌", pass: "✅", unsupported: "—" } as con
  * suite holds each cell to what this table says, so the rendered matrix is
  * current whenever the suite passes.
  */
-export function renderHitlConformanceMatrix(): string {
-  const all = Object.values(hitlConformance).flatMap(
+export function renderConformanceMatrix(): string {
+  const all = Object.values(channelConformance).flatMap(
     (group): readonly ConformanceChannel[] => group,
   );
   const nameOf = (entry: ConformanceChannel) => entry.driver().name;
@@ -411,7 +426,7 @@ export function renderHitlConformanceMatrix(): string {
   // sharing a cause links to the same note. Plain anchors rather than Markdown
   // footnotes, which GitHub renders with links back up to every citing cell.
   const notes = new Map<string, number>();
-  const shown = (entry: ConformanceChannel, rule: (typeof hitlContract)[number]) => {
+  const shown = (entry: ConformanceChannel, rule: (typeof channelContract)[number]) => {
     // A DM column leaves blank what only the shared-thread column runs.
     if (entry.dm === true && !variesByConversation(rule)) return "";
     const cell = cellOf(entry, rule);
@@ -422,7 +437,7 @@ export function renderHitlConformanceMatrix(): string {
     return `${MATRIX_SYMBOLS[cell.kind]}<sup>[${index}](#note-${index})</sup>`;
   };
   // One table per section, each repeating the column header so it reads on its own.
-  const tables = hitlContractSections.flatMap((section) => [
+  const tables = channelContractSections.flatMap((section) => [
     `## ${section.title}`,
     "",
     row(["Rule", ...entries.map((entry) => `\`${nameOf(entry)}\``)]),
@@ -437,7 +452,7 @@ export function renderHitlConformanceMatrix(): string {
     "",
   ]);
   return [
-    "# HITL conformance matrix",
+    "# Channel conformance matrix",
     "",
     "<!-- Generated from conformance.ts by matrix.test.ts. Do not edit by hand. -->",
     "",

@@ -1,4 +1,4 @@
-# HITL conformance matrix
+# Channel conformance matrix
 
 <!-- Generated from conformance.ts by matrix.test.ts. Do not edit by hand. -->
 
@@ -79,7 +79,16 @@ pnpm --filter eve exec vitest run --config vitest.unit.config.ts channel-conform
 | another person pressing Approve on a requester-only approval leaves it pending | —<sup>[18](#note-18)</sup> | —<sup>[18](#note-18)</sup> | ✅ |  | —<sup>[19](#note-19)</sup> | ❌<sup>[17](#note-17)</sup> |  | —<sup>[19](#note-19)</sup> |  | ✅ |  | ✅ |  | ✅ |  | —<sup>[19](#note-19)</sup> | —<sup>[19](#note-19)</sup> | —<sup>[19](#note-19)</sup> | —<sup>[19](#note-19)</sup> |
 | another person pressing Cancel on a requester-only approval leaves it pending | —<sup>[18](#note-18)</sup> | —<sup>[18](#note-18)</sup> | ✅ |  | —<sup>[19](#note-19)</sup> | ❌<sup>[17](#note-17)</sup> |  | —<sup>[19](#note-19)</sup> |  | ✅ |  | ✅ |  | ✅ |  | —<sup>[19](#note-19)</sup> | —<sup>[19](#note-19)</sup> | —<sup>[19](#note-19)</sup> | —<sup>[19](#note-19)</sup> |
 | another person's rejected press leaves the approval's buttons in place | —<sup>[18](#note-18)</sup> | —<sup>[18](#note-18)</sup> | ✅ |  | —<sup>[19](#note-19)</sup> | ✅ |  | —<sup>[19](#note-19)</sup> |  | ✅ |  | ✅ |  | ✅ |  | —<sup>[19](#note-19)</sup> | —<sup>[19](#note-19)</sup> | —<sup>[19](#note-19)</sup> | —<sup>[19](#note-19)</sup> |
-| another person pressing Approve runs a tool with no response policy | —<sup>[18](#note-18)</sup> | —<sup>[18](#note-18)</sup> | ✅ |  | —<sup>[19](#note-19)</sup> | ✅ |  | —<sup>[19](#note-19)</sup> |  | ✅ |  | ✅ |  | ✅ |  | —<sup>[19](#note-19)</sup> | —<sup>[19](#note-19)</sup> | —<sup>[19](#note-19)</sup> | —<sup>[19](#note-19)</sup> |
+| another person pressing Approve on an open approval runs the tool | —<sup>[18](#note-18)</sup> | —<sup>[18](#note-18)</sup> | ✅ |  | —<sup>[19](#note-19)</sup> | ❌<sup>[17](#note-17)</sup> |  | —<sup>[19](#note-19)</sup> |  | ✅ |  | ✅ |  | ✅ |  | —<sup>[19](#note-19)</sup> | —<sup>[19](#note-19)</sup> | —<sup>[19](#note-19)</sup> | —<sup>[19](#note-19)</sup> |
+
+## Attachments
+
+| Rule | `tui` | `web chat` | `chat-sdk` | `chat-sdk-dm` | `chat-sdk-text` | `discord` | `discord-dm` | `linq` | `linq-dm` | `slack` | `slack-dm` | `teams` | `teams-dm` | `telegram` | `telegram-dm` | `github` | `linear` | `photon` | `twilio` |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| an image a person sends reaches the agent with its bytes and type | —<sup>[20](#note-20)</sup> | —<sup>[20](#note-20)</sup> | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | —<sup>[20](#note-20)</sup> | ✅ | ✅ | ✅ |
+| a PDF a person sends reaches the agent with its bytes and type | —<sup>[20](#note-20)</sup> | —<sup>[20](#note-20)</sup> | ✅ |  | ✅ | ✅ |  | ✅ |  | ✅ |  | ✅ |  | ✅ |  | —<sup>[20](#note-20)</sup> | ✅ | ✅ | ✅ |
+| a file that can't be downloaded reaches the agent as a note, not a link, and the next message still works | —<sup>[20](#note-20)</sup> | —<sup>[20](#note-20)</sup> | ✅ |  | ✅ | ✅ |  | ✅ |  | ✅ |  | ✅ |  | ✅ |  | —<sup>[20](#note-20)</sup> | ✅ | ✅ | ✅ |
+| a file sent earlier in the conversation is still there on a later message | —<sup>[20](#note-20)</sup> | —<sup>[20](#note-20)</sup> | ✅ |  | ✅ | —<sup>[21](#note-21)</sup> |  | ✅ |  | ✅ |  | ✅ |  | ✅ |  | —<sup>[20](#note-20)</sup> | ✅ | ✅ | ✅ |
 
 ## Notes
 
@@ -102,3 +111,5 @@ pnpm --filter eve exec vitest run --config vitest.unit.config.ts channel-conform
 17. <a id="note-17"></a>a button press responds with `auth: null`, so no one can satisfy a response policy
 18. <a id="note-18"></a>the platform has no second person who can act
 19. <a id="note-19"></a>the platform has no second person who can act or buttons a person can press
+20. <a id="note-20"></a>the platform has no files a person can send
+21. <a id="note-21"></a>each slash command starts its own session, so no later message shares one with the file

@@ -37,17 +37,17 @@ export default defineTool({
 | `never()`  | Never require approval (the default when omitted).                                 |
 | `once()`   | Require approval only the first time the tool runs in a session; auto-allow after. |
 | `always()` | Require approval before every call.                                                |
-| `auto()`   | Ask an evaluation model whether to run the exact call or require user approval.    |
+| `auto()`   | Ask a decision model whether to run the exact call or require user approval.       |
 
 By default, omitted `approval` behaves like `never()`, so tool calls may execute without human approval. Require human approval or other safeguards for sensitive, irreversible, regulated, financial, healthcare, employment, housing, legal, safety-impacting, user-impacting, or external side-effecting actions.
 
-`auto()` uses an [AI SDK evaluation model](/docs/guides/evaluate) to classify each call as `clear` or `caution`. It defaults to `typesafe-ai/jev`, TypeSafe AI's [Jev evaluation model](https://vercel.com/i/what-is-jev). Like `evaluate`, a model string uses Vercel AI Gateway unless the application configures a global AI SDK default provider:
+`auto()` uses an [AI SDK decision model](/docs/guides/decide) to classify each call as `clear` or `caution`. It defaults to `typesafe-ai/jev`, TypeSafe AI's [Jev decision model](https://vercel.com/i/what-is-jev). Like `decide`, a model string uses Vercel AI Gateway unless the application configures a global AI SDK default provider:
 
 ```ts
 approval: auto({ model: "typesafe-ai/jev" });
 ```
 
-The evaluation model reviews the tool name and input for dangerous effects. A caution, failed review, or incomplete input requires user approval. The tool input is sent to the evaluation model's provider.
+The decision model reviews the tool name and input for dangerous effects. A caution, failed review, or incomplete input requires user approval. The tool input is sent to the decision model's provider.
 
 Override the classifier text for application-specific policy:
 
@@ -84,7 +84,9 @@ Gating a side effect on approval is also how you make non-idempotent work safe a
 
 ### Authorizing approval responses
 
-You may also define an approval response policy that decides whether the authenticated person who selects **Approve** or **Cancel** may settle that specific call:
+By default, only the person whose turn requested a call can approve or cancel it.
+
+Define an approval response policy to change who may settle a call, for example, to specify a set of designated approvers who must approve a certain tool. A tool with a `response` policy replaces the default entirely, so return `{ status: "allowed" }` to let any responder through:
 
 ```ts title="agent/tools/refund_charge.ts"
 import { defineTool } from "eve/tools";
@@ -225,6 +227,8 @@ tool call that raised it; neither encodes the request's semantics.
 The run picks back up exactly where it parked. Because the pause is durable, nothing is held in memory while it waits — the process can restart and the parked turn survives.
 
 When a subagent requests input, eve emits the same `input.requested` event on its parent session. Answering through that parent session routes the response directly to the blocked child without invoking the parent model.
+
+If a tool is approved by another user, only the approved call runs with that user's auth. Subsequent tool calls in the turn stay with the original owner.
 
 For approval requests, a follow-up message that doesn't match an option steers the turn instead of answering it. eve cancels the turn's pending approval, so the call doesn't run and `input.resolved` reports `outcome: "ignored"`, and the model reads the message next. This happens even when the message is sent with `turnPolicy: "queue"`, because a turn held on a person can't end until they act. Calls the person already approved in the same batch still run. A message from someone other than the person the turn serves waits until the turn ends. Cancelling the turn withdraws its approval: the call doesn't run, `input.resolved` reports `outcome: "cancelled"`, and a later answer to it approves nothing.
 
