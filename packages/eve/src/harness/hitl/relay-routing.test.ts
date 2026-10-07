@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { upsertProxyInputRequests } from "#harness/proxy-input-requests.js";
 import type { HarnessSession } from "#harness/types.js";
-import { routeDeliverPayload as routeDecision } from "#subagents/hitl-proxy.js";
+import { routeDeliverPayload as routeDecision } from "#internal/testing/relay-routing.js";
 
 const REQUEST_EVENT = { sequence: 0, stepIndex: 0, turnId: "turn_0" };
 

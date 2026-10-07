@@ -31,7 +31,7 @@ import {
   type CompiledBundle,
 } from "#runtime/sessions/runtime-context-keys.js";
 import { emitProxiedSubagentEvent } from "#subagents/event-proxy-step.js";
-import { routeDeliverPayload as routeDecision } from "#subagents/hitl-proxy.js";
+import { routeDeliverPayload as routeDecision } from "#internal/testing/relay-routing.js";
 
 function fixture() {
   const order: string[] = [];

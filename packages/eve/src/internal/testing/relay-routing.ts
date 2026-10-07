@@ -49,6 +49,7 @@ export interface RoutedDeliverPayload {
 }
 
 /**
+ * Test-only compatibility-shaped observer of live beforeStep/adaptHumanInput decisions.
  * Splits a deliver payload into parent-local and proxied-child buckets.
  *
  * With `resolveMessage`, a plain-text message is also resolved against pending

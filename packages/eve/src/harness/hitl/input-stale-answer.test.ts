@@ -3,9 +3,9 @@ import { expect, it } from "vitest";
 import type { InputRequest } from "#shared/input.js";
 
 import {
-  convertStaleResponsesToUserMessage,
+  staleAnswersAsText,
   dropStaleSessionLimitContinuationResponses,
-} from "#harness/hitl/stale-responses.js";
+} from "#harness/hitl/input-stale-answer.js";
 
 /** Requests the session still knows, closed ones included. */
 const knownApproval = new Map<string, InputRequest>([
@@ -218,3 +218,19 @@ it("converts remaining stale responses after the drop pass", () => {
   expect(result.stepInput.message).toEqual(expect.stringContaining("question-1"));
   expect(result.stepInput.message).not.toEqual(expect.stringContaining("limit:input"));
 });
+
+// Compatibility-shaped test adapter preserves every assertion of the former conversion suite.
+function convertStaleResponsesToUserMessage(input: {
+  readonly pendingRequestIds: ReadonlySet<string>;
+  readonly requests: ReadonlyMap<string, InputRequest>;
+  readonly stepInput?: import("#harness/types.js").StepInput;
+}) {
+  const result = staleAnswersAsText(input.stepInput, input.pendingRequestIds, input.requests);
+  return result.displayMessage === undefined
+    ? { kind: "unchanged" as const, stepInput: result.input }
+    : {
+        kind: "converted" as const,
+        stepInput: result.input!,
+        displayMessage: result.displayMessage,
+      };
+}

@@ -27,7 +27,7 @@ import { createRuntimeAdapterRegistry } from "#runtime/channels/registry.js";
 import type { RuntimeCompiledArtifactsSource } from "#runtime/compiled-artifacts-source.js";
 import { createRuntimeHookRegistry } from "#runtime/hooks/registry.js";
 import type { ResolvedChannelDefinition } from "#runtime/types.js";
-import { routeDeliverPayload as routeDecision } from "#subagents/hitl-proxy.js";
+import { routeDeliverPayload as routeDecision } from "#internal/testing/relay-routing.js";
 
 /**
  * Integration coverage for subagent HITL proxy emission and routing.

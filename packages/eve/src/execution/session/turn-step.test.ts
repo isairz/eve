@@ -347,6 +347,69 @@ afterEach(() => {
 });
 
 describe("routeProxiedDeliverStep", () => {
+  it("keeps non-answer payload fields when nothing routes to a child", async () => {
+    installSessionStoreMocks([createStubSession()]);
+    const payload = { message: "hello", customField: { foo: 1 } };
+    const result = await routeProxiedDeliverStep({
+      serializedContext: createSerializedContext(),
+      sessionWritable: createTestWritable(),
+      delivery: { kind: "deliver", payloads: [payload] },
+      sessionState: createStubSessionState(),
+    });
+    expect(result).toMatchObject({ kind: "continue", remainder: { payloads: [payload] } });
+    expect(resumeHookMock).not.toHaveBeenCalled();
+  });
+
+  it("drops a consumed question reply's context but keeps channel state", async () => {
+    const session = upsertProxyInputRequests({
+      entries: [
+        [
+          "ask-1",
+          {
+            workflowAsk: {
+              control: "control",
+              question: { options: [{ id: "2", label: "Production" }] },
+            },
+            runId: "run-1",
+            childContinuationToken: "ask-1",
+            event: REQUEST_EVENT,
+            kind: "question",
+          },
+        ],
+      ],
+      forChildContinuationToken: "ask-1",
+      session: createStubSession(),
+    });
+    installSessionStoreMocks([session]);
+    const result = await routeProxiedDeliverStep({
+      serializedContext: createSerializedContext(),
+      sessionWritable: createTestWritable(),
+      delivery: {
+        kind: "deliver",
+        payloads: [
+          {
+            context: ["<telegram_context>\nmessage_id: 7\n</telegram_context>"],
+            message: "production",
+            state: { messageId: "7" },
+          },
+        ],
+      },
+      sessionState: createStubSessionState({ hasProxyInputRequests: true }),
+    });
+    expect(result).toMatchObject({
+      kind: "continue",
+      remainder: { payloads: [{ state: { messageId: "7" } }] },
+    });
+    expect(result.kind === "continue" && result.remainder?.payloads).toEqual([
+      { state: { messageId: "7" } },
+    ]);
+    expect(resumeHookMock).toHaveBeenCalledWith("control", {
+      kind: "answer",
+      requestId: "ask-1",
+      response: { optionId: "2", status: "answered", text: undefined },
+    });
+  });
+
   it("replies to the saved child inbox after its continuation alias changes", async () => {
     const session = upsertProxyInputRequests({
       entries: [

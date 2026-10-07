@@ -93,7 +93,14 @@ export class HumanInput {
   /** The session still has a step parked under the coordination batch's old key. */
   readonly #legacy: boolean;
 
-  private constructor(state: HumanInputState, legacy: boolean) {
+  readonly #knownRequests?: ReadonlyMap<string, InputRequest>;
+
+  private constructor(
+    state: HumanInputState,
+    legacy: boolean,
+    knownRequests?: ReadonlyMap<string, InputRequest>,
+  ) {
+    this.#knownRequests = knownRequests;
     this.#state = state;
     this.#legacy = legacy;
   }
@@ -103,7 +110,16 @@ export class HumanInput {
 
   /** Project one originating step. Runtime persistence belongs exclusively to the session machine. */
   static fromView(view: SessionView, stepIndex = 0): HumanInput {
-    return new HumanInput(projectHumanInput(view, view.turn.suspended[stepIndex]), false);
+    return new HumanInput(
+      projectHumanInput(view, view.turn.suspended[stepIndex]),
+      false,
+      new Map(
+        Object.values(view.projection.inputs).map((entry) => [
+          entry.request.requestId,
+          entry.request,
+        ]),
+      ),
+    );
   }
 
   /** Compatibility reader for legacy rule tests; runtime entry points take SessionView. */
@@ -183,7 +199,7 @@ export class HumanInput {
     readonly displayMessage?: string | UserContent;
   } {
     const open = this.openRequestIds();
-    return staleAnswersAsText(input, open);
+    return staleAnswersAsText(input, open, this.#knownRequests);
   }
 
   /** Whether turn input waits for the turn's next step, behind calls that have joined history. */

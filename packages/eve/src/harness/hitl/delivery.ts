@@ -3,9 +3,9 @@ import type { UserContent } from "ai";
 import { resolveTextToResponses } from "#channel/resolve-text.js";
 import { coalesceTurnInputs } from "#harness/messages.js";
 import {
-  convertStaleResponsesToUserMessage,
+  staleAnswersAsText,
   dropStaleSessionLimitContinuationResponses,
-} from "#harness/hitl/stale-responses.js";
+} from "#harness/hitl/input-stale-answer.js";
 import type { StepInput } from "#harness/types.js";
 import { attachClientContext, readClientContext } from "#internal/client-context.js";
 import { readAnswerText } from "#internal/input-text.js";
@@ -44,18 +44,12 @@ export function deliver(
   const known = new Map(
     Object.values(view.projection.inputs).map((entry) => [entry.request.requestId, entry.request]),
   );
-  const converted = convertStaleResponsesToUserMessage({
+  const converted = staleAnswersAsText(
+    dropStaleSessionLimitContinuationResponses({ pendingRequestIds, stepInput: merged }),
     pendingRequestIds,
-    requests: known,
-    stepInput: dropStaleSessionLimitContinuationResponses({ pendingRequestIds, stepInput: merged }),
-  });
-  return converted.kind === "converted"
-    ? {
-        displayMessage: converted.displayMessage,
-        input: converted.stepInput,
-        takeQueued: options.takeQueued,
-      }
-    : { input: converted.stepInput, takeQueued: options.takeQueued };
+    known,
+  );
+  return { ...converted, takeQueued: options.takeQueued };
 }
 
 export type ResolvedStepInput = StepInput & { readonly messageConsumed?: boolean };

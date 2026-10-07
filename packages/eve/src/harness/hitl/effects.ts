@@ -4,6 +4,8 @@ import type { AlsContext } from "#context/container.js";
 import { AuthKey } from "#context/keys.js";
 import { PendingAuthorizationResultKey } from "#harness/authorization.js";
 import type { Step } from "#harness/step/context.js";
+import type { InputResponse } from "#shared/input.js";
+import type { ToolInputResponseResponder } from "#tools/definition.js";
 import { adaptHumanInput, type EffectCommand } from "./adapter.js";
 import { beforeStep, type BeforeStepArrival, type HumanInputDecision } from "./decisions.js";
 
@@ -151,13 +153,7 @@ export function effectHandlers(input: {
       };
       const auth: SessionAuthContext | null | undefined = delivery.auth;
       if (route.control !== undefined) {
-        const { sendWorkflowAskAnswers, toToolInputResponseResponder } =
-          await import("#execution/tools/workflow/answer.js");
-        await sendWorkflowAskAnswers(
-          { control: route.control },
-          responses,
-          toToolInputResponseResponder(auth),
-        );
+        await sendWorkflowAskAnswers(route.control, responses, toToolInputResponseResponder(auth));
       } else if (route.remote !== undefined) {
         if (input.context === undefined)
           throw new TypeError("Remote answers require the session context.");
@@ -187,6 +183,41 @@ export function effectHandlers(input: {
       return [{ type: "authorization.resumed", result, requester }];
     },
   };
+}
+
+function toToolInputResponseResponder(
+  auth: SessionAuthContext | null | undefined,
+): ToolInputResponseResponder | undefined {
+  return auth === null || auth === undefined
+    ? undefined
+    : {
+        authenticator: auth.authenticator,
+        principalId: auth.principalId,
+        principalType: auth.principalType,
+      };
+}
+
+/**
+ * Sends the answers the session accepted to the asking run's control hook,
+ * the same ordered inbox its commands use, so an answer the session accepted
+ * before an interrupt or cancel reaches the body before them.
+ */
+async function sendWorkflowAskAnswers(
+  control: string,
+  responses: readonly InputResponse[] | undefined,
+  responder?: ToolInputResponseResponder,
+): Promise<void> {
+  const { resumeHook } = await import("#internal/workflow/runtime.js");
+  for (const { optionId, requestId, text } of responses ?? []) {
+    await resumeHook(control, {
+      kind: "answer",
+      requestId,
+      response:
+        responder === undefined
+          ? { optionId, status: "answered", text }
+          : { optionId, responder, status: "answered", text },
+    });
+  }
 }
 
 /** Keep source payload order and remap channel attribution to the forwarded payload indexes. */
