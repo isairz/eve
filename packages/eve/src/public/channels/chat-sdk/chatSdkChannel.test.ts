@@ -6,6 +6,7 @@ import { callAdapterEventHandler, type ChannelAdapter } from "#channel/adapter.j
 import { isCompiledChannel, type CompiledChannel } from "#channel/compiled-channel.js";
 import { isHttpRouteDefinition } from "#channel/routes.js";
 import { ContextContainer, contextStorage } from "#context/container.js";
+import { enterSessionProjection, recordPublishedEvent } from "#harness/session-machine/current.js";
 import { SessionKey } from "#context/keys.js";
 import { mockChannelContext } from "#internal/testing/mocks/mock-channel-operations.js";
 import type { UnstampedMessageStreamEvent } from "#protocol/message.js";
@@ -65,7 +66,10 @@ function withState(adapter: ChannelAdapter<any>, state: ChatSdkChannelState): Ch
 }
 
 function stubAccessor() {
-  return { get: () => undefined, set: () => {} } as any;
+  const accessor = { get: () => undefined, set: () => {} } as any;
+  // A step enters its projection before it publishes.
+  enterSessionProjection(accessor, undefined);
+  return accessor;
 }
 
 const stubAlsContext = (() => {
@@ -84,6 +88,12 @@ function callEvent(
   ctx: any,
 ): Promise<UnstampedMessageStreamEvent> {
   return contextStorage.run(stubAlsContext, () => callAdapterEventHandler(adapter, event, ctx));
+}
+
+/** Delivers `event` as a session publishes it: the handler runs, then the session records it. */
+async function publishEvent(adapter: ChannelAdapter, event: UnstampedMessageStreamEvent, ctx: any) {
+  await callEvent(adapter, event, ctx);
+  recordPublishedEvent(ctx.ctx, event);
 }
 
 function makeEvent<T extends UnstampedMessageStreamEvent["type"]>(
@@ -913,9 +923,12 @@ describe("chatSdkChannel", () => {
     const channelAdapter = withState(getAdapter(bridge.channel), {
       thread: serializedThread(),
     });
-    const ctx = buildAdapterContext(channelAdapter, stubAccessor());
+    const accessor = stubAccessor();
+    const ctx = buildAdapterContext(channelAdapter, accessor);
+    // The channel reads the session's record of what it published.
+    enterSessionProjection(accessor, undefined);
 
-    await callEvent(
+    await publishEvent(
       channelAdapter,
       makeEvent("input.requested", {
         requests: [
@@ -941,20 +954,38 @@ describe("chatSdkChannel", () => {
       ctx,
     );
 
-    const posted = adapter.posted[0]?.message as AdapterPostableMessage;
-    expect(posted).toMatchObject({
+    expect(adapter.posted.map(({ message }) => message)).toMatchObject([
+      {
+        card: {
+          children: [
+            { content: "Which region?", type: "text" },
+            { content: "Reply with your answer.", type: "text" },
+          ],
+        },
+        fallbackText: "Which region?\n\nReply with your answer.",
+      },
+    ]);
+
+    // A reply can only answer the request it sees, so the next one waits its turn.
+    await publishEvent(
+      channelAdapter,
+      makeEvent("input.resolved", {
+        resolutions: [{ kind: "question", outcome: "answered", requestId: "request-1" }],
+        sequence: 1,
+        stepIndex: 0,
+        turnId: "turn-1",
+      }),
+      ctx,
+    );
+    expect(adapter.posted.at(-1)?.message).toMatchObject({
       card: {
         children: [
-          { content: "Which region?", type: "text" },
-          { content: "Reply with your answer.", type: "text" },
           { content: "Which zone?", type: "text" },
           { type: "actions" },
           { content: "Or reply with your own answer.", type: "text" },
         ],
       },
-      fallbackText:
-        "Which region?\n\nReply with your answer.\n\n" +
-        "Which zone?\n\n1. Washington\n\nReply with a number, or with your own answer.",
+      fallbackText: "Which zone?\n\n1. Washington\n\nReply with a number, or with your own answer.",
     });
   });
 });
