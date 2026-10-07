@@ -121,7 +121,7 @@ Every property listed in `match` must exist and satisfy its constraint. Extra to
       "properties": { "status": { "const": "open" } },
       "required": ["status"]
     },
-    "query": { "type": "string", "pattern": "milk" },
+    "query": { "type": "string", "enum": ["milk", "buy milk"] },
     "tags": { "type": "array", "contains": { "const": "urgent" } }
   },
   "response": { "tasks": ["Buy milk"] }
@@ -130,7 +130,7 @@ Every property listed in `match` must exist and satisfy its constraint. Extra to
 
 Nested properties are optional unless listed in `required`. Matching does not coerce values, apply defaults, or change arguments. The real tool schema validates input before replacement; normal approvals and output processing still apply.
 
-Constraints use a reference-free subset of JSON Schema 2020-12: types, `const`, `enum`, string and numeric bounds, `pattern`, array items/contains, object properties/required/additionalProperties, dependencies, and logical/conditional schemas. `$ref`, `format`, unknown keywords, and malformed constraints are rejected at setup. Use a `pattern` string, not a JavaScript regular-expression object.
+Constraints use a reference-free subset of JSON Schema 2020-12: types, `const`, `enum`, string and numeric bounds, array items/contains, object properties/required/additionalProperties, dependencies, and logical/conditional schemas. Regex matchers (`pattern` and `patternProperties`), `$ref`, `format`, unknown keywords, and malformed constraints are rejected at setup. Use `const` or `enum` for string matching. Eval assertions can still use regular expressions to check tool arguments and agent responses.
 
 Configuration is limited to 100 rules, 20,000 JSON nodes, nesting depth 32, and approximately one million characters. The `__proto__` property name is reserved.
 

@@ -15,7 +15,7 @@ export default defineEval({
               properties: { status: { const: "open" } },
               required: ["status"],
             },
-            query: { type: "string", pattern: "milk" },
+            query: { type: "string", enum: ["milk", "buy milk"] },
             tags: { type: "array", contains: { const: "urgent" } },
           },
           responses: [{ marker: "pending" }, { marker: "MATCH-FIRST" }, { marker: "MATCH-NEXT" }],
