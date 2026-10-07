@@ -127,7 +127,9 @@ function renderCatalogAnnouncement(
   current: CatalogListing,
   reachable: ReadonlySet<string>,
 ): string {
-  if (isEmpty(current)) return "The catalog changed. It is empty now; do not call execute.";
+  if (isEmpty(current)) {
+    return "The catalog changed. It is empty now: search finds nothing, and execute has no tools to call.";
+  }
   if (previous === undefined || isEmpty(previous)) return renderListing(current);
   const gone = [
     ...previous.namespaces.items,
