@@ -9,6 +9,7 @@ import {
   GATED_TOOL,
   type GatedTool,
   OPEN_GATED_TOOL,
+  type Person,
   PLAIN_TOOL,
   type RenderedOption,
   REQUESTER_GATED_TOOL,
@@ -105,6 +106,21 @@ function option(
 const ASIDE = "Alice also wants the changelog summarized.";
 const FOLLOW_UP = "Alice asks what is still left to do.";
 
+/** Each person in turn asks for {@link PLAIN_TOOL}; returns the caller each run saw. */
+async function lookUpNotesAs(
+  conversation: ChannelConversation,
+  people: readonly Person[],
+): Promise<readonly (string | null)[]> {
+  for (const [index, person] of people.entries()) {
+    // Numbered, so each run's reply, which quotes its message, can be told apart.
+    const request = `request ${index + 1}`;
+    await conversation.say(`Use ${PLAIN_TOOL} to find the review notes, ${request}.`, person);
+    await conversation.waitForShown(new RegExp(`Used ${PLAIN_TOOL} for .*${request}`, "su"));
+  }
+  expect(conversation.runsOf(PLAIN_TOOL), `${PLAIN_TOOL} runs`).toBe(people.length);
+  return conversation.callersOf(PLAIN_TOOL);
+}
+
 const HOTFIX = `Use ${REQUESTER_GATED_TOOL} to ship the fix.`;
 const HOTFIX_PROMPT = "Approve Release hotfix?";
 
@@ -138,12 +154,12 @@ async function expectReleased(conversation: ChannelConversation) {
   await expectRan(conversation, REQUESTER_GATED_TOOL, { released: true });
 }
 
-/** Once the session settles after Bob's press, the requester-only approval is still pending. */
+/** Once the session settles after Bob answers, the requester-only approval is still pending. */
 async function expectStillPending(conversation: ChannelConversation) {
   await conversation.waitForRest();
   expect(
     conversation.runsOf(REQUESTER_GATED_TOOL),
-    `${REQUESTER_GATED_TOOL} ran on Bob's press`,
+    `${REQUESTER_GATED_TOOL} ran on Bob's answer`,
   ).toBe(0);
 }
 
@@ -268,7 +284,7 @@ async function attachmentsSeen(
   conversation: ChannelConversation,
   files?: readonly SentFile[],
 ): Promise<readonly SeenFile[]> {
-  await conversation.say(LIST_ATTACHMENTS, files);
+  await conversation.say(LIST_ATTACHMENTS, "alice", files);
   const shown = await conversation.waitForShown(ATTACHMENTS_REPLY);
   return JSON.parse(ATTACHMENTS_REPLY.exec(shown)![1]!) as SeenFile[];
 }
@@ -927,39 +943,47 @@ const signInRules = [
       await conversation.waitForShown(/\b(?:cancel|declin)/iu);
     },
   },
+] as const satisfies readonly ContractRule[];
+
+const approvalPermissionRules = [
   {
-    rule: "the requester pressing Approve on a requester-only approval runs the tool",
+    rule: "the requester typing approve on a requester-only approval runs the tool",
     source: "docs/tools/human-in-the-loop.md#authorizing-approval-responses",
-    requires: ["buttons"],
+    requires: ["text-replies"],
     async run(conversation) {
-      const options = await askToReleaseHotfix(conversation);
-      await conversation.press(option(options, APPROVE_LABELS));
+      await askToReleaseHotfix(conversation);
+      await conversation.say("approve");
       await expectReleased(conversation);
     },
   },
   {
-    rule: "another person pressing Approve on a requester-only approval leaves it pending",
+    rule: "another person pressing Cancel or Approve on a requester-only approval leaves it pending",
     source: "docs/tools/human-in-the-loop.md#authorizing-approval-responses",
     requires: ["another-person", "buttons"],
     async run(conversation) {
       const options = await askToReleaseHotfix(conversation);
       const approve = option(options, APPROVE_LABELS);
+      await conversation.press(option(options, CANCEL_LABELS), "bob");
       await conversation.press(approve, "bob");
       await expectStillPending(conversation);
+      // A cancel that got through would settle the call as denied before this approval.
       await conversation.press(approve);
       await expectReleased(conversation);
     },
   },
   {
-    rule: "another person pressing Cancel on a requester-only approval leaves it pending",
-    source: "docs/tools/human-in-the-loop.md#authorizing-approval-responses",
-    requires: ["another-person", "buttons"],
+    rule: "another person typing cancel or approve doesn't settle a requester-only approval",
+    source: "docs/tools/human-in-the-loop.md#how-pause-and-resume-works",
+    requires: ["another-person", "text-replies"],
     async run(conversation) {
-      const options = await askToReleaseHotfix(conversation);
-      await conversation.press(option(options, CANCEL_LABELS), "bob");
+      await askToReleaseHotfix(conversation);
+      // Today another person's message waits for the turn to end, so it never reaches the
+      // response policy; the approval stays pending either way.
+      await conversation.say("cancel", "bob");
+      await conversation.say("approve", "bob");
       await expectStillPending(conversation);
-      // A cancel that got through would settle the call as denied before this approval.
-      await conversation.press(option(options, APPROVE_LABELS));
+      // A cancel taken as Alice's would settle the call as denied before this approval.
+      await conversation.say("approve");
       await expectReleased(conversation);
     },
   },
@@ -982,6 +1006,37 @@ const signInRules = [
       const options = await askToRollBack(conversation);
       await conversation.press(option(options, APPROVE_LABELS), "bob");
       await expectRan(conversation, OPEN_GATED_TOOL, { rolledBack: true });
+    },
+  },
+] as const satisfies readonly ContractRule[];
+
+const callerRules = [
+  {
+    rule: "a tool sees the person who sent the message as its caller",
+    source: "docs/tools/overview.mdx",
+    requires: [],
+    // Platforms name the sender differently in a DM, e.g. Discord's user rather than member.
+    variesByConversation: true,
+    async run(conversation) {
+      const [caller] = await lookUpNotesAs(conversation, ["alice"]);
+      expect(caller, `${PLAIN_TOOL} ran with no caller`).not.toBeNull();
+      const [principalId] = JSON.parse(caller!) as [string];
+      // Platform principals are namespaced, e.g. `slack:T01:U_ALICE`; a client's is the bare id.
+      expect(
+        principalId === conversation.personId || principalId.endsWith(`:${conversation.personId}`),
+        `${PLAIN_TOOL} ran as ${principalId}, which doesn't name ${conversation.personId}`,
+      ).toBe(true);
+    },
+  },
+  {
+    rule: "another person's message reaches tools as a different caller, and each person stays the same caller",
+    source: "docs/tools/overview.mdx",
+    requires: ["another-person"],
+    async run(conversation) {
+      const [alice, bob, aliceAgain] = await lookUpNotesAs(conversation, ["alice", "bob", "alice"]);
+      expect(bob, `${PLAIN_TOOL} ran with no caller for Bob`).not.toBeNull();
+      expect(bob, "Bob's message ran as Alice").not.toBe(alice);
+      expect(aliceAgain, "Alice ran as a different caller the second time").toBe(alice);
     },
   },
 ] as const satisfies readonly ContractRule[];
@@ -1025,7 +1080,7 @@ const attachmentRules = [
     requires: ["attachments"],
     async run(conversation) {
       const text = `Alice attached ${DIAGRAM.name}.`;
-      await conversation.say(text, [DIAGRAM]);
+      await conversation.say(text, "alice", [DIAGRAM]);
       await conversation.waitForReplyTo(text);
       await conversation.say(FOLLOW_UP);
       await conversation.waitForReplyTo(FOLLOW_UP);
@@ -1042,9 +1097,11 @@ const attachmentRules = [
 export const channelContractSections = [
   { title: "Questions", rules: questionRules },
   { title: "Tool approvals", rules: approvalRules },
+  { title: "Approval permissions", rules: approvalPermissionRules },
   { title: "Answered prompts", rules: answeredPromptRules },
   { title: "Budget prompts", rules: budgetRules },
   { title: "Sign-ins", rules: signInRules },
+  { title: "Tool callers", rules: callerRules },
   { title: "Attachments", rules: attachmentRules },
 ] as const;
 
