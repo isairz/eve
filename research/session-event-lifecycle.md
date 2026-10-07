@@ -48,54 +48,19 @@ After the break, a new fact or field touches one family module. The checker, the
 
 ### What the current model leaves out
 
-#### A response's end is guessed
+v26 leaves these for readers to guess:
 
-`ClientSession.send()` has to know when its response is done, and v26 never records what happened to a delivered message.
-
-- `message.received` appears only once a turn consumes the message.
-- Later events point back to the message only through `meta.deliveryIds`, which the turn step stamps.
-- Answers that resume work through tools, workflows, or child sessions publish outside the turn step and lose the stamp. So `respond()` ends "at its first turn boundary" (`client/session.ts`).
-- `TurnSegment` (`client/session-utils.ts`) encodes when a segment ends: `turn.waiting` on input ends it, `turn.waiting` on tasks doesn't, and `session.waiting` doesn't while a sign-in callback is outstanding.
-- A message that's queued, one the channel ignores, and one refused for lack of authentication leave no record at all.
-
-The invocation API, CLI `invoke`, and evals each have their own version of "done".
-
-#### One decision becomes three events
-
-When a responder declines an approval over HTTP, v26 writes three events, each with its own vocabulary:
-
-```text
-approval.settled  {outcome: "cancelled"}               ← means "declined"
-input.resolved    {resolutions: [{outcome: "denied"}]} ← settles the call by inference
-action.result     {status: "rejected", error, result}  ← a third word for the call's status
-```
-
-Spreading one decision across events has caused bugs:
-
-- The first version of the shared fold (#4141) read `cancelled` as a withdrawal, so HTTP denials showed as withdrawn. The fold now carries a special case with a comment.
-- `input.resolved` settled the call before the `action.result` that carried the reason, so ACP dropped the reason.
-- Telegram's sign-in callback (`findPendingAuthorization`) still takes the latest `authorization.required` without checking whether it completed.
-
-#### Stream ends are inferred
-
-Nothing on the stream tells a reader to stop.
-
-- Clients stop following after five empty reconnects (`streamIdleReconnectPolicy`).
-- Callers that must keep following pass `keepAlive`, which makes the budget infinite. The agent follower hardcodes `Infinity`.
-- Runs that end without closing their stream (#3221) look like idle sessions.
-
-<details>
-<summary>More guesses readers make today</summary>
-
-| Readers guess                            | Example                                                                                                                                                                                            |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A work outcome, from the model's receipt | A task call's `action.result` is a receipt. Evals take its status as the call's outcome, while channel task cards special-case receipts so the call keeps running until `task.settled`.            |
-| Which text is the reply                  | About a dozen places (channel defaults, evals, the invocation API, the client) test `message.completed.finishReason !== "tool-calls"`. Text in a held step is reported as `tool-calls` to hide it. |
-| Whether a message was queued or received | A message held behind the budget prompt needed an "announced?" flag.                                                                                                                               |
-| An entity nobody introduced              | A resumed approved call's result arrives with no request before it. A tool call with invalid input gets a failed `action.result` without ever appearing in `actions.requested`.                    |
-| What coordinates mean                    | Payloads repeat `turnId`, `sequence`, and `stepIndex`. A relayed child request's coordinates have meant the child's turn and step in one version, and the parent's serving call in another.        |
-
-</details>
+| Readers guess                                     | Example                                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| When a response is done                           | `send()` matches events by `meta.deliveryIds`, which answers resumed through tools, workflows, or child sessions don't carry, so `respond()` ends "at its first turn boundary". The invocation API, CLI `invoke`, and evals each define "done" their own way                                 |
+| Whether a message was queued, ignored, or refused | A queued message, one the channel ignores, and one refused for lack of authentication leave no record. A message held behind the budget prompt needed an "announced?" flag                                                                                                                   |
+| How one decision ended                            | A declined approval writes `approval.settled {cancelled}`, `input.resolved {denied}`, and `action.result {rejected}`. The first shared fold (#4141) read `cancelled` as a withdrawal, and ACP dropped the reason because `input.resolved` settled the call before `action.result` carried it |
+| Whether a sign-in completed                       | Telegram's sign-in callback (`findPendingAuthorization`) takes the latest `authorization.required` without checking whether it completed                                                                                                                                                     |
+| When to stop reading                              | Nothing on the stream says stop. Clients give up after five empty reconnects (`streamIdleReconnectPolicy`), `keepAlive` and the agent follower make that infinite, and runs that end without closing their stream (#3221) look like idle sessions                                            |
+| A work outcome, from the model's receipt          | A task call's `action.result` is a receipt. Evals take its status as the call's outcome, while channel task cards special-case receipts so the call keeps running until `task.settled`                                                                                                       |
+| Which text is the reply                           | About a dozen places (channel defaults, evals, the invocation API, the client) test `message.completed.finishReason !== "tool-calls"`. Text in a held step is reported as `tool-calls` to hide it                                                                                            |
+| An entity nobody introduced                       | A resumed approved call's result arrives with no request before it. A tool call with invalid input gets a failed `action.result` without ever appearing in `actions.requested`                                                                                                               |
+| What coordinates mean                             | Payloads repeat `turnId`, `sequence`, and `stepIndex`. A relayed child request's coordinates have meant the child's turn and step in one version, and the parent's serving call in another                                                                                                   |
 
 ## The model
 
@@ -589,16 +554,15 @@ session.waiting    {usage, continuationToken}            ← the reader decides 
 | `x-eve-session-id` (response)        | The session                                                           |
 | `x-eve-stream-tail-index` (response) | The tail position when the read opened, if asked                      |
 
-**Four kinds of record.** Readers tell them apart by key.
+**Three kinds of record.** Every line is a JSON object, and readers tell the kinds apart by key.
 
-| Record           | Key                | Stored and counted | Written by                         |
-| ---------------- | ------------------ | ------------------ | ---------------------------------- |
-| Commit           | `facts`            | Yes                | The writer, once per transition    |
-| Progress         | `progress`         | Yes                | The writer, as output streams      |
-| Transport record | `$eve`             | No                 | The stream route                   |
-| Heartbeat        | None: a blank line | No                 | The stream route, every 10 seconds |
+| Record    | Key        | Stored and counted | Written by                      |
+| --------- | ---------- | ------------------ | ------------------------------- |
+| Commit    | `facts`    | Yes                | The writer, once per transition |
+| Progress  | `progress` | Yes                | The writer, as output streams   |
+| Transport | `$eve`     | No                 | The stream route                |
 
-Readers ignore `$eve` records they don't recognize, so new ones ship as minors.
+Transport records are a position marker after each range that catch-up skips (`{"$eve":"position","next":N}`), a heartbeat every 10 seconds (`{"$eve":"heartbeat"}`), and the connection endings `stream.lease-ended` and `stream.ended`. Readers ignore `$eve` records they don't recognize, so new ones ship as minors. v26 sent blank lines as heartbeats; readers may still skip blank lines, but the server no longer sends them.
 
 ```ts
 type StoredLine =
@@ -695,7 +659,7 @@ Wrapped for reading; on the wire, each record is one line. `…` marks fields le
   - After each omitted range, before the next line it sends, the server writes `{"$eve":"position","next":N}`. If the range ends with omitted progress, a trailing marker follows. A reader assigns positions by counting from its requested cursor and jumps forward at each marker, so it can resume after any line it finished processing.
   - Filtering stops at the tail captured when the read opened. Live lines are always contiguous.
   - A full mode, which omits nothing, remains for tools such as `eve logs --events`.
-- **v27 clients talk only to v27 servers,** so leases (60 s) and heartbeats (10 s) are always on, and the version-negotiation branches go away.
+- **v27 clients talk only to v27 servers,** so leases (60 s) and heartbeat records (10 s) are always on, and the version-negotiation branches go away.
 - **How a connection ends:**
 
   | Ending                    | Meaning                                     | Reader does             |
@@ -949,7 +913,7 @@ const emit = async (event) => {
 
 ### Retried model calls and steps
 
-**Today.** `harness/model-call/retry.ts` retries regardless of what the failed attempt published, and a retried step starts over with new IDs. The dead attempt's output stays on the stream, and readers clean up with the heuristics above.
+**Today.** `harness/model-call/retry.ts` retries regardless of what the failed attempt published, and a retried step starts over with new IDs. The dead attempt's output stays on the stream, and readers clean up with heuristics: the client reducer drops tool parts still streaming their input (`removeStreamingToolParts`) and marks streaming text done (`closeStreamingRuns`).
 
 **With v27.** An in-step retry abandons the run if the emitter accepted anything, and a retried step recovers from its checkpoint position ([Retries and recovery](#retries-and-recovery)). Readers just fold.
 
