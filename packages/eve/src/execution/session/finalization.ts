@@ -1,3 +1,5 @@
+import type { ConnectionEventsState } from "#runtime/connections/events/state.js";
+import { stopConnectionEventStep } from "#runtime/connections/events/cleanup-step.js";
 import type { TurnCaller } from "#channel/types.js";
 import type { DurableSessionState } from "#execution/durable-session-store.js";
 import { emitTerminalSessionCompletionStep } from "#execution/terminal-session-completion-step.js";
@@ -36,6 +38,10 @@ export async function finalizeSession(
   context: SessionFinalizationContext,
 ): Promise<WorkflowEntryResult> {
   const { serializedContext, sessionState } = context.cursor;
+  const eventState = serializedContext["eve.connectionEvents"] as ConnectionEventsState | undefined;
+  for (const bindingId of Object.keys(eventState?.bindings ?? {})) {
+    await stopConnectionEventStep({ serializedContext, bindingId });
+  }
   // Most sessions end with no task run, so the step that would find nothing to stop is skipped.
   if (
     sessionState !== undefined &&

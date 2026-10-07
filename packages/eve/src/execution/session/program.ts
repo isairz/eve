@@ -1,3 +1,7 @@
+import {
+  prepareConnectionEventStep,
+  dispatchConnectionEventStep,
+} from "#runtime/connections/events/dispatch-step.js";
 import type { DeliverHookPayload, SessionCapabilities, TurnCaller } from "#channel/types.js";
 import type { AgentWorkflowRetentionDefinition } from "#shared/agent-definition.js";
 import {
@@ -298,6 +302,16 @@ async function runSessionLoop(
     while (true) {
       const next = await nextParkedActivity();
       switch (next.kind) {
+        case "connection-event": {
+          const prepared = await cursor.advance((state) =>
+            prepareConnectionEventStep({ ...state, payload: next.payload }),
+          );
+          if (prepared.accepted)
+            await cursor.advance((state) =>
+              dispatchConnectionEventStep({ ...state, payload: next.payload }),
+            );
+          continue;
+        }
         case "expired":
         case "reset":
         case "closed":
