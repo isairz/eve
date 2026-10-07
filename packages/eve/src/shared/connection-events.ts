@@ -2,14 +2,8 @@ import type { ConnectionPrincipal } from "#shared/connection-types.js";
 import type { Experimental_ConnectionEvent } from "#public/definitions/connections/events.js";
 
 // The bridge is structural so auth helpers do not need a runtime dependency on eve.
-export type EventJson =
-  | string
-  | number
-  | boolean
-  | null
-  | EventJson[]
-  | { [key: string]: EventJson };
-export type EventJsonObject = { [key: string]: EventJson };
+export type EventJson = string | number | boolean | null | EventJson[] | EventJsonObject;
+export type EventJsonObject = { [key: string]: EventJson | undefined };
 export interface ManagedEventSubscription {
   id: string;
   name: string;
