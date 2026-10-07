@@ -673,10 +673,9 @@ Workflow stores one chunk whole, but makes no such promise for several chunks fl
 
 ### Reading the stream
 
-- **Catch-up skips closed progress by default.** A read that opens behind the tail sends progress only for entities still open at the tail it observed when it opened.
-  - To keep lines in order, the server holds lines back from the first still-open entity's first progress line.
-  - After each omitted range, before the next line it sends, the server writes `{"$eve":"position","next":N}`. If the range ends with omitted progress, a trailing marker follows. A reader assigns positions by counting from its requested cursor and jumps forward at each marker, so it can resume after any line it finished processing.
-  - Filtering stops at the tail captured when the read opened. Live lines are always contiguous.
+- **Catch-up skips closed progress by default.** For example, if you reconnect to a session that has several model invocations with completed content, the stream no longer needs to send the now-irrelevant progress deltas. These progress deltas are likely to make up the majority of event lines, so this is a nice perf win when reconnecting to live sessions (enabled by us formalizing which events count as progress and what facts close that progress.
+  - After each omitted range, before the next line it sends, the server writes `{"$eve":"position","next":N}`. A reader assigns positions by counting from its requested cursor and jumps forward at each marker, so it can resume after any line it finished processing.
+  - Live lines are always contiguous.
   - A full mode, which omits nothing, remains for tools such as `eve logs --events`.
 - **v27 clients talk only to v27 servers,** so leases (60 s) and heartbeat records (10 s) are always on, and the version-negotiation branches go away.
 - **How a connection ends:**
@@ -687,12 +686,11 @@ Workflow stores one chunk whole, but makes no such promise for several chunks fl
   | `stream.lease-ended`      | The server's lease on this response ran out | Reconnects at once      |
   | Bare EOF or read timeout  | Transport failure                           | Reconnects with backoff |
 
-- **Silence is never a stop signal.** The read timeout only detects dead connections. Readers stop on facts:
+- **Silence is no longer a stop signal.** The read timeout only detects dead connections. Readers stop on facts:
   - everyone stops at `session.ended`;
   - request-scoped readers stop at their `delivery.settled`;
-  - folding readers stop when the `idle` selector says so.
+  - folding readers stop when the `idle` selector says so (this captures things like "nothing is happening / will happen until the user sends another message).
 - **Retry budgets.** One policy remains for transport failures: bounded for one-shot reads, unbounded with capped backoff for readers that follow. The idle reconnect budget, `keepAlive`, and the follower's `Infinity` case go away.
-- **Terminal runs must close their stream** (#3221). #3222 closes it on every terminal path. As a fallback, the route could check the anchor run's status at each lease renewal and send `stream.ended` once it has ended.
 
 ### Observers: hooks and channels
 
@@ -747,7 +745,7 @@ SessionView @ position
 - **The tables are public, read-only, and typed,** one per family. Fields are what the facts introduce and settle, plus status, and they follow the same stability rules as the wire.
   - Bookkeeping stays out of the public types: indexes, pruning marks, and the client-only overlay that marks an approval answered before the server confirms.
   - The projection stops hiding behind the `conversationProjection` symbol.
-- **Selectors are conveniences, not requirements.** They encode joins, fallbacks for open kinds, and common questions. The starting set comes from what the TUI and the web chat read today:
+- **Selectors over the fold.** We have a set of convenience functions for working with the folded state. This includes fallbacks for open kinds and common questions. The starting set comes from what the TUI and the web chat read today:
   - turns: `turn`, `activeTurn`, `conversation`, `reply`, `failure`;
   - work: `call`, `task`, `tasks`, `interaction`, `openInteractions({kind?, subject?})`;
   - deliveries: `delivery`, `queue`;
@@ -993,8 +991,8 @@ const emit = async (event) => {
 
 After the break, and through 1.x, the stream should evolve without breaking anyone. Streams continue across deployments, and clients may be older or newer than the server, so within a major version new readers must read old lines and old readers must read new ones.
 
-- **One major version plus additive minors.** Clients accept any minor and refuse unknown majors. Sessions don't cross a major. There are no per-type versions: an old reader can't safely ignore a lifecycle fact it doesn't understand, so bumping a lifecycle type's version is a major in disguise.
-- **Every reader, including server relays,** ignores unknown fields, unknown fact types, and unknown progress types, and maps unknown values of open sets to their fallback. Readers still validate the required structure and closed outcomes of facts they know; an unknown closed outcome is a contract violation, not a success.
+- **One major version plus additive minors.** Clients accept any minor and refuse unknown majors. Sessions don't cross a major.
+- **Every reader, including server relays,** ignores unknown fields, unknown fact types, and unknown progress types, and maps unknown values of open sets to their fallback. Readers still validate the required structure and closed outcomes of facts they know; an unknown closed outcome is a contract violation.
 - **Closed and open sets.** Terminal outcomes are closed. These are open, each with a fallback:
 
   | Open set                                                          | Fallback                                              |
@@ -1034,7 +1032,7 @@ After the break, and through 1.x, the stream should evolve without breaking anyo
 
 ### Directions that fit
 
-These are hypothetical, and none is planned. Each lands as a minor, using a mechanism the contract already has.
+These are just hypothetical. Each would land as a minor, using a mechanism the contract already has.
 
 <details>
 <summary>Fifteen directions, and how each lands</summary>
@@ -1241,25 +1239,3 @@ v27 writes a few more lifecycle facts, because deliveries get explicit ends and 
 - Unifying HITL execution or authorization rules just because their lifecycle is unified.
 
 </details>
-
-### Open questions
-
-These defaults are proposed, not yet reviewed:
-
-1. **The integration strategy.** A long-lived branch with the family changes stacked on it, versus keeping every change releasable on `main`, which would need a dual encoder.
-2. **The catch-up holdback.** A single pass with a bounded holdback that falls back to unfiltered output when the bound is exceeded (the contract allows it), versus two passes. The golden-stream measurements should decide.
-3. **Large non-file values.** A per-value cap that replaces the value with an unavailable marker and a preview until a general retrieval route exists, versus failing the step.
-4. **Sign-in challenge fields.** Visible to every route-authorized reader, as today, since stream routes authorize per channel and know no reader principal.
-5. **Branch selection.** Starting a turn selects it, and a settled context change sets the selection through `selects`; a clear sets `null`.
-6. **Task-limit refusals.** Settling the refused call `rejected` with `cause: {policy: "task-limit"}`, rather than `failed` with a `TOO_MANY_TASKS` error that readers special-case.
-7. **The legacy session import.** Deleting it at the break is a product decision.
-8. **The pending-answer fact's name:** `interaction.responded` or `interaction.answered`.
-
-These depend on others:
-
-9. **A durable-before-observers barrier,** if Workflow ships write acknowledgements with the stored chunk index, or a flush on step writables.
-10. **Large fan-out.** A session coordinates at most 32 working tasks, and a tree of subagents multiplies that by depth. At around a million agents it needs global admission and rate limiting, explicit budgets (the default 40M-token budget splits to about 38 tokens per leaf at depth five), an end for idle subagents (every subagent is a `serve` task parked until the root ends), and coalesced owner wake-ups (#3832). None of that is event-model work.
-
-## Prior art
-
-pi's durable package keeps a JSONL tree of raw history with parent links. Its readers converge on views built from throttled partial updates, and it distinguishes a submitted message from a steering one. opencode versions an aggregate with a sequence number, streams live deltas that a full value completes, stages reverts, serves the model's context from its own endpoint, and keeps permission and question prompts live-only. eve takes the explicit completion of streamed values and the submit-versus-steer distinction. It differs on purpose in three places: interactions are durable, because a person may answer days later; the model's context stays private; and child sessions keep their own streams.
