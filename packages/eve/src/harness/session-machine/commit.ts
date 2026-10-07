@@ -47,7 +47,7 @@ export function sessionView(
   const turn = readTurnState(state);
   return {
     projection,
-    relayedRequestIds: new Set(Object.keys(turn.relayedRoutes ?? {})),
+    relayedRequestIds: new Set(Object.keys(turn.hitl?.relayedRoutes ?? {})),
     signIns: getPendingAuthorization(state)?.challenges ?? [],
     turn,
     usage: getSessionUsage({ state }),
@@ -117,10 +117,10 @@ export function dropClosedRecords<T extends HarnessSessionBase>(
 ): T {
   const turn = readTurnState(session.state);
   const relayedRoutes = Object.fromEntries(
-    Object.entries(turn.relayedRoutes ?? {}).filter(([id]) => {
+    Object.entries(turn.hitl?.relayedRoutes ?? {}).filter(([id]) => {
       const input = projection.inputs[id];
       return input !== undefined && input.status !== "settled";
     }),
   );
-  return writeTurnState(session, { ...turn, relayedRoutes });
+  return writeTurnState(session, { ...turn, hitl: { ...turn.hitl, relayedRoutes } });
 }

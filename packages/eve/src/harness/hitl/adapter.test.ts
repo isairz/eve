@@ -107,7 +107,7 @@ describe("HumanInput adapter", () => {
       case "appendHistory":
         expect(transition.commit).toEqual([text]);
         // Only results of calls a person decided hold later arrivals.
-        expect(transition.turn.readsResults).toBeUndefined();
+        expect(transition.turn.hitl?.readsResults).toBeUndefined();
         break;
       case "resumeInput":
         expect(transition.turn.queued).toEqual({ message: "next" });
@@ -303,7 +303,7 @@ describe("HumanInput adapter", () => {
     expect(projectHumanInput(restart, restart.turn.suspended[0]).requests.a).toMatchObject({
       answer: { requestId: "a", optionId: "approve" },
     });
-    expect(restart.turn.audit?.settlements.a?.approver).toEqual(ALICE);
+    expect(restart.turn.hitl?.audit?.settlements.a?.approver).toEqual(ALICE);
     const finished = beforeStep(restart, [answer("approve", "b")]);
     expect(finished.turn.suspended[0]?.approved?.map((request) => request.requestId)).toEqual([
       "a",
@@ -347,8 +347,10 @@ describe("HumanInput adapter", () => {
       turn: {
         ...v.turn,
         limitRequest: { at: AT, request: BUDGET_QUESTION },
-        relayedRoutes: { relay: route },
-        relayedAuthorizations: { child: { at: AT, name: "github", runId: "run" } },
+        hitl: {
+          relayedRoutes: { relay: route },
+          relayedAuthorizations: { child: { at: AT, name: "github", runId: "run" } },
+        },
       },
     });
     expect(projected.requests.relay).toMatchObject({ kind: "relayed", route });
@@ -381,21 +383,21 @@ describe("HumanInput adapter", () => {
     };
     const approvedCallId = deploy.action.kind === "tool-call" ? deploy.action.callId : "";
     expect(
-      adapt([{ type: "appendHistory", message: result(approvedCallId) }], held).transition.turn
-        .readsResults,
+      adapt([{ type: "appendHistory", message: result(approvedCallId) }], held).transition.turn.hitl
+        ?.readsResults,
     ).toBe(true);
     expect(
-      adapt([{ type: "appendHistory", message: result("task-call") }], held).transition.turn
-        .readsResults,
+      adapt([{ type: "appendHistory", message: result("task-call") }], held).transition.turn.hitl
+        ?.readsResults,
     ).toBeUndefined();
   });
 
   it("keeps arrivals behind the result-reading barrier", () => {
-    const v = { ...view(), turn: { ...view().turn, readsResults: true as const } };
+    const v = { ...view(), turn: { ...view().turn, hitl: { readsResults: true as const } } };
     const result = beforeStep(v, [message("later")]);
     expect(result.commands).toEqual([]);
     expect(result.turn.queued).toEqual({ message: "later", messageAuth: ALICE });
-    expect(result.turn.readsResults).toBe(true);
+    expect(result.turn.hitl?.readsResults).toBe(true);
   });
   it("preserves candidate settlements after commit/restart without asking the policy again", async () => {
     const base = view();
@@ -427,8 +429,8 @@ describe("HumanInput adapter", () => {
       initialSessionProjection(),
       JSON.parse(JSON.stringify(saved.state)),
     );
-    expect(restart.turn.audit?.settlements.a?.approver).toEqual(ALICE);
-    expect(restart.turn.audit?.activeCandidates).toEqual({});
+    expect(restart.turn.hitl?.audit?.settlements.a?.approver).toEqual(ALICE);
+    expect(restart.turn.hitl?.audit?.activeCandidates).toEqual({});
     expect(restart.turn.suspended[0]?.approved?.map((request) => request.requestId)).toEqual(["a"]);
     expect(beforeStep(restart, [response]).commands).toEqual([]);
   });
@@ -469,13 +471,13 @@ describe("HumanInput adapter", () => {
   });
 
   it("keeps the result barrier through effect completions and clears it on a whole model response", () => {
-    const v = { ...view(), turn: { ...view().turn, readsResults: true as const } };
+    const v = { ...view(), turn: { ...view().turn, hitl: { readsResults: true as const } } };
     const effectsCompleted = afterStep(v, { type: "actions.settled", at: AT, results: [] });
-    expect(effectsCompleted.turn.readsResults).toBe(true);
+    expect(effectsCompleted.turn.hitl?.readsResults).toBe(true);
     const modelCompleted = afterStep(v, { at: AT, inputs: [] });
-    expect(modelCompleted.turn.readsResults).toBeUndefined();
+    expect(modelCompleted.turn.hitl?.readsResults).toBeUndefined();
     const cancelled = adapt([examples.cancelTurn], v);
-    expect(cancelled.transition.turn.readsResults).toBeUndefined();
+    expect(cancelled.transition.turn.hitl?.readsResults).toBeUndefined();
   });
 
   it("consumes a budget answer without consuming the message queued behind it", () => {
@@ -485,7 +487,7 @@ describe("HumanInput adapter", () => {
       ...v,
       turn: {
         ...asked.turn,
-        readsResults: true as const,
+        hitl: { readsResults: true as const },
         queued: { message: "Answer this after continuing." },
       },
     };
@@ -554,7 +556,7 @@ describe("HumanInput adapter", () => {
     );
   });
   it("queues attributed answers as well as messages behind results", () => {
-    const v = { ...view(), turn: { ...view().turn, readsResults: true as const } };
+    const v = { ...view(), turn: { ...view().turn, hitl: { readsResults: true as const } } };
     const result = beforeStep(v, [answer("approve", "a"), message("later")]);
     expect(result.commands).toEqual([]);
     expect(result.turn.queued?.attributedInputResponses).toEqual([
@@ -577,7 +579,7 @@ describe("HumanInput adapter", () => {
       "turn.waiting",
       "input.resolved",
     ]);
-    expect(result.transition.turn.relayedRoutes).toEqual({});
+    expect(result.transition.turn.hitl?.relayedRoutes).toEqual({});
   });
 
   it("migrates the old HumanInput key into machine fields rather than storing another projection", async () => {
@@ -631,7 +633,7 @@ describe("HumanInput adapter", () => {
     expect(input.acceptInput({ message: "Answer this in the first step." })).toEqual({
       input: { message: "Answer this in the first step." },
     });
-    expect(readTurnState(saved.state).readsResults).toBeUndefined();
+    expect(readTurnState(saved.state).hitl?.readsResults).toBeUndefined();
   });
 
   it("keeps approved work ahead of the next message, unlike a cancelled approval (#4396)", () => {
@@ -654,12 +656,12 @@ describe("HumanInput adapter", () => {
     );
     const waiting = { ...v, turn: opened.turn };
     const pending = beforeStep(waiting, [answer("approve", "deploy")], () => undefined);
-    expect(Object.keys(pending.turn.audit?.activeCandidates ?? {})).toHaveLength(1);
+    expect(Object.keys(pending.turn.hitl?.audit?.activeCandidates ?? {})).toHaveLength(1);
     const cancelled = beforeStep({ ...waiting, turn: pending.turn }, [
       { type: "cancel.requested" },
     ]);
-    expect(cancelled.turn.audit?.activeCandidates).toEqual({});
-    expect(cancelled.turn.audit?.candidateHistory).toEqual([
+    expect(cancelled.turn.hitl?.audit?.activeCandidates).toEqual({});
+    expect(cancelled.turn.hitl?.audit?.candidateHistory).toEqual([
       expect.objectContaining({ status: "stale", reason: "Cancelled." }),
     ]);
   });

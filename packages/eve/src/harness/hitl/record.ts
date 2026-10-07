@@ -88,3 +88,36 @@ export interface ProxyInputQuestion {
   readonly allowFreeform?: boolean;
   readonly options?: readonly InputOption[];
 }
+
+/** Data owned by human-input rules, not by the session projection or execution machine. */
+export interface HitlRecord {
+  readonly audit?: ApprovalAudit;
+  readonly relayedRoutes?: Readonly<Record<string, RelayRoute>>;
+  readonly relayedAuthorizations?: Readonly<
+    Record<
+      string,
+      {
+        readonly at: import("#harness/session-machine/view.js").StepCoordinates;
+        readonly name: string;
+        readonly runId: string;
+      }
+    >
+  >;
+  /** Person-gated results joined history; arrivals wait for the next model response. */
+  readonly readsResults?: true;
+}
+
+/** Failure and cancellation remove transient human-input execution bookkeeping. */
+export function cleanupHitl(record: HitlRecord | undefined): HitlRecord | undefined {
+  return record === undefined ? undefined : { ...record, readsResults: undefined };
+}
+
+/** Empty bookkeeping should not keep an otherwise idle turn checkpoint alive. */
+export function hasHitlRecord(record: HitlRecord | undefined): boolean {
+  return (
+    record?.audit !== undefined ||
+    record?.readsResults === true ||
+    Object.keys(record?.relayedRoutes ?? {}).length > 0 ||
+    Object.keys(record?.relayedAuthorizations ?? {}).length > 0
+  );
+}

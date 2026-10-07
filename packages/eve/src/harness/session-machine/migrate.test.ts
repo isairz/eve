@@ -129,7 +129,7 @@ describe("machine hydration upgrades", () => {
         responses: [{ requestId: "ask", text: "yes" }],
       },
     ]);
-    expect(resumed.transition.turn.relayedRoutes).toEqual({});
+    expect(resumed.transition.turn.hitl?.relayedRoutes).toEqual({});
   });
 });
 

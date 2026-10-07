@@ -45,7 +45,7 @@ function settledButWaiting(outcome: "allowed" | "cancelled", where: "legacy" | "
           tasks: [],
         },
       ],
-      ...(where === "machine" && { audit }),
+      ...(where === "machine" && { hitl: { audit } }),
     },
     ...(where === "legacy" && { [LEGACY_KEY]: audit }),
   };
@@ -78,7 +78,7 @@ describe("an approval settled before its answer reached the step", () => {
         (command) => command.type === "publish" && command.event.type === "approval.settled",
       ),
     ).toBe(false);
-    expect(decision.turn.audit?.settlements[request.requestId]).toEqual(settlement(outcome));
+    expect(decision.turn.hitl?.audit?.settlements[request.requestId]).toEqual(settlement(outcome));
     if (outcome === "allowed") {
       expect(decision.turn.suspended[0]?.approved).toEqual([request]);
       expect(
@@ -105,7 +105,10 @@ describe("an approval settled before its answer reached the step", () => {
     const state = settledButWaiting("allowed", "machine");
     const turn = state["eve.harness.turnState"];
     const unsettled = {
-      "eve.harness.turnState": { ...turn, audit: { ...turn.audit!, settlements: {} } },
+      "eve.harness.turnState": {
+        ...turn,
+        hitl: { ...turn.hitl, audit: { ...turn.hitl?.audit!, settlements: {} } },
+      },
     };
     const decision = beforeStep(sessionView(storedProjection(unsettled), unsettled), []);
     expect(decision.commands).toEqual([]);

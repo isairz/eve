@@ -157,5 +157,5 @@ export type {
 
 /** The routes owned by the machine, for workflow-side dispatch selectors. */
 export function relayedRoutes(state: SessionStateMap | undefined) {
-  return readTurnState(state).relayedRoutes ?? {};
+  return readTurnState(state).hitl?.relayedRoutes ?? {};
 }

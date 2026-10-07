@@ -223,4 +223,16 @@ export {
   renderPendingApprovalsInstruction,
 } from "./approval.js";
 
-export type { ActiveCandidate, ApprovalAudit, CandidateDecision, FinishedCandidate, RelayRoute, ResponderIdentity, Settlement, WorkflowAskRoute, ProxyInputQuestion } from "./record.js";
+export type {
+  ActiveCandidate,
+  ApprovalAudit,
+  CandidateDecision,
+  FinishedCandidate,
+  RelayRoute,
+  ResponderIdentity,
+  Settlement,
+  WorkflowAskRoute,
+  ProxyInputQuestion,
+} from "./record.js";
+export { cleanupHitl, type HitlRecord } from "./record.js";
+export { hasHitlRecord } from "./record.js";

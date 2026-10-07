@@ -5,7 +5,7 @@ import type { SessionStateMap, StepInput } from "#harness/types.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 import type { InputRequest, InputResponse } from "#shared/input.js";
 
-import type { ApprovalAudit, RelayRoute } from "#harness/hitl/index.js";
+import { hasHitlRecord, type HitlRecord } from "#harness/hitl/index.js";
 
 // Execution state the session machine keeps between steps. Lifecycle facts (whether a turn is
 // open, whether a request is answered, how a call ended) are the projection's; this holds only
@@ -52,15 +52,9 @@ export interface SuspendedStep {
 }
 
 export interface TurnState {
-  readonly audit?: ApprovalAudit;
+  readonly hitl?: HitlRecord;
   readonly authorizationCoordinates?: Readonly<Record<string, StepCoordinates>>;
-  readonly relayedRoutes?: Readonly<Record<string, RelayRoute>>;
-  readonly relayedAuthorizations?: Readonly<
-    Record<string, { readonly at: StepCoordinates; readonly name: string; readonly runId: string }>
-  >;
   readonly limitRequest?: { readonly at: StepCoordinates; readonly request: InputRequest };
-  /** Results joined history; arrivals stay queued until the next model response. */
-  readonly readsResults?: true;
   /** Input that arrived before it could run: a partial answer, or input behind a policy pass. */
   readonly queued?: StepInput;
   readonly suspended: readonly SuspendedStep[];
@@ -83,12 +77,9 @@ export function writeTurnState<T extends { readonly state?: SessionStateMap }>(
     turn.suspended.length === 0 &&
     turn.queued === undefined &&
     turn.grants.length === 0 &&
-    turn.audit === undefined &&
+    !hasHitlRecord(turn.hitl) &&
     Object.keys(turn.authorizationCoordinates ?? {}).length === 0 &&
-    Object.keys(turn.relayedRoutes ?? {}).length === 0 &&
-    Object.keys(turn.relayedAuthorizations ?? {}).length === 0 &&
-    turn.limitRequest === undefined &&
-    turn.readsResults !== true
+    turn.limitRequest === undefined
   ) {
     delete state[TURN_STATE_KEY];
   } else {

@@ -854,7 +854,7 @@ describe("tool loop generate approval resume (real AI SDK)", () => {
       });
       const session = writeTurnState(opened, {
         ...readTurnState(opened.state),
-        readsResults: true,
+        hitl: { readsResults: true },
       });
       const first = await runStep(session, {
         message: "A delivery arriving while results are read.",
@@ -865,7 +865,7 @@ describe("tool loop generate approval resume (real AI SDK)", () => {
       expect(readTurnState(first.session.state).queued?.message).toBe(
         "A delivery arriving while results are read.",
       );
-      expect(readTurnState(first.session.state).readsResults).toBeUndefined();
+      expect(readTurnState(first.session.state).hitl?.readsResults).toBeUndefined();
       expect(typeof first.next).toBe("function");
       if (typeof first.next !== "function")
         throw new Error("Delivery must reach the next boundary.");

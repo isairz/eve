@@ -1,3 +1,4 @@
+import { cleanupHitl } from "./record.js";
 import type { ModelMessage } from "ai";
 import type { Transition } from "#harness/session-machine/commit.js";
 import { cancel, hold } from "#harness/session-machine/transitions.js";
@@ -58,7 +59,8 @@ export function adaptHumanInput(
       case "appendHistory":
         commit.push(command.message);
         // Only a person's decision holds later arrivals: runtime results join as on main.
-        if (hasResultFor(command.message, decided)) turn = { ...turn, readsResults: true };
+        if (hasResultFor(command.message, decided))
+          turn = { ...turn, hitl: { ...turn.hitl, readsResults: true } };
         break;
       case "resumeInput":
         turn = { ...turn, queued: command.input };
@@ -106,7 +108,7 @@ export function adaptHumanInput(
           compose(cancel({ ...view, projection: closedProjection, turn, signIns }));
           cancelled = true;
         }
-        turn = { ...turn, queued: undefined, readsResults: undefined };
+        turn = { ...turn, queued: undefined, hitl: cleanupHitl(turn.hitl) };
         break;
       case "forwardAnswer":
       case "withdrawQuestion":

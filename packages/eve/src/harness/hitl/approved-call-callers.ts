@@ -21,7 +21,7 @@ export function approversOf(
   const approvers: Record<string, SessionAuthContext> = {};
   for (const request of approved) {
     if (request.action === undefined) continue;
-    const approver = view.turn.audit?.settlements[request.requestId]?.approver;
+    const approver = view.turn.hitl?.audit?.settlements[request.requestId]?.approver;
     if (approver !== undefined) approvers[request.action.callId] = approver;
   }
   return approvers;

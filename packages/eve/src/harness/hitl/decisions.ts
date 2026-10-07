@@ -1,3 +1,4 @@
+import { cleanupHitl } from "./record.js";
 import { applyRecordedSettlements } from "./approval.js";
 import { authorizationRequested } from "./authorization.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
@@ -34,7 +35,7 @@ export function beforeStep(
 ): HumanInputDecision {
   let current = view;
   const commands: Command[] = [];
-  for (const candidate of Object.values(view.turn.audit?.activeCandidates ?? {})) {
+  for (const candidate of Object.values(view.turn.hitl?.audit?.activeCandidates ?? {})) {
     const owner = view.turn.suspended.find((step) =>
       step.requests.some((request) => request.requestId === candidate.requestId),
     );
@@ -80,7 +81,7 @@ export function beforeStep(
         continue;
       if (
         arrival.type === "message.received" &&
-        (current.turn.readsResults === true || current.turn.limitRequest !== undefined) &&
+        (current.turn.hitl?.readsResults === true || current.turn.limitRequest !== undefined) &&
         typedAnswers(projectHumanInput(current), arrival.text, "own").length === 0
       ) {
         if (step === undefined)
@@ -98,7 +99,7 @@ export function beforeStep(
         continue;
       }
       if (
-        current.turn.readsResults === true &&
+        current.turn.hitl?.readsResults === true &&
         arrival.type === "input.answered" &&
         current.turn.limitRequest === undefined
       ) {
@@ -177,7 +178,7 @@ export function afterStep(
 ): HumanInputDecision {
   let current =
     "inputs" in response || response.type !== "actions.settled"
-      ? { ...view, turn: { ...view.turn, readsResults: undefined } }
+      ? { ...view, turn: { ...view.turn, hitl: cleanupHitl(view.turn.hitl) } }
       : view;
   const commands: Command[] = [];
   const inputs = "inputs" in response ? response.inputs : [response];

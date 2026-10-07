@@ -45,7 +45,7 @@ function savedSession() {
 it("preserves Owen's persisted approval audit on hydration", () => {
   const saved = migrateSessionState(savedSession());
   expect(
-    sessionView(initialSessionProjection(), saved.state).turn.audit?.settlements.r1?.approver,
+    sessionView(initialSessionProjection(), saved.state).turn.hitl?.audit?.settlements.r1?.approver,
   ).toEqual(alice);
   expect(saved.state["eve.runtime.hitl.approvalState"]).toBeUndefined();
 });
@@ -87,7 +87,7 @@ it("maps candidate challenges, retains history, and lets machine audit win dupli
       },
     },
   });
-  const upgraded = sessionView(initialSessionProjection(), saved.state).turn.audit!;
+  const upgraded = sessionView(initialSessionProjection(), saved.state).turn.hitl?.audit!;
   expect(upgraded.activeCandidates.candidate?.authorizations).toEqual(
     candidate.authorizationChallenges,
   );
@@ -111,7 +111,7 @@ it("maps candidate challenges, retains history, and lets machine audit win dupli
       },
     },
   });
-  const merged = sessionView(initialSessionProjection(), mixed.state).turn.audit!;
+  const merged = sessionView(initialSessionProjection(), mixed.state).turn.hitl?.audit!;
   expect(merged.settlements.r1?.approver).toEqual(alice);
   expect(merged.settlements.r2?.approver).toEqual(alice);
   expect(merged.activeCandidates.candidate?.expiresAt).toBe(100);
@@ -161,7 +161,7 @@ it("never restores the old approval key when resumed candidates expire", () => {
   ]);
   const saved = writeTurnState({ state: resumed }, decision.turn).state;
   expect(saved).not.toHaveProperty("eve.runtime.hitl.approvalState");
-  const upgraded = sessionView(storedProjection(saved), saved).turn.audit!;
+  const upgraded = sessionView(storedProjection(saved), saved).turn.hitl?.audit!;
   expect(upgraded.activeCandidates).toEqual({});
   expect(upgraded.candidateHistory).toEqual([
     expect.objectContaining({ candidateId: "c", status: "timed-out" }),
@@ -190,7 +190,7 @@ it("defaults legacy candidates without decisions to Approve and derives missing 
       },
     },
   });
-  const upgraded = sessionView(storedProjection(saved.state), saved.state).turn.audit!;
+  const upgraded = sessionView(storedProjection(saved.state), saved.state).turn.hitl?.audit!;
   expect(upgraded.activeCandidates.c?.decision).toBe("approve");
   expect(upgraded.nextCandidateSequence).toBe(2);
 });

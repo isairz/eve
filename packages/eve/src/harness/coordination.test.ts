@@ -471,5 +471,5 @@ import { jsonSchema } from "ai";
 
 // Thin selector adapter: the machine owns the routes formerly stored by the proxy map.
 function getRelayedRequests(state: HarnessSession["state"]) {
-  return new Map(Object.entries(readTurnState(state).relayedRoutes ?? {}));
+  return new Map(Object.entries(readTurnState(state).hitl?.relayedRoutes ?? {}));
 }

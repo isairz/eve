@@ -151,7 +151,7 @@ describe("step-side reads of a legacy checkpoint", () => {
     for (const key of LEGACY_PARKING_KEYS) expect(session.state?.[key]).toBeUndefined();
     const view = sessionView(storedProjection(session.state), session.state);
     expect(view.turn.suspended[0]?.requests).toEqual([approval]);
-    expect(view.turn.relayedRoutes?.relayed).toBeDefined();
+    expect(view.turn.hitl?.relayedRoutes?.relayed).toBeDefined();
   });
 
   it("hydrate a parked budget question so it resumes", () => {

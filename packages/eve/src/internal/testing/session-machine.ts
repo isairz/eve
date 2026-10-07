@@ -258,7 +258,7 @@ export function withRelayedRequests<
 
 /** Private relay routes currently owned by the machine, without legacy hydration. */
 export function getRelayedRequests(state: SessionStateMap | undefined) {
-  return new Map(Object.entries(readTurnState(state).relayedRoutes ?? {}));
+  return new Map(Object.entries(readTurnState(state).hitl?.relayedRoutes ?? {}));
 }
 
 /** Inspect the live relay decision/outbox, not a compatibility-shaped routed payload. */

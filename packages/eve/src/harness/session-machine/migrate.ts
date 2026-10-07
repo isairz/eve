@@ -38,7 +38,7 @@ function upgradeLegacyState(
       projection,
       turn,
       signIns: pending?.challenges ?? [],
-      relayedRequestIds: new Set(Object.keys(turn.relayedRoutes ?? {})),
+      relayedRequestIds: new Set(Object.keys(turn.hitl?.relayedRoutes ?? {})),
       usage: getSessionUsage(session),
     },
     session.state,
@@ -53,7 +53,10 @@ function upgradeLegacyState(
     state: migrated,
     turn: {
       ...upgraded.turn,
-      audit: mergeApprovalAudits(legacyApprovalAudit(state), upgraded.turn.audit),
+      hitl: {
+        ...upgraded.turn.hitl,
+        audit: mergeApprovalAudits(legacyApprovalAudit(state), upgraded.turn.hitl?.audit),
+      },
     },
   };
 }
@@ -105,19 +108,22 @@ function projectLegacyState(
           : turn.suspended,
       grants: [...new Set([...turn.grants, ...view.turn.grants])],
       queued: view.turn.queued ?? turn.queued,
-      audit: view.turn.audit ?? turn.audit,
-      relayedRoutes: {
-        ...proxyRoutes,
-        ...Object.fromEntries(
-          Object.entries(legacy.requests).flatMap(([id, request]) =>
-            request.kind === "relayed" ? [[id, request.route]] : [],
+      hitl: {
+        ...turn.hitl,
+        audit: view.turn.hitl?.audit ?? turn.hitl?.audit,
+        relayedRoutes: {
+          ...proxyRoutes,
+          ...Object.fromEntries(
+            Object.entries(legacy.requests).flatMap(([id, request]) =>
+              request.kind === "relayed" ? [[id, request.route]] : [],
+            ),
           ),
-        ),
-        ...view.turn.relayedRoutes,
-      },
-      relayedAuthorizations: {
-        ...legacy.relayedAuthorizations,
-        ...view.turn.relayedAuthorizations,
+          ...view.turn.hitl?.relayedRoutes,
+        },
+        relayedAuthorizations: {
+          ...legacy.relayedAuthorizations,
+          ...view.turn.hitl?.relayedAuthorizations,
+        },
       },
     },
     signIns: hasHumanState

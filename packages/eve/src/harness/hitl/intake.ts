@@ -77,7 +77,7 @@ export async function acceptHumanInput(
   const starting = step.view();
   const takeQueued =
     options.takeQueued &&
-    starting.turn.readsResults !== true &&
+    starting.turn.hitl?.readsResults !== true &&
     starting.turn.limitRequest === undefined;
   const delivered = deliver(starting, input, { takeQueued });
   // The durable session boundary matched callbacks before entering the harness and removed
@@ -97,26 +97,31 @@ export async function acceptHumanInput(
       ),
     ],
   };
-  if (view.turn.audit !== undefined) {
+  if (view.turn.hitl?.audit !== undefined) {
     view.turn = {
       ...view.turn,
-      audit: {
-        ...view.turn.audit,
-        activeCandidates: Object.fromEntries(
-          Object.entries(view.turn.audit.activeCandidates).map(([id, candidate]) => {
-            const authorizations = view.signIns.filter((challenge) => challenge.candidateId === id);
-            return [
-              id,
-              candidate.authorizations !== undefined || authorizations.length === 0
-                ? candidate
-                : {
-                    ...candidate,
-                    status: "authorization-required" as const,
-                    authorizations,
-                  },
-            ];
-          }),
-        ),
+      hitl: {
+        ...view.turn.hitl,
+        audit: {
+          ...view.turn.hitl?.audit,
+          activeCandidates: Object.fromEntries(
+            Object.entries(view.turn.hitl.audit.activeCandidates).map(([id, candidate]) => {
+              const authorizations = view.signIns.filter(
+                (challenge) => challenge.candidateId === id,
+              );
+              return [
+                id,
+                candidate.authorizations !== undefined || authorizations.length === 0
+                  ? candidate
+                  : {
+                      ...candidate,
+                      status: "authorization-required" as const,
+                      authorizations,
+                    },
+              ];
+            }),
+          ),
+        },
       },
     };
   }
@@ -154,7 +159,7 @@ export async function acceptHumanInput(
   const sender = ctx?.get(AuthKey) ?? ctx?.get(SessionKey)?.auth.current ?? null;
   const waiting =
     starting.turn.limitRequest !== undefined ||
-    starting.turn.readsResults === true ||
+    starting.turn.hitl?.readsResults === true ||
     starting.turn.suspended.some((parked) => parked.requests.length > 0) ||
     view.signIns.length > 0;
   const arrivals = arrivalsOf({
@@ -206,7 +211,7 @@ export async function acceptHumanInput(
   const requestedChecks = policyChecksBeforeStep(view, arrivals);
   const dry = beforeStep(view, arrivals, () => undefined);
   const readyView = { ...view, turn: dry.turn, signIns: dry.signIns };
-  const existing = new Set(Object.keys(starting.turn.audit?.activeCandidates ?? {}));
+  const existing = new Set(Object.keys(starting.turn.hitl?.audit?.activeCandidates ?? {}));
   const byId = new Map(
     readyView.turn.suspended
       .flatMap((parked) => pendingPolicyChecks(projectHumanInput(readyView, parked)))
@@ -316,7 +321,7 @@ export async function acceptHumanInput(
     queuedAfterBudget ??
     (consumedMessage ? withoutTurnInput(delivered.input) : withoutResponses(delivered.input));
   const barrierQueued =
-    starting.turn.readsResults === true ||
+    starting.turn.hitl?.readsResults === true ||
     (step.view().turn.limitRequest !== undefined && !consumedMessage);
   const turnInput =
     deferred !== undefined || barrierQueued ? withoutTurnInput(remaining) : remaining;

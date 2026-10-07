@@ -129,7 +129,7 @@ async function routeProxiedDeliver(
       projection: adapted.transition.events.reduce(foldSession, view.projection),
       turn: adapted.transition.turn,
       signIns: adapted.transition.signIns ?? view.signIns,
-      relayedRequestIds: new Set(Object.keys(adapted.transition.turn.relayedRoutes ?? {})),
+      relayedRequestIds: new Set(Object.keys(adapted.transition.turn.hitl?.relayedRoutes ?? {})),
     };
   }
   if (events.length > 0 && kept.length === 0 && !cancelled && view.relayedRequestIds.size > 0) {

@@ -59,7 +59,7 @@ export function projectHumanInput(view: SessionView, step?: SuspendedStep): Huma
       requests[limit.request.requestId] = { kind: "session-limit", ...limit };
     for (const input of Object.values(view.projection.inputs)) {
       if (input.status === "settled") continue;
-      const route = view.turn.relayedRoutes?.[input.request.requestId];
+      const route = view.turn.hitl?.relayedRoutes?.[input.request.requestId];
       if (route !== undefined)
         requests[input.request.requestId] = {
           kind: "relayed",
@@ -87,7 +87,7 @@ export function projectHumanInput(view: SessionView, step?: SuspendedStep): Huma
           ...(step.approved !== undefined && { approved: step.approved }),
           ...(step.following !== undefined && { following: step.following }),
         };
-  const audit = view.turn.audit;
+  const audit = view.turn.hitl?.audit;
   return {
     requests,
     grants: view.turn.grants,
@@ -103,7 +103,7 @@ export function projectHumanInput(view: SessionView, step?: SuspendedStep): Huma
         ),
       },
     }),
-    relayedAuthorizations: view.turn.relayedAuthorizations,
+    relayedAuthorizations: view.turn.hitl?.relayedAuthorizations,
   };
 }
 
@@ -153,7 +153,7 @@ export function projectedTurn(
     view,
     at === undefined ? undefined : view.turn.suspended.find((step) => sameStep(step.event, at)),
   );
-  const activeCandidates = { ...view.turn.audit?.activeCandidates };
+  const activeCandidates = { ...view.turn.hitl?.audit?.activeCandidates };
   for (const id of Object.keys(prior.audit?.activeCandidates ?? {})) delete activeCandidates[id];
   Object.assign(activeCandidates, state.audit?.activeCandidates);
   const audit = state.audit === undefined ? undefined : { ...state.audit, activeCandidates };
@@ -168,17 +168,22 @@ export function projectedTurn(
     suspended,
     grants: state.grants,
     queued: state.queued,
-    audit,
+    hitl: {
+      ...view.turn.hitl,
+      audit,
+      ...(at === undefined && {
+        relayedRoutes: Object.fromEntries(
+          Object.entries(state.requests).flatMap(([id, request]) =>
+            request.kind === "relayed" ? [[id, request.route]] : [],
+          ),
+        ),
+        relayedAuthorizations: state.relayedAuthorizations,
+      }),
+    },
     authorizationCoordinates,
     ...(at === undefined && {
       limitRequest:
         limit?.kind === "session-limit" ? { at: limit.at, request: limit.request } : undefined,
-      relayedRoutes: Object.fromEntries(
-        Object.entries(state.requests).flatMap(([id, request]) =>
-          request.kind === "relayed" ? [[id, request.route]] : [],
-        ),
-      ),
-      relayedAuthorizations: state.relayedAuthorizations,
     }),
   };
 }

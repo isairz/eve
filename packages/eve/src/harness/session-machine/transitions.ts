@@ -1,3 +1,4 @@
+import { cleanupHitl } from "#harness/hitl/index.js";
 import type { ModelMessage, UserContent } from "ai";
 
 import type {
@@ -188,7 +189,7 @@ export function fail(
       ...view.turn,
       suspended: view.turn.suspended.filter((step) => !stopped.includes(step)),
       limitRequest: undefined,
-      readsResults: undefined,
+      hitl: cleanupHitl(view.turn.hitl),
       queued: undefined,
     },
   };
@@ -628,7 +629,7 @@ export function cancel(view: SessionView): Transition {
       ...view.turn,
       suspended: view.turn.suspended.filter((step) => !stopped.includes(step)),
       limitRequest: undefined,
-      readsResults: undefined,
+      hitl: cleanupHitl(view.turn.hitl),
       queued: undefined,
     },
   };

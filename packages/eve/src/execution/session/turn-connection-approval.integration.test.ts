@@ -743,7 +743,7 @@ function callerHeader(call: readonly unknown[] | undefined): string | null {
 
 /** Observe the current machine audit, including full responders while active. */
 function approvalAuditSnapshot(state: SessionStateMap | undefined) {
-  const audit = sessionView(storedProjection(state), state).turn.audit;
+  const audit = sessionView(storedProjection(state), state).turn.hitl?.audit;
   return {
     activeCandidates: Object.values(audit?.activeCandidates ?? {}),
     candidateHistory: audit?.candidateHistory ?? [],
@@ -758,20 +758,23 @@ function withCandidateAuthorizations(input: {
   readonly authorizationChallenges: readonly AuthorizationChallenge[];
 }) {
   const turn = sessionView(storedProjection(input.state), input.state).turn;
-  const audit = turn.audit!;
+  const audit = turn.hitl?.audit!;
   const candidate = audit.activeCandidates[input.candidateId]!;
   return writeTurnState(
     { state: input.state },
     {
       ...turn,
-      audit: {
-        ...audit,
-        activeCandidates: {
-          ...audit.activeCandidates,
-          [input.candidateId]: {
-            ...candidate,
-            authorizations: input.authorizationChallenges,
-            status: "authorization-required",
+      hitl: {
+        ...turn.hitl,
+        audit: {
+          ...audit,
+          activeCandidates: {
+            ...audit.activeCandidates,
+            [input.candidateId]: {
+              ...candidate,
+              authorizations: input.authorizationChallenges,
+              status: "authorization-required",
+            },
           },
         },
       },
