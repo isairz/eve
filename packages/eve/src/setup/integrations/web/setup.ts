@@ -1,7 +1,5 @@
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { resolveEveProjectContext } from "#internal/project-context.js";
 import { select } from "#setup/ask.js";
 import type { RegistrySetupCompletion } from "#setup/registry-setup-protocol.js";
 import type { VercelProjectReference } from "#setup/project-resolution.js";
@@ -9,9 +7,15 @@ import { installScaffoldDependencies } from "../shared/scaffold.js";
 import { prepareWebAuthScaffold } from "./auth-scaffold.js";
 import { WEB_AUTHENTICATION_QUESTION } from "./auth-options.js";
 import { provisionWebChatAuth } from "./provision-auth.js";
-import { detectPackageManager, type PackageManagerKind } from "#setup/package-manager.js";
-import { pathExists, writeTextFile } from "#setup/scaffold/files.js";
-import { WEB_CHANNEL_TEMPLATES } from "#setup/scaffold/create/web-template.js";
+import type { PackageManagerKind } from "#setup/package-manager.js";
+import {
+  defaultWebChatHostingDeps,
+  peerServiceVercelConfig,
+  prepareWebChatHosting,
+  resolveWebChatProject,
+  runScriptCommand,
+  type WebChatHostingDeps,
+} from "../web-chat/hosting.js";
 import {
   defineSetupIntegration,
   type SetupApplyContext,
@@ -33,40 +37,30 @@ const nextConfig: NextConfig = {};
 
 export default nextConfig;
 `;
-const PEER_SERVICE_WEB_BUILD_COMMAND = "node ../../node_modules/next/dist/bin/next build";
-const PEER_SERVICE_VERCEL_CONFIG = `import { withEve } from "eve/vercel";
+const REGISTRY_NEXT_CONFIG = `import type { NextConfig } from "next";
+import { withEve } from "eve/next";
 
-export default await withEve({
-  services: {
-    web: {
-      framework: "nextjs",
-      root: "apps/web",
-      buildCommand: "${PEER_SERVICE_WEB_BUILD_COMMAND}",
-    },
-  },
-  routes: [
-    { src: "^(.*)$", destination: { type: "service", service: "web" } },
-  ],
-});
+const nextConfig: NextConfig = {};
+
+export default withEve(nextConfig);
 `;
+const PEER_SERVICE_VERCEL_CONFIG = peerServiceVercelConfig(
+  "nextjs",
+  "node ../../node_modules/next/dist/bin/next build",
+);
+const LEGACY_PEER_SERVICE_VERCEL_CONFIG = PEER_SERVICE_VERCEL_CONFIG.replace(
+  /    web: \{[^}]+\},/,
+  '    web: { framework: "nextjs", root: "apps/web" },',
+);
 
-export interface WebSetupDeps {
-  detectPackageManager: typeof detectPackageManager;
-  pathExists: typeof pathExists;
-  readTextFile(path: string): Promise<string>;
-  resolveEveProjectContext: typeof resolveEveProjectContext;
-  writeTextFile: typeof writeTextFile;
+export interface WebSetupDeps extends WebChatHostingDeps {
   prepareWebAuthScaffold: typeof prepareWebAuthScaffold;
   provisionWebChatAuth: typeof provisionWebChatAuth;
   installScaffoldDependencies: typeof installScaffoldDependencies;
 }
 
-export const defaultWebSetupDeps: WebSetupDeps = {
-  detectPackageManager,
-  pathExists,
-  readTextFile: (path) => readFile(path, "utf8"),
-  resolveEveProjectContext,
-  writeTextFile,
+const defaultWebSetupDeps: WebSetupDeps = {
+  ...defaultWebChatHostingDeps,
   prepareWebAuthScaffold,
   provisionWebChatAuth,
   installScaffoldDependencies,
@@ -83,10 +77,7 @@ export async function prepareWebSetup(
   context: SetupPrepareContext,
   deps: WebSetupDeps = defaultWebSetupDeps,
 ): Promise<WebSetupPlan> {
-  const project = await deps.resolveEveProjectContext(context.appRoot);
-  if (project.kind === "workspace") {
-    throw new Error("Web Chat setup requires a selected workspace agent.");
-  }
+  const project = await resolveWebChatProject(context.appRoot, deps);
   const rootWebChat =
     (await deps.pathExists(join(project.environmentRoot, "app", "eve-agent.ts"))) &&
     !(await deps.pathExists(join(project.environmentRoot, "apps", "web", "app", "eve-agent.ts")));
@@ -128,62 +119,12 @@ export async function prepareWebSetup(
   return plan;
 }
 
-export function runScriptCommand(packageManager: PackageManagerKind, script: string): string {
-  switch (packageManager) {
-    case "npm":
-      return `npm run ${script}`;
-    case "pnpm":
-      return `pnpm ${script}`;
-    case "yarn":
-      return `yarn ${script}`;
-    case "bun":
-      return `bun run ${script}`;
-  }
-}
-
-export async function configurePeerServiceScripts(root: string, deps: WebSetupDeps): Promise<void> {
-  const path = join(root, "package.json");
-  const document = JSON.parse(await deps.readTextFile(path)) as {
-    scripts?: Record<string, string>;
-    [key: string]: unknown;
-  };
-  const scripts = { ...document.scripts };
-  scripts.dev ??= "eve dev";
-  scripts["dev:eve"] ??= "eve dev";
-  scripts["dev:all"] ??= "vercel dev --local";
-  await deps.writeTextFile(path, `${JSON.stringify({ ...document, scripts }, null, 2)}\n`, {
-    force: true,
-  });
-}
-
-export async function assertInstallerOwned(
-  path: string,
-  allowed: readonly string[],
-): Promise<void> {
-  try {
-    const source = await readFile(path, "utf8");
-    if (allowed.includes(source)) return;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw error;
-  }
-  throw new Error(
-    `Could not configure Web Chat because ${path} contains authored configuration. Preserve it and compose the eve integration manually.`,
-  );
-}
-
 export async function applyWebSetup(
   plan: WebSetupPlan,
   context: SetupApplyContext,
   deps: WebSetupDeps = defaultWebSetupDeps,
 ) {
-  const project = await deps.resolveEveProjectContext(context.appRoot);
-  if (project.kind === "workspace") {
-    throw new Error("Web Chat setup requires a selected workspace agent.");
-  }
-  const agentAppRoot =
-    project.kind === "workspace-member" ? project.member.appRoot : project.appRoot;
-  const channelPath = join(agentAppRoot, "agent", "channels", "eve.ts");
+  const project = await resolveWebChatProject(context.appRoot, deps);
   const webRoot = plan.rootWebChat
     ? project.environmentRoot
     : join(project.environmentRoot, "apps", "web");
@@ -192,62 +133,31 @@ export async function applyWebSetup(
       ? undefined
       : await deps.prepareWebAuthScaffold({
           environmentRoot: project.environmentRoot,
-          agentAppRoot,
+          agentAppRoot: project.agentAppRoot,
           webRoot,
           force: context.force,
         });
-  if (writeAuth === undefined && (context.force || !(await deps.pathExists(channelPath)))) {
-    await deps.writeTextFile(channelPath, WEB_CHANNEL_TEMPLATES.default, {
+  const vercelServices = plan.hosting === "vercel";
+  const hostedNextConfig = plan.rootWebChat ? REGISTRY_NEXT_CONFIG : NEXT_HOSTED_CONFIG;
+  const hostedStartScript = plan.rootWebChat ? "dev" : "dev:web";
+  const writeHosting = await prepareWebChatHosting(
+    {
+      project,
+      webRoot,
       force: context.force,
-    });
-  }
-  const agentName = project.kind === "workspace-member" ? project.member.name : undefined;
-  await deps.writeTextFile(
-    join(webRoot, "app", "eve-agent.ts"),
-    `/** Named workspace agent selected by the Web Chat installer. */\nexport const WEB_CHAT_AGENT: string | undefined = ${agentName === undefined ? "undefined" : JSON.stringify(agentName)};\n`,
-    { force: true },
+      writeChannel: writeAuth === undefined,
+      hostConfig: {
+        path: join(webRoot, "next.config.ts"),
+        source: vercelServices ? PEER_SERVICE_NEXT_CONFIG : hostedNextConfig,
+        owned: [REGISTRY_NEXT_CONFIG, NEXT_HOSTED_CONFIG, PEER_SERVICE_NEXT_CONFIG],
+      },
+      vercelServices,
+      vercelConfigs: [PEER_SERVICE_VERCEL_CONFIG, LEGACY_PEER_SERVICE_VERCEL_CONFIG],
+    },
+    deps,
   );
-  const nextConfigPath = join(webRoot, "next.config.ts");
-  const registryNextConfig = `import type { NextConfig } from "next";
-import { withEve } from "eve/next";
-
-const nextConfig: NextConfig = {};
-
-export default withEve(nextConfig);
-`;
-  await assertInstallerOwned(nextConfigPath, [
-    registryNextConfig,
-    NEXT_HOSTED_CONFIG,
-    PEER_SERVICE_NEXT_CONFIG,
-  ]);
-  let startScript: string;
-  if (plan.hosting === "vercel") {
-    const vercelTsPath = join(project.environmentRoot, "vercel.ts");
-    const vercelJsonPath = join(project.environmentRoot, "vercel.json");
-    await assertInstallerOwned(vercelTsPath, [
-      PEER_SERVICE_VERCEL_CONFIG,
-      PEER_SERVICE_VERCEL_CONFIG.replace(
-        /    web: \{[^}]+\},/,
-        '    web: { framework: "nextjs", root: "apps/web" },',
-      ),
-    ]);
-    if (await deps.pathExists(vercelJsonPath)) {
-      throw new Error(
-        `Could not configure Vercel services because ${vercelJsonPath} already exists. Preserve it and compose eve/vercel manually.`,
-      );
-    }
-    await deps.writeTextFile(nextConfigPath, PEER_SERVICE_NEXT_CONFIG, { force: true });
-    await deps.writeTextFile(vercelTsPath, PEER_SERVICE_VERCEL_CONFIG, { force: true });
-    await configurePeerServiceScripts(project.environmentRoot, deps);
-    startScript = "dev:all";
-  } else {
-    await deps.writeTextFile(
-      nextConfigPath,
-      plan.rootWebChat ? registryNextConfig : NEXT_HOSTED_CONFIG,
-      { force: true },
-    );
-    startScript = plan.rootWebChat ? "dev" : "dev:web";
-  }
+  await writeHosting();
+  const startScript = vercelServices ? "dev:all" : hostedStartScript;
   if (plan.authProject !== undefined && writeAuth !== undefined) {
     await deps.provisionWebChatAuth(plan.authProject, context.signal);
     context.signal?.throwIfAborted();

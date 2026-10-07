@@ -2,19 +2,19 @@ import { join } from "node:path";
 
 import { select } from "#setup/ask.js";
 import type { PackageManagerKind } from "#setup/package-manager.js";
-import { WEB_CHANNEL_TEMPLATES } from "#setup/scaffold/create/web-template.js";
 import {
   defineSetupIntegration,
   type SetupApplyContext,
   type SetupPrepareContext,
 } from "../types.js";
 import {
-  assertInstallerOwned,
-  configurePeerServiceScripts,
-  defaultWebSetupDeps,
+  defaultWebChatHostingDeps,
+  peerServiceVercelConfig,
+  prepareWebChatHosting,
+  resolveWebChatProject,
   runScriptCommand,
-  type WebSetupDeps,
-} from "../web/setup.js";
+  type WebChatHostingDeps,
+} from "../web-chat/hosting.js";
 
 /** The `vite.config.ts` the `channel/tanstack` registry item installs. */
 export const TANSTACK_REGISTRY_VITE_CONFIG = `import { tanstackStart } from "@tanstack/react-start/plugin/vite";
@@ -49,22 +49,10 @@ export default defineConfig({
   ],
 });
 `;
-const PEER_SERVICE_WEB_BUILD_COMMAND = "node ../../node_modules/vite/bin/vite.js build";
-const PEER_SERVICE_VERCEL_CONFIG = `import { withEve } from "eve/vercel";
-
-export default await withEve({
-  services: {
-    web: {
-      framework: "tanstack-start",
-      root: "apps/web",
-      buildCommand: "${PEER_SERVICE_WEB_BUILD_COMMAND}",
-    },
-  },
-  routes: [
-    { src: "^(.*)$", destination: { type: "service", service: "web" } },
-  ],
-});
-`;
+const PEER_SERVICE_VERCEL_CONFIG = peerServiceVercelConfig(
+  "tanstack-start",
+  "node ../../node_modules/vite/bin/vite.js build",
+);
 
 interface TanStackSetupPlan {
   hosting: "tanstack" | "vercel";
@@ -73,15 +61,12 @@ interface TanStackSetupPlan {
 
 export async function prepareTanStackSetup(
   context: SetupPrepareContext,
-  deps: WebSetupDeps = defaultWebSetupDeps,
+  deps: WebChatHostingDeps = defaultWebChatHostingDeps,
 ): Promise<TanStackSetupPlan> {
-  const project = await deps.resolveEveProjectContext(context.appRoot);
-  if (project.kind === "workspace") {
-    throw new Error("Web Chat setup requires a selected workspace agent.");
-  }
+  const project = await resolveWebChatProject(context.appRoot, deps);
   // `eveTanStack()` mounts one agent, so a workspace member deploys as a peer service.
   const hosting =
-    project.kind === "workspace-member"
+    project.agentName !== undefined
       ? ("vercel" as const)
       : await context.asker.ask(
           select({
@@ -114,50 +99,29 @@ export async function prepareTanStackSetup(
 export async function applyTanStackSetup(
   plan: TanStackSetupPlan,
   context: SetupApplyContext,
-  deps: WebSetupDeps = defaultWebSetupDeps,
+  deps: WebChatHostingDeps = defaultWebChatHostingDeps,
 ) {
-  const project = await deps.resolveEveProjectContext(context.appRoot);
-  if (project.kind === "workspace") {
-    throw new Error("Web Chat setup requires a selected workspace agent.");
-  }
-  const agentAppRoot =
-    project.kind === "workspace-member" ? project.member.appRoot : project.appRoot;
-  const channelPath = join(agentAppRoot, "agent", "channels", "eve.ts");
-  if (context.force || !(await deps.pathExists(channelPath))) {
-    await deps.writeTextFile(channelPath, WEB_CHANNEL_TEMPLATES.default, {
-      force: context.force,
-    });
-  }
-  const agentName = project.kind === "workspace-member" ? project.member.name : undefined;
+  const project = await resolveWebChatProject(context.appRoot, deps);
   const webRoot = join(project.environmentRoot, "apps", "web");
-  await deps.writeTextFile(
-    join(webRoot, "app", "eve-agent.ts"),
-    `/** Named workspace agent selected by the Web Chat installer. */\nexport const WEB_CHAT_AGENT: string | undefined = ${agentName === undefined ? "undefined" : JSON.stringify(agentName)};\n`,
-    { force: true },
+  const vercelServices = plan.hosting === "vercel";
+  const writeHosting = await prepareWebChatHosting(
+    {
+      project,
+      webRoot,
+      force: context.force,
+      writeChannel: true,
+      hostConfig: {
+        path: join(webRoot, "vite.config.ts"),
+        source: vercelServices ? TANSTACK_REGISTRY_VITE_CONFIG : TANSTACK_HOSTED_VITE_CONFIG,
+        owned: [TANSTACK_REGISTRY_VITE_CONFIG, TANSTACK_HOSTED_VITE_CONFIG],
+      },
+      vercelServices,
+      vercelConfigs: [PEER_SERVICE_VERCEL_CONFIG],
+    },
+    deps,
   );
-  const viteConfigPath = join(webRoot, "vite.config.ts");
-  await assertInstallerOwned(viteConfigPath, [
-    TANSTACK_REGISTRY_VITE_CONFIG,
-    TANSTACK_HOSTED_VITE_CONFIG,
-  ]);
-  let startScript: string;
-  if (plan.hosting === "vercel") {
-    const vercelTsPath = join(project.environmentRoot, "vercel.ts");
-    const vercelJsonPath = join(project.environmentRoot, "vercel.json");
-    await assertInstallerOwned(vercelTsPath, [PEER_SERVICE_VERCEL_CONFIG]);
-    if (await deps.pathExists(vercelJsonPath)) {
-      throw new Error(
-        `Could not configure Vercel services because ${vercelJsonPath} already exists. Preserve it and compose eve/vercel manually.`,
-      );
-    }
-    await deps.writeTextFile(viteConfigPath, TANSTACK_REGISTRY_VITE_CONFIG, { force: true });
-    await deps.writeTextFile(vercelTsPath, PEER_SERVICE_VERCEL_CONFIG, { force: true });
-    await configurePeerServiceScripts(project.environmentRoot, deps);
-    startScript = "dev:all";
-  } else {
-    await deps.writeTextFile(viteConfigPath, TANSTACK_HOSTED_VITE_CONFIG, { force: true });
-    startScript = "dev:web";
-  }
+  await writeHosting();
+  const startScript = vercelServices ? "dev:all" : "dev:web";
   context.presenter.log.success("Configured channel: tanstack");
   return {
     facts: [

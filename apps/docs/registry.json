@@ -2169,6 +2169,11 @@
           "target": "apps/web/app/routes/s.index.tsx"
         },
         {
+          "path": "registry/channel/tanstack/app/start.ts",
+          "type": "registry:file",
+          "target": "apps/web/app/start.ts"
+        },
+        {
           "path": "registry/channel/tanstack/components.json",
           "type": "registry:file",
           "target": "apps/web/components.json"

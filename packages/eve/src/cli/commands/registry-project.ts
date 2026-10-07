@@ -91,10 +91,19 @@ const WEB_CHAT_SCRIPTS = {
   tanstack: { "dev:web": "vite dev apps/web", "build:web": "vite build apps/web" },
 } as const;
 
+/** Host framework of a Web Chat registry item. */
+export type WebChatFramework = keyof typeof WEB_CHAT_SCRIPTS;
+
+function isWebChatScriptDefault(name: string, command: string): boolean {
+  return Object.values(WEB_CHAT_SCRIPTS).some(
+    (scripts) => (scripts as Record<string, string>)[name] === command,
+  );
+}
+
 /** Resolves and prepares the root package that owns Web Chat. */
 export async function prepareWebChatProjectRoot(
   appRoot: string,
-  framework: keyof typeof WEB_CHAT_SCRIPTS = "next",
+  framework: WebChatFramework = "next",
 ): Promise<string> {
   const project = await resolveEveProjectContext(appRoot);
   if (project.kind === "workspace") {
@@ -109,7 +118,11 @@ export async function prepareWebChatProjectRoot(
   };
   const scripts = { ...document.scripts };
   for (const [name, command] of Object.entries(WEB_CHAT_SCRIPTS[framework])) {
-    scripts[name] ??= command;
+    const current = scripts[name];
+    // Another framework's installer default would run the wrong dev server.
+    if (current === undefined || isWebChatScriptDefault(name, current)) {
+      scripts[name] = command;
+    }
   }
   await writeFile(
     packageJsonPath,
@@ -133,7 +146,44 @@ function setJsoncValue(source: string, path: (string | number)[], value: unknown
   );
 }
 
-export function addWebRegistryTsconfig(source: string, path: string): string {
+interface WebRegistryTsconfigTemplate {
+  compilerOptions: Record<string, unknown>;
+  include: string[];
+  exclude: string[];
+}
+
+/** Mirrors `apps/docs/registry/channel/tanstack/tsconfig.json`; runtime cannot read the docs app. */
+const TANSTACK_WEB_TSCONFIG: WebRegistryTsconfigTemplate = {
+  compilerOptions: {
+    target: "ES2022",
+    lib: ["dom", "dom.iterable", "esnext"],
+    skipLibCheck: true,
+    strict: true,
+    noEmit: true,
+    esModuleInterop: true,
+    module: "esnext",
+    moduleResolution: "Bundler",
+    resolveJsonModule: true,
+    isolatedModules: true,
+    jsx: "react-jsx",
+    types: ["vite/client"],
+    paths: { "@/*": ["./*"] },
+  },
+  include: ["**/*.ts", "**/*.tsx"],
+  exclude: ["node_modules", ".output", ".vercel"],
+};
+
+function webRegistryTsconfigTemplate(framework: WebChatFramework): WebRegistryTsconfigTemplate {
+  return framework === "next"
+    ? (JSON.parse(WEB_APP_TEMPLATE_FILES["tsconfig.json"]) as WebRegistryTsconfigTemplate)
+    : TANSTACK_WEB_TSCONFIG;
+}
+
+export function addWebRegistryTsconfig(
+  source: string,
+  path: string,
+  framework: WebChatFramework = "next",
+): string {
   const errors: ParseError[] = [];
   const parsed = parseJsonc(source, errors, { allowTrailingComma: true });
   if (errors.length > 0 || typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
@@ -149,11 +199,7 @@ export function addWebRegistryTsconfig(source: string, path: string): string {
     include?: string[];
     exclude?: string[];
   };
-  const template = JSON.parse(WEB_APP_TEMPLATE_FILES["tsconfig.json"]) as {
-    compilerOptions: Record<string, unknown>;
-    include: string[];
-    exclude: string[];
-  };
+  const template = webRegistryTsconfigTemplate(framework);
   const configuredAlias = document.compilerOptions?.paths?.["@/*"];
   if (
     configuredAlias !== undefined &&
@@ -166,10 +212,17 @@ export function addWebRegistryTsconfig(source: string, path: string): string {
 
   let updated = source;
   for (const [key, value] of Object.entries(template.compilerOptions)) {
-    if (key === "paths" || key === "plugins" || document.compilerOptions?.[key] !== undefined) {
-      continue;
+    if (key === "paths" || key === "plugins") continue;
+    const current = document.compilerOptions?.[key];
+    if (current === undefined) {
+      updated = setJsoncValue(updated, ["compilerOptions", key], value);
+    } else if (key === "types" && Array.isArray(current) && Array.isArray(value)) {
+      // Vite's `import.meta.env` typings must load alongside authored ambient types.
+      const types = [...new Set([...current, ...value])];
+      if (types.length > current.length) {
+        updated = setJsoncValue(updated, ["compilerOptions", "types"], types);
+      }
     }
-    updated = setJsoncValue(updated, ["compilerOptions", key], value);
   }
   if (configuredAlias === undefined) {
     updated = setJsoncValue(updated, ["compilerOptions", "paths", "@/*"], ["./*"]);
@@ -180,7 +233,7 @@ export function addWebRegistryTsconfig(source: string, path: string): string {
     (plugin) =>
       typeof plugin === "object" && plugin !== null && "name" in plugin && plugin.name === "next",
   );
-  if (!hasNextPlugin) {
+  if (framework === "next" && !hasNextPlugin) {
     updated = setJsoncValue(
       updated,
       ["compilerOptions", "plugins"],
@@ -201,7 +254,10 @@ export function addWebRegistryTsconfig(source: string, path: string): string {
 }
 
 /** Prepares the TypeScript host configuration shadcn registry items expect. */
-export async function prepareWebRegistryProject(appRoot: string): Promise<void> {
+export async function prepareWebRegistryProject(
+  appRoot: string,
+  framework: WebChatFramework = "next",
+): Promise<void> {
   const path = join(appRoot, "apps", "web", "tsconfig.json");
   let source: string;
   try {
@@ -214,7 +270,7 @@ export async function prepareWebRegistryProject(appRoot: string): Promise<void> 
       `Could not add Web Chat because ${path} could not be read: ${errorMessage(error)}`,
     );
   }
-  const updated = addWebRegistryTsconfig(source, path);
+  const updated = addWebRegistryTsconfig(source, path, framework);
   if (updated !== source) await writeFile(path, updated, "utf8");
 }
 

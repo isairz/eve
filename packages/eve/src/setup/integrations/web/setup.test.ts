@@ -26,6 +26,55 @@ function deps(): WebSetupDeps {
   };
 }
 
+function contexts() {
+  return createSetupContexts({
+    appRoot: "/project",
+    asker: headlessAsker(),
+    environment: integrationSetupEnvironment("cli-missing", { kind: "unresolved" }),
+    prompter: createFakePrompter().prompter,
+    resolveVercelProject: async () => ({ orgId: "team", projectId: "project" }),
+  });
+}
+
+/** Serves `files` from memory; every other path is absent. */
+function withFiles(effects: WebSetupDeps, files: Record<string, string>) {
+  vi.mocked(effects.pathExists).mockImplementation(async (path) => path in files);
+  vi.mocked(effects.readTextFile).mockImplementation(async (path) => {
+    const source = files[path];
+    if (source === undefined) throw Object.assign(new Error(path), { code: "ENOENT" });
+    return source;
+  });
+  effects.removeFile = vi.fn(async () => {});
+  return effects;
+}
+
+const SERVICES_VERCEL_CONFIG = `import { withEve } from "eve/vercel";
+
+export default await withEve({
+  services: {
+    web: {
+      framework: "nextjs",
+      root: "apps/web",
+      buildCommand: "node ../../node_modules/next/dist/bin/next build",
+    },
+  },
+  routes: [
+    { src: "^(.*)$", destination: { type: "service", service: "web" } },
+  ],
+});
+`;
+const LEGACY_SERVICES_VERCEL_CONFIG = `import { withEve } from "eve/vercel";
+
+export default await withEve({
+  services: {
+    web: { framework: "nextjs", root: "apps/web" },
+  },
+  routes: [
+    { src: "^(.*)$", destination: { type: "service", service: "web" } },
+  ],
+});
+`;
+
 describe("Web setup", () => {
   it("presents the hosting topology with concise guidance", async () => {
     const effects = deps();
@@ -267,6 +316,68 @@ describe("Web setup", () => {
       expect.anything(),
     );
   });
+  it("writes the Vercel services config byte for byte", async () => {
+    const effects = deps();
+
+    await applyWebSetup({ hosting: "vercel", packageManager: "pnpm" }, contexts().apply, effects);
+
+    expect(effects.writeTextFile).toHaveBeenCalledWith(
+      "/project/vercel.ts",
+      SERVICES_VERCEL_CONFIG,
+      { force: true },
+    );
+  });
+
+  it.each([
+    ["vercel", "/project/apps/web/next.config.ts"],
+    ["next", "/project/apps/web/next.config.ts"],
+    ["vercel", "/project/vercel.ts"],
+  ] as const)(
+    "refuses %s hosting over authored %s before writing anything",
+    async (hosting, path) => {
+      const effects = withFiles(deps(), { [path]: "export default {};\n" });
+
+      await expect(
+        applyWebSetup({ hosting, packageManager: "pnpm" }, contexts().apply, effects),
+      ).rejects.toThrow(`${path} contains authored configuration`);
+      expect(effects.writeTextFile).not.toHaveBeenCalled();
+      expect(effects.removeFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it("leaves an authored vercel.ts alone for Next.js hosting", async () => {
+    const effects = withFiles(deps(), { "/project/vercel.ts": "export default {};\n" });
+
+    await applyWebSetup({ hosting: "next", packageManager: "pnpm" }, contexts().apply, effects);
+
+    expect(effects.removeFile).not.toHaveBeenCalled();
+    expect(effects.writeTextFile).not.toHaveBeenCalledWith(
+      "/project/vercel.ts",
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it.each([SERVICES_VERCEL_CONFIG, LEGACY_SERVICES_VERCEL_CONFIG])(
+    "removes the installer's Vercel services config when switching to Next.js hosting",
+    async (vercelConfig) => {
+      const effects = withFiles(deps(), {
+        "/project/vercel.ts": vercelConfig,
+        "/project/package.json":
+          '{"scripts":{"dev":"eve dev","dev:eve":"eve dev","dev:all":"vercel dev --local"}}\n',
+      });
+
+      await applyWebSetup({ hosting: "next", packageManager: "pnpm" }, contexts().apply, effects);
+
+      expect(effects.removeFile).toHaveBeenCalledWith("/project/vercel.ts");
+      expect(effects.writeTextFile).toHaveBeenCalledWith(
+        "/project/package.json",
+        `${JSON.stringify({ scripts: { dev: "eve dev" } }, null, 2)}\n`,
+        { force: true },
+      );
+    },
+  );
+
   it("resolves a project for sign-in and provisions it before installing auth", async () => {
     const effects = deps();
     const writeAuth = vi.fn(async () => {});

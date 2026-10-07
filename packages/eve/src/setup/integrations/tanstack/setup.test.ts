@@ -6,32 +6,62 @@ import { createFakePrompter } from "#internal/testing/fake-prompter.js";
 import { headlessAsker, interactiveAsker, withAnswers } from "#setup/ask.js";
 import { integrationSetupEnvironment } from "../shared/environment.js";
 import { createSetupContexts } from "../shared/ui.js";
-import type { WebSetupDeps } from "../web/setup.js";
+import type { WebChatHostingDeps } from "../web-chat/hosting.js";
 import {
   applyTanStackSetup,
   prepareTanStackSetup,
   TANSTACK_REGISTRY_VITE_CONFIG,
 } from "./setup.js";
 
-function deps(): WebSetupDeps {
+function deps(): WebChatHostingDeps {
   return {
-    detectPackageManager: vi.fn<WebSetupDeps["detectPackageManager"]>(async () => ({
+    detectPackageManager: vi.fn<WebChatHostingDeps["detectPackageManager"]>(async () => ({
       kind: "pnpm",
       source: "lockfile",
     })),
     pathExists: vi.fn(async () => false),
     readTextFile: vi.fn(async () => '{"scripts":{"dev":"eve dev"}}\n'),
+    removeFile: vi.fn(async () => {}),
     resolveEveProjectContext: vi.fn(async (appRoot: string): Promise<EveProjectContext> => ({
       appRoot,
       environmentRoot: appRoot,
       kind: "standalone",
     })),
     writeTextFile: vi.fn(async () => {}),
-    prepareWebAuthScaffold: vi.fn<WebSetupDeps["prepareWebAuthScaffold"]>(),
-    provisionWebChatAuth: vi.fn<WebSetupDeps["provisionWebChatAuth"]>(),
-    installScaffoldDependencies: vi.fn<WebSetupDeps["installScaffoldDependencies"]>(),
   };
 }
+
+/** Serves `files` from memory; every other path is absent. */
+function withFiles(effects: WebChatHostingDeps, files: Record<string, string>) {
+  vi.mocked(effects.pathExists).mockImplementation(async (path) => path in files);
+  vi.mocked(effects.readTextFile).mockImplementation(async (path) => {
+    const source = files[path];
+    if (source === undefined) throw Object.assign(new Error(path), { code: "ENOENT" });
+    return source;
+  });
+  return effects;
+}
+
+const SERVICES_VERCEL_CONFIG = `import { withEve } from "eve/vercel";
+
+export default await withEve({
+  services: {
+    web: {
+      framework: "tanstack-start",
+      root: "apps/web",
+      buildCommand: "node ../../node_modules/vite/bin/vite.js build",
+    },
+  },
+  routes: [
+    { src: "^(.*)$", destination: { type: "service", service: "web" } },
+  ],
+});
+`;
+const SERVICES_PACKAGE_JSON = `${JSON.stringify(
+  { scripts: { dev: "eve dev", "dev:eve": "eve dev", "dev:all": "vercel dev --local" } },
+  null,
+  2,
+)}\n`;
 
 function contexts(asker = headlessAsker(), appRoot = "/project") {
   return createSetupContexts({
@@ -167,7 +197,7 @@ describe("TanStack Start Web Chat setup", () => {
     );
     expect(effects.writeTextFile).toHaveBeenCalledWith(
       "/project/vercel.ts",
-      expect.stringContaining('framework: "tanstack-start"'),
+      SERVICES_VERCEL_CONFIG,
       { force: true },
     );
     expect(effects.writeTextFile).toHaveBeenCalledWith(
@@ -197,6 +227,90 @@ describe("TanStack Start Web Chat setup", () => {
     );
     expect(effects.writeTextFile).not.toHaveBeenCalledWith(
       "/project/vercel.ts",
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it.each([
+    ["vercel", "/project/apps/web/vite.config.ts"],
+    ["tanstack", "/project/apps/web/vite.config.ts"],
+    ["vercel", "/project/vercel.ts"],
+  ] as const)(
+    "refuses %s hosting over authored %s before writing anything",
+    async (hosting, path) => {
+      const effects = withFiles(deps(), { [path]: "export default {};\n" });
+
+      await expect(
+        applyTanStackSetup({ hosting, packageManager: "pnpm" }, contexts().apply, effects),
+      ).rejects.toThrow(`${path} contains authored configuration`);
+      expect(effects.writeTextFile).not.toHaveBeenCalled();
+      expect(effects.removeFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it("leaves an authored vercel.ts alone for single-app hosting", async () => {
+    const effects = withFiles(deps(), { "/project/vercel.ts": "export default {};\n" });
+
+    await applyTanStackSetup(
+      { hosting: "tanstack", packageManager: "pnpm" },
+      contexts().apply,
+      effects,
+    );
+
+    expect(effects.removeFile).not.toHaveBeenCalled();
+    expect(effects.writeTextFile).not.toHaveBeenCalledWith(
+      "/project/vercel.ts",
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("refuses Vercel services over an existing vercel.json before writing anything", async () => {
+    const effects = withFiles(deps(), { "/project/vercel.json": "{}\n" });
+
+    await expect(
+      applyTanStackSetup({ hosting: "vercel", packageManager: "pnpm" }, contexts().apply, effects),
+    ).rejects.toThrow("/project/vercel.json already exists");
+    expect(effects.writeTextFile).not.toHaveBeenCalled();
+  });
+
+  it("removes the installer's Vercel services config when switching to single-app hosting", async () => {
+    const effects = withFiles(deps(), {
+      "/project/apps/web/vite.config.ts": TANSTACK_REGISTRY_VITE_CONFIG,
+      "/project/vercel.ts": SERVICES_VERCEL_CONFIG,
+      "/project/package.json": SERVICES_PACKAGE_JSON,
+    });
+
+    await applyTanStackSetup(
+      { hosting: "tanstack", packageManager: "pnpm" },
+      contexts().apply,
+      effects,
+    );
+
+    expect(effects.removeFile).toHaveBeenCalledWith("/project/vercel.ts");
+    expect(effects.writeTextFile).toHaveBeenCalledWith(
+      "/project/package.json",
+      `${JSON.stringify({ scripts: { dev: "eve dev" } }, null, 2)}\n`,
+      { force: true },
+    );
+  });
+
+  it("keeps authored peer scripts when removing the installer's Vercel services config", async () => {
+    const effects = withFiles(deps(), {
+      "/project/vercel.ts": SERVICES_VERCEL_CONFIG,
+      "/project/package.json": '{"scripts":{"dev:eve":"custom","dev:all":"custom"}}\n',
+    });
+
+    await applyTanStackSetup(
+      { hosting: "tanstack", packageManager: "pnpm" },
+      contexts().apply,
+      effects,
+    );
+
+    expect(effects.removeFile).toHaveBeenCalledWith("/project/vercel.ts");
+    expect(effects.writeTextFile).not.toHaveBeenCalledWith(
+      "/project/package.json",
       expect.anything(),
       expect.anything(),
     );

@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { parse as parseJsonc } from "#compiled/jsonc-parser/index.js";
+
 import {
   prepareWebChatProjectRoot,
   prepareWebRegistryProject,
@@ -37,6 +39,64 @@ describe("prepareWebRegistryProject", () => {
     await prepareWebRegistryProject(workspaceRoot);
 
     await expect(readFile(tsconfigPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("merges the TanStack Start tsconfig into an existing app without Next.js config", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "eve-registry-web-project-"));
+    const tsconfigPath = join(workspaceRoot, "apps", "web", "tsconfig.json");
+    await mkdir(join(workspaceRoot, "apps", "web"), { recursive: true });
+    await writeFile(
+      tsconfigPath,
+      '{\n  // Authored settings.\n  "compilerOptions": { "strict": false, "types": ["node"] },\n}\n',
+    );
+
+    await prepareWebRegistryProject(workspaceRoot, "tanstack");
+
+    const source = await readFile(tsconfigPath, "utf8");
+    expect(source).toContain("// Authored settings.");
+    expect(parseJsonc(source)).toEqual({
+      compilerOptions: {
+        strict: false,
+        types: ["node", "vite/client"],
+        target: "ES2022",
+        lib: ["dom", "dom.iterable", "esnext"],
+        skipLibCheck: true,
+        noEmit: true,
+        esModuleInterop: true,
+        module: "esnext",
+        moduleResolution: "Bundler",
+        resolveJsonModule: true,
+        isolatedModules: true,
+        jsx: "react-jsx",
+        paths: { "@/*": ["./*"] },
+      },
+      include: ["**/*.ts", "**/*.tsx"],
+      exclude: ["node_modules", ".output", ".vercel"],
+    });
+  });
+
+  it("keeps the TanStack Start tsconfig in sync with the channel/tanstack registry item", async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), "eve-registry-web-project-"));
+    const tsconfigPath = join(workspaceRoot, "apps", "web", "tsconfig.json");
+    await mkdir(join(workspaceRoot, "apps", "web"), { recursive: true });
+    await writeFile(tsconfigPath, "{}\n");
+    const registryTsconfig = parseJsonc(
+      await readFile(
+        new URL(
+          "../../../../../apps/docs/registry/channel/tanstack/tsconfig.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+
+    await prepareWebRegistryProject(workspaceRoot, "tanstack");
+
+    expect(parseJsonc(await readFile(tsconfigPath, "utf8"))).toEqual({
+      compilerOptions: registryTsconfig.compilerOptions,
+      include: registryTsconfig.include,
+      exclude: registryTsconfig.exclude,
+    });
   });
 });
 
@@ -78,6 +138,34 @@ describe("prepareWebChatProjectRoot", () => {
     await expect(readScripts(root)).resolves.toEqual({
       "build:web": "vite build apps/web",
       "dev:web": "custom",
+    });
+  });
+
+  it("replaces Next.js installer scripts when switching to TanStack Start", async () => {
+    const root = await createProjectRoot({
+      "build:web": "next build apps/web",
+      "dev:web": "next dev apps/web",
+    });
+
+    await prepareWebChatProjectRoot(root, "tanstack");
+
+    await expect(readScripts(root)).resolves.toEqual({
+      "build:web": "vite build apps/web",
+      "dev:web": "vite dev apps/web",
+    });
+  });
+
+  it("replaces TanStack Start installer scripts when switching to Next.js", async () => {
+    const root = await createProjectRoot({
+      "build:web": "vite build apps/web",
+      "dev:web": "vite dev apps/web",
+    });
+
+    await prepareWebChatProjectRoot(root, "next");
+
+    await expect(readScripts(root)).resolves.toEqual({
+      "build:web": "next build apps/web",
+      "dev:web": "next dev apps/web",
     });
   });
 });

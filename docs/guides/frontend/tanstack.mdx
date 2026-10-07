@@ -22,7 +22,9 @@ eve add channel/tanstack
 The installer creates a TanStack Start app under `apps/web/` and adds the `dev:web` and `build:web` scripts. It asks how to deploy it:
 
 - **Vercel services** (recommended) deploys Web Chat and the agent as separate services. Run both locally with `pnpm dev:all`; you don't need to link a Vercel project to do that.
-- **TanStack Start** hosts the agent in the TanStack Start app through `eveTanStack()`. Run it with `pnpm dev:web`.
+- **TanStack Start** hosts the agent in the TanStack Start app through `eveTanStack()`. Run it with `pnpm dev:web`. The app lives in `apps/web/` while its dependencies are in the project root `package.json`, so a Vercel deploy from the project root doesn't build it. Choose **Vercel services** to deploy Web Chat on Vercel.
+
+Rerun `eve add channel/tanstack --skip-install` with the other choice to switch modes; the installer removes the `vercel.ts` and scripts it wrote for the previous one. Install either `channel/web` or `channel/tanstack` in a project, not both: the second install leaves the first app's files in `apps/web/`.
 
 The chat has the same URL-addressed durable sessions as the [Next.js Web Chat](./nextjs#use-the-generated-web-chat-routes): `/`, `/s`, and `/s/$sessionId`. Before accepting production browser traffic, replace the generated placeholder authorization policy. See [Authenticate browser requests](./overview#authenticate-browser-requests).
 

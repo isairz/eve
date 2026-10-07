@@ -41,6 +41,7 @@ import {
   prepareWebChatProjectRoot,
   prepareWebRegistryProject,
   readRegistryConfig,
+  type WebChatFramework,
 } from "./registry-project.js";
 export { runRegistryAddCommand } from "./registry-add-command.js";
 export type { RegistryCommandLogger } from "./registry-recovery.js";
@@ -154,6 +155,11 @@ function itemAddress(item: string): string {
     ? item
     : `${OFFICIAL_REGISTRY}/${item}.json`;
 }
+
+const WEB_CHAT_FRAMEWORKS = new Map<string, WebChatFramework>([
+  [itemAddress("channel/web"), "next"],
+  [itemAddress("channel/tanstack"), "tanstack"],
+]);
 
 function assertCompatibleEveVersion(requiredVersion: string | undefined): void {
   if (requiredVersion === undefined) return;
@@ -461,14 +467,11 @@ export async function runAddCommand(
   };
   return runRegistryAction(logger, appRoot, async () => {
     const address = itemAddress(item);
+    const webChatFramework = WEB_CHAT_FRAMEWORKS.get(address);
     const projectRoot =
-      options.skipInstall === true
-        ? appRoot
-        : address === itemAddress("channel/web")
-          ? await prepareWebChatProjectRoot(appRoot)
-          : address === itemAddress("channel/tanstack")
-            ? await prepareWebChatProjectRoot(appRoot, "tanstack")
-            : appRoot;
+      options.skipInstall !== true && webChatFramework !== undefined
+        ? await prepareWebChatProjectRoot(appRoot, webChatFramework)
+        : appRoot;
     const config = await readEveRegistryConfig(appRoot);
     if (options.skipInstall === true) {
       if (options.overwrite === true) {
@@ -521,8 +524,11 @@ export async function runAddCommand(
     });
     if (!installReady) return false;
 
-    if (address === itemAddress("channel/web")) {
-      await (dependencies.prepareWebRegistryProject ?? prepareWebRegistryProject)(projectRoot);
+    if (webChatFramework !== undefined) {
+      await (dependencies.prepareWebRegistryProject ?? prepareWebRegistryProject)(
+        projectRoot,
+        webChatFramework,
+      );
     }
     await installRegistryItemTransaction({
       appRoot: projectRoot,

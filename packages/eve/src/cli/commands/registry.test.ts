@@ -461,6 +461,7 @@ describe("registry commands", () => {
 
       expect(prepareWebRegistryProject).toHaveBeenCalledTimes(kind === "web" ? 1 : 0);
       if (kind === "web") {
+        expect(prepareWebRegistryProject).toHaveBeenCalledWith("/project", "next");
         expect(prepareWebRegistryProject.mock.invocationCallOrder[0]).toBeLessThan(
           addRegistryItems.mock.invocationCallOrder[0]!,
         );
@@ -552,6 +553,7 @@ describe("registry commands", () => {
 
   it("installs the TanStack Start Web Chat at the project root with its own setup", async () => {
     const logger = createLogger();
+    const prepareWebRegistryProject = vi.fn(async () => {});
     const runSetupCommand = vi.fn(async () => ({ kind: "completed" as const, facts: [] }));
     getRegistryItems.mockResolvedValue([
       {
@@ -570,9 +572,18 @@ describe("registry commands", () => {
       "/project",
       "channel/tanstack",
       { yes: true },
-      { loadSetupCommandRunner: async () => runSetupCommand },
+      { loadSetupCommandRunner: async () => runSetupCommand, prepareWebRegistryProject },
     );
 
+    expect(writeFile).toHaveBeenCalledWith(
+      "/project/package.json",
+      expect.stringContaining('"dev:web": "vite dev apps/web"'),
+      "utf8",
+    );
+    expect(prepareWebRegistryProject).toHaveBeenCalledWith("/project", "tanstack");
+    expect(prepareWebRegistryProject.mock.invocationCallOrder[0]).toBeLessThan(
+      addRegistryItems.mock.invocationCallOrder[0]!,
+    );
     expect(addRegistryItems).toHaveBeenCalledWith(["https://eve.dev/r/channel/tanstack.json"], {
       config: expect.any(Object),
       cwd: "/project",
