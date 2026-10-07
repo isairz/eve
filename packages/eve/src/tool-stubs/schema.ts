@@ -68,14 +68,17 @@ const constraintSchema = new Validator(
   "2020-12",
 );
 
-export function validateStubConstraint(value: unknown): void {
-  if (!constraintSchema.validate(value).valid) {
+export function validateStubConstraint(value: unknown, ruleId: string, property: string): void {
+  const result = constraintSchema.validate(value);
+  if (!result.valid) {
+    const error = result.errors.at(-1)!;
+    const detail = error.keyword === "false" ? "Unsupported JSON Schema keyword." : error.error;
     throw new Error(
-      "Invalid tool stub JSON Schema. Use supported, reference-free JSON Schema constraints.",
+      `Invalid matcher "${property}" in tool stub "${ruleId}" at ${error.instanceLocation}: ${detail}`,
     );
   }
 }
 
-export function compileStubConstraint(value: JsonObject | boolean): Validator {
+export function createStubValidator(value: JsonObject | boolean): Validator {
   return new Validator(structuredClone(value), "2020-12");
 }
