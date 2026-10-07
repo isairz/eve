@@ -427,7 +427,9 @@ export interface SessionCapabilities {
 export interface RunInput {
   /**
    * @internal Set by the server after it authorizes tool stubs.
-   * Local subagents share the root session's stubs and sequence positions.
+   * Local subagents match rules qualified by their full path, such as researcher/list_tasks.
+   * The root session tracks positions per rule; subagent sessions at the same path
+   * share those positions. Unprefixed rules apply only to root tools.
    * Remote agents do not receive these stubs.
    */
   readonly toolStubs?: StubScope;
