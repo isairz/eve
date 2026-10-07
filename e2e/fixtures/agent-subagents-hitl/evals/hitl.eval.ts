@@ -78,7 +78,11 @@ export default [
     description: "Subagent stock quote supplied by a tool stub.",
     test: (t) =>
       stockPriceEval.test(t, "314.15", [
-        { id: "quote", tool: "stock-price/get_stock_price", response: { price: 314.15 } },
+        {
+          id: "quote",
+          tool: "stock-price/get_stock_price",
+          outcome: { response: { price: 314.15 } },
+        },
       ]),
   }),
 ];
