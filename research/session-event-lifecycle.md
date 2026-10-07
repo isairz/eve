@@ -23,12 +23,12 @@ Every eve reader folds the same session stream:
 - authored hooks;
 - the server's own projection.
 
-Today that stream has 34 event types, added one feature at a time. Most of them say that something happened, but few entities have a recorded beginning and a recorded end. So readers reconstruct lifecycles from timing, from text, and from events that didn't arrive. Each reader does it slightly differently, and the differences turn into bugs.
+Today that stream has 34 event types, added one feature at a time. Most of them say that something happened, but few entities have a recorded beginning and a recorded end. So readers reconstruct lifecycles from timing, text, and events that didn't arrive. Each reader does it slightly differently, and it is sometimes impossible to do this unambiguously.
 
 This proposal replaces the vocabulary at the next stream-version break (v27). The goal is a smaller conceptual framework where every piece of the system has an explicit lifecycle:
 
-- **Eight entities:** session, delivery, turn, model run, content part, call, task, and interaction. Each one is introduced by one fact and closed by exactly one terminal fact, with an outcome from a closed set.
-- **Lifecycles are recorded, not inferred.** When the machine ends something, it says so in the same commit, including the things it ends along the way.
+- **Eight entities:** `session`, `delivery`, `turn`, `model run`, `content part`, `call`, `task`, and `interaction`. Each one is introduced by one fact and closed by exactly one terminal fact, with an outcome from a closed set.
+- **Lifecycles are not inferred** When the machine ends something, it produces an event that records this in the same commit, including events for other things that are ended at the same time.
 - **One commit per stream line.** A line's position is its permanent identity, so events need no IDs and readers resume exactly.
 - **Additive evolution after the break.** New kinds, fields, and families don't need a version bump, and older readers stay correct ([Future proofing](#future-proofing)).
 
@@ -64,20 +64,7 @@ Spreading one decision across events has caused bugs:
 - `input.resolved` settled the call before the `action.result` that carried the reason, so ACP dropped the reason.
 - Telegram's sign-in callback (`findPendingAuthorization`) still takes the latest `authorization.required` without checking whether it completed.
 
-#### Work that never ends
-
-Retries leave ghosts:
-
-- **Inside a step:** a model call retried after it started streaming leaves the dead attempt's deltas and tool calls on the stream (#3308).
-- **Whole steps:** Workflow re-runs a step from its checkpoint with new IDs. The first attempt's `step.started`, its streaming tool input, or its approval card stays open forever.
-- **Zombies:** in #2599 a redelivered step left the original running. It appended about 987 deltas over roughly ten minutes, then failure events for a turn the retry had completed.
-
-Readers compensate:
-
-- When a turn ends, the client reducer drops tool parts still streaming their input (`removeStreamingToolParts`) and marks streaming text done (`closeStreamingRuns`).
-- A call still running when its turn is cancelled is inferred to be `interrupted`.
-
-#### Ends inferred from silence
+#### Stream ends are inferred
 
 Nothing on the stream tells a reader to stop.
 
