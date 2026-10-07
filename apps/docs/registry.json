@@ -1827,6 +1827,7 @@
       },
       "dependencies": [
         "@radix-ui/react-use-controllable-state@1.2.2",
+        "@shadcn/react@0.3.1",
         "@shikijs/core@3.23.0",
         "@shikijs/engine-javascript@3.23.0",
         "@shikijs/engine-oniguruma@3.23.0",
@@ -1935,11 +1936,6 @@
           "target": "apps/web/components/ai-elements/prompt-input.tsx"
         },
         {
-          "path": "registry/channel/web/components/ai-elements/question.tsx",
-          "type": "registry:file",
-          "target": "apps/web/components/ai-elements/question.tsx"
-        },
-        {
           "path": "registry/channel/web/components/ai-elements/reasoning.tsx",
           "type": "registry:file",
           "target": "apps/web/components/ai-elements/reasoning.tsx"
@@ -2003,6 +1999,11 @@
           "path": "registry/channel/web/components/ui/input.tsx",
           "type": "registry:file",
           "target": "apps/web/components/ui/input.tsx"
+        },
+        {
+          "path": "registry/channel/web/components/ui/questionnaire.tsx",
+          "type": "registry:file",
+          "target": "apps/web/components/ui/questionnaire.tsx"
         },
         {
           "path": "registry/channel/web/components/ui/select.tsx",
