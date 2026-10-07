@@ -551,6 +551,10 @@ function checkRule50(posix, lines, violations) {
           "names the legacy human-input state key outside harness/hitl/. Hydrate through the migration seam; the session machine owns current state.",
       });
     }
+    // The pure machine record lifecycle cannot import the live HITL facade: that facade
+    // reaches step context / transport I/O, which workflow driver bundles must not load.
+    if (posix.startsWith("packages/eve/src/harness/session-machine/") &&
+        /["']#harness\/hitl\/record\.js["']/.test(line)) return;
     if (!HUMAN_INPUT_PRIVATE_IMPORT_RE.test(line)) return;
     violations.push({
       rule: 50,

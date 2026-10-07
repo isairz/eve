@@ -107,7 +107,7 @@ describe("an approval settled before its answer reached the step", () => {
     const unsettled = {
       "eve.harness.turnState": {
         ...turn,
-        hitl: { ...turn.hitl, audit: { ...turn.hitl?.audit!, settlements: {} } },
+        hitl: { ...turn.hitl, audit: { ...turn.hitl!.audit!, settlements: {} } },
       },
     };
     const decision = beforeStep(sessionView(storedProjection(unsettled), unsettled), []);

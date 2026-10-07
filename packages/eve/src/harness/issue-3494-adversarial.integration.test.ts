@@ -708,7 +708,7 @@ function withCandidateAuthorizations(input: {
   readonly authorizationChallenges: readonly AuthorizationChallenge[];
 }) {
   const turn = sessionView(storedProjection(input.state), input.state).turn;
-  const audit = turn.hitl?.audit!;
+  const audit = turn.hitl!.audit!;
   const candidate = audit.activeCandidates[input.candidateId]!;
   return writeTurnState(
     { state: input.state },

@@ -1,4 +1,4 @@
-import { cleanupHitl } from "#harness/hitl/index.js";
+import { cleanupHitl } from "#harness/hitl/record.js";
 import type { ModelMessage, UserContent } from "ai";
 
 import type {
