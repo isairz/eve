@@ -263,8 +263,10 @@ eve uses the AI SDK to discover the account-specific catalog and create managed
 subscriptions through the Connect adapter. Catalog discovery currently requires
 a Streamable HTTP MCP endpoint. There is no AI SDK event store.
 
-The receiver verifies Connect's signed delivery and raw body, then durably queues
-an internal session message before responding with `202`. Context locates the
+The receiver authenticates Connect's delivery-purpose OIDC bearer token and
+validates the JSON envelope, then durably queues
+an internal session message before responding with `202`. The token authenticates
+Connect for the destination over HTTPS; it does not sign the body. Context locates the
 inbox; it does not authorize execution. After the current turn settles, eve
 checks its saved binding against the verified subscription ID, connection
 instance, event name, and originating principal. A lost subscribe response is

@@ -39,9 +39,13 @@ export async function finalizeSession(
 ): Promise<WorkflowEntryResult> {
   const { serializedContext, sessionState } = context.cursor;
   const eventState = serializedContext["eve.connectionEvents"] as ConnectionEventsState | undefined;
-  for (const bindingId of Object.keys(eventState?.bindings ?? {})) {
-    await stopConnectionEventStep({ serializedContext, bindingId });
-  }
+  const cleanups = await Promise.allSettled(
+    Object.keys(eventState?.bindings ?? {}).map((bindingId) =>
+      stopConnectionEventStep({ serializedContext, bindingId }),
+    ),
+  );
+  const failedCleanup = cleanups.find((result) => result.status === "rejected");
+  if (failedCleanup?.status === "rejected") throw failedCleanup.reason;
   // Most sessions end with no task run, so the step that would find nothing to stop is skipped.
   if (
     sessionState !== undefined &&

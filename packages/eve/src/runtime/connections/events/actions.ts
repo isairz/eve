@@ -126,10 +126,12 @@ export class ConnectionEventActions {
     const result: EventDefinition[] = [];
     const seen = new Set<string>();
     let cursor: string | undefined;
+    let discovered = 0;
     for (let pageIndex = 0; pageIndex < 20; pageIndex++) {
       const page = await events.list({ params: { cursor }, options: { timeout: 15_000 } });
+      discovered += page.events.length;
+      if (discovered > 1000) throw new Error("MCP event catalog exceeds the 1000-event limit.");
       result.push(...page.events.filter((event) => event.delivery.includes("webhook")));
-      if (result.length > 1000) throw new Error("MCP event catalog exceeds the 1000-event limit.");
       cursor = page.nextCursor ?? undefined;
       if (cursor === undefined) return result;
       if (seen.has(cursor)) throw new Error("MCP event catalog returned a repeated cursor.");

@@ -191,7 +191,7 @@ function payload(): ConnectionEventInboxPayload {
       version: 1,
       deliveryId: "delivery-1",
       subscriptionId: "sub_0",
-      source: { type: "mcp", connectorId: "connector", sourceId: "source" },
+      source: { type: "mcp", connectorId: "connector" },
       context: binding.request.context!,
       event: {
         eventId: "event-1",
