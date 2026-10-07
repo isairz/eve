@@ -154,15 +154,8 @@ Each family states its own lifetime rules ([Lifecycle rules](#lifecycle-rules)).
 1. **Introduce before reference.** A fact references an entity only after the fact that introduces it. The one exception: while its model run is open, a progress record may announce a content part or call before the fact that introduces it. This is because progress records don't contribute to facts directly. The `content.completed` record contains the entire message, and requiring us to encode the entire start/completion lifecycle event stack for each bit of content would make all of our text/reasoning flows do an additional durable write / pass through channels and hooks.
 2. **Exactly one terminal event.** Each entity has one terminal type with an outcome from a closed set. If a malformed stream has two, the first wins.
 3. **Explicit closure.** When the machine ends something, it emits terminal events in the same commit for everything that ends with it. Nothing is closed by inference.
-4. **Lifetimes are per family.**:
-   - A model run may complete while its calls stay open.
-   - A new call needs an open generating run. Settling a call needs only the call to be open.
-   - A task can outlive its starting call. Later task activity needs the task to be open.
-   - When a turn ends, its outstanding delegated calls close, but session-lived tasks continue. A later call can use the same task.
-   - A context change may run inside a turn or between turns. When its turn ends, an open change settles `interrupted`.
-   - Settled entities stay valid reference targets, for example as failure causes or turn lineage.
-5. **No lifecycle inference.** No reader derives lifecycle from output text, `isError`, a missing event, or progress.
-6. **All transitions are atomic** Whenever a transition happens (e.g. turn closing), all facts about that (turn closed, approval abandoned, etc.) are computed and committed as a single line in the session history. The shape of that line is `{ 'at': <timestamp>, 'facts': [<event1>, <event2>, ...]}`.
+4. **No lifecycle inference.** No reader derives lifecycle from output text, `isError`, a missing event, or progress.
+5. **All transitions are atomic** Whenever a transition happens (e.g. turn closing), all facts about that (turn closed, approval abandoned, etc.) are computed and committed as a single line in the session history. The shape of that line is `{ 'at': <timestamp>, 'facts': [<event1>, <event2>, ...]}`.
 
 ### Outcomes
 
@@ -183,7 +176,7 @@ Terminal outcome sets are closed for the life of the major version:
 | `context-change.settled` | completed, failed, cancelled, interrupted               |
 
 <details>
-<summary>One word, one meaning</summary>
+<summary>Glossary</summary>
 
 | Word        | Meaning                                             | Used by                                              |
 | ----------- | --------------------------------------------------- | ---------------------------------------------------- |
@@ -210,7 +203,7 @@ Terminal outcome sets are closed for the life of the major version:
 
 ### The 28 types
 
-`~` marks progress: streamed between commits and never folded into the tables.
+`~` marks progress: streamed between commits and never folded into the lifecycle tables.
 
 | Type                     | Entity         | Role                 | Replaces in v26                                                 |
 | ------------------------ | -------------- | -------------------- | --------------------------------------------------------------- |
@@ -310,8 +303,6 @@ approval.candidate ────────────▶ candidate.opened · c
 </details>
 
 ### Payloads by family
-
-The sketches below show fields, not final schemas. `?` marks an optional field.
 
 <details>
 <summary>Sessions</summary>
