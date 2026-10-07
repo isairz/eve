@@ -5,7 +5,9 @@ import { parseToolStubs } from "#tool-stubs/rules.js";
 
 function matches(schema: JsonObject | boolean, value: JsonValue): boolean {
   const playback = new StubPlayback(
-    parseToolStubs([{ id: "rule", tool: "lookup", match: { value: schema }, response: "matched" }]),
+    parseToolStubs([
+      { id: "rule", tool: "lookup", match: { value: schema }, outcome: { response: "matched" } },
+    ]),
   );
   return playback.call({ callId: "call", tool: "lookup", input: { value } }).kind === "stub";
 }
@@ -408,6 +410,8 @@ const invalid: JsonObject[] = [
 
 it.each(invalid)("rejects malformed or unsupported constraints at setup: %j", (schema) => {
   expect(() =>
-    parseToolStubs([{ id: "bad", tool: "lookup", match: { value: schema }, response: null }]),
+    parseToolStubs([
+      { id: "bad", tool: "lookup", match: { value: schema }, outcome: { response: null } },
+    ]),
   ).toThrow();
 });

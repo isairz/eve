@@ -261,7 +261,7 @@ describe("approval caller", () => {
                   id: "other-deployment",
                   tool: "deploy_change",
                   match: { environment: { const: "other" } },
-                  response: { ran: "stubbed" },
+                  outcome: { response: { ran: "stubbed" } },
                 },
               ]
             : undefined,

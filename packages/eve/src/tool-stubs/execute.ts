@@ -28,7 +28,7 @@ async function* executeStubbedTool(
   const result = await playback.call(call);
   if (result.kind === "error") throw new Error(result.error);
   if (result.kind === "stub") {
-    yield result.response;
+    yield result.outcome.response;
     return;
   }
   const output = await execute();

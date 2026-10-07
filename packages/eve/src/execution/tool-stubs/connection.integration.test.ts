@@ -25,7 +25,7 @@ describe("connection operation stubs", () => {
           id: "open",
           tool: "researcher/linear__list_issues",
           match: { status: { const: "open" } },
-          response: { issues: ["milk"] },
+          outcome: { response: { issues: ["milk"] } },
         },
       ];
       const token = "connection-stub-playback";
