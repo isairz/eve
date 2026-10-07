@@ -48,7 +48,10 @@ After the break, a new fact or field touches one family module. The checker, the
 
 ### What the current model leaves out
 
-v26 leaves these for readers to guess:
+v26 leaves readers to guess when a response is done, how a decision ended, when to stop reading, and more.
+
+<details>
+<summary>Nine guesses readers make today</summary>
 
 | Readers guess                                     | Example                                                                                                                                                                                                                                                                                      |
 | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -61,6 +64,8 @@ v26 leaves these for readers to guess:
 | Which text is the reply                           | About a dozen places (channel defaults, evals, the invocation API, the client) test `message.completed.finishReason !== "tool-calls"`. Text in a held step is reported as `tool-calls` to hide it                                                                                            |
 | An entity nobody introduced                       | A resumed approved call's result arrives with no request before it. A tool call with invalid input gets a failed `action.result` without ever appearing in `actions.requested`                                                                                                               |
 | What coordinates mean                             | Payloads repeat `turnId`, `sequence`, and `stepIndex`. A relayed child request's coordinates have meant the child's turn and step in one version, and the parent's serving call in another                                                                                                   |
+
+</details>
 
 ## The model
 
@@ -626,9 +631,15 @@ Wrapped for reading; on the wire, each record is one line. `…` marks fields le
 
 </details>
 
-**Why one line per commit.** Workflow stores one chunk whole, but makes no such promise for several chunks flushed together. If a commit's facts were separate lines, a crash or a step retry could leave half a decision on the stream, as v26 can. Avoiding that would put commit boundaries on every line, as Kafka transactions do with control markers. Every reader would then buffer to the boundary, advance its cursor only at commit ends, and skip torn commits that stay on the append-only stream forever. Systems that store the commit as one record avoid all of that: pi's durable package delivers event batches one per commit, NEventStore stores a commit as one timestamp and a list of events, and a Datomic transaction carries one timestamp for all its datoms. The cost here is the `facts` array, and a fact index in each fact's identity.
+<details>
+<summary>Why one line per commit</summary>
 
-**Positions:**
+Workflow stores one chunk whole, but makes no such promise for several chunks flushed together. If a commit's facts were separate lines, a crash or a step retry could leave half a decision on the stream, as v26 can. Avoiding that would put commit boundaries on every line, as Kafka transactions do with control markers. Every reader would then buffer to the boundary, advance its cursor only at commit ends, and skip torn commits that stay on the append-only stream forever. Systems that store the commit as one record avoid all of that: pi's durable package delivers event batches one per commit, NEventStore stores a commit as one timestamp and a list of events, and a Datomic transaction carries one timestamp for all its datoms. The cost here is the `facts` array, and a fact index in each fact's identity.
+
+</details>
+
+<details>
+<summary>Positions: each line's index is its permanent identity</summary>
 
 - **A line is one stored chunk.** The writer stores one chunk per write, so a commit is atomic on the stream: a crash leaves the whole commit or none of it.
 - **A position** is a line's zero-based index in the session's stream: the number of lines stored before it.
@@ -638,7 +649,10 @@ Wrapped for reading; on the wire, each record is one line. `…` marks fields le
 - **Nothing on a line repeats the position.** Lines carry no position field, and facts carry no event IDs; `meta.id` and `meta.deliveryIds` go away. Clients count lines, as they do today. The deduper becomes `position > last`, which handles reconnect overlap and merging a cached log. An app that caches lines stores each line's position with it.
 - **The writer counts too.** The session projection that every publishing step saves gains a line counter, so every checkpoint, including a handoff checkpoint, knows its exact position without reading the stream. That gives observers `ctx.position` and gives retries a starting point.
 
-**Progress rules:**
+</details>
+
+<details>
+<summary>Progress rules</summary>
 
 1. The first progress record for an entity announces it, with its kind or name and scope. Later records are minimal (`{partId, delta}`).
 2. Delta granularity is unspecified, and consecutive records may be merged, so coalescing is a producer change (#3701).
@@ -646,11 +660,16 @@ Wrapped for reading; on the wire, each record is one line. `…` marks fields le
 4. Progress for an entity known to be closed is ignored; so is a minimal delta for an unknown entity.
 5. Previews live outside the lifecycle tables.
 
-**Size and duplicates:**
+</details>
+
+<details>
+<summary>Size and duplicates</summary>
 
 - **Envelope cost matters,** because progress dominates line counts. A five-character delta costs 233 bytes as v26 `message.appended` and about 105 as minimal v27 progress.
 - **Line size.** A commit can't be split without losing atomicity, so the publisher caps lines below the platform's per-chunk limit (10 MiB over the WebSocket writer). Because each call settles in its own commit, no line grows beyond today's largest event.
 - **Duplicates.** A chunk that a transport retry writes twice now shows up at two positions, where the client's `meta.id` deduper used to catch it. On Vercel the WebSocket writer, enabled since the Workflow 5.1 upgrade (#4456), dedupes resends by writer and sequence. The HTTP fallback can still duplicate a multi-page batch after a network failure. The fold's idempotence absorbs duplicated facts; duplicated progress can double preview text until its part completes. That's rare, and accepted.
+
+</details>
 
 ### Reading the stream
 
@@ -707,6 +726,9 @@ The channel handler's third argument becomes an observer-only subtype of `Sessio
 
 The fold that produces the tables is shared by the client, the server, and anyone else, and it's public.
 
+<details>
+<summary>The tables, selectors, and retention modes</summary>
+
 ```text
 SessionView @ position
 ├─ session        status · parent?
@@ -752,6 +774,8 @@ SessionView @ position
   - Aggregates such as usage are folded, so they don't pin their sources.
 - **No projection snapshots on the wire.** The wire contract stays facts only. Server readers fold from line 0, skipping closed progress, because the stream's shape is stable across deployments while a saved projection's internal shape isn't.
 
+</details>
+
 ### Files and large values
 
 - **Bytes never go on the stream.** Today client `data:` URLs and raw MCP media results can.
@@ -791,6 +815,11 @@ Streaming children doesn't need copying: `streamSubagent` and `AgentStreamFollow
 
 ### Retries and recovery
 
+A model call retried after it emitted anything abandons its run, and a retried step folds from its checkpoint position and closes what the dead attempt left open. Recovery is best-effort, and attempts are assumed to run one after another.
+
+<details>
+<summary>How recovery works, and its limits</summary>
+
 **Inside a step.** `harness/model-call/retry.ts` retries a model call up to three times on transient provider errors.
 
 - If the emitter accepted nothing from the failed attempt, the retry stays in the same run.
@@ -814,7 +843,14 @@ Workflow-level fencing (fenced appends and a lost-ownership signal, vercel/workf
 
 **The outside world isn't repaired.** Side effects of tools that already ran aren't undone.
 
+</details>
+
 ### The contract module
+
+The wire contract lives in one self-contained module, `protocol/session-events/`, and the shared fold in `protocol/session-projection/`.
+
+<details>
+<summary>Layout and rules</summary>
 
 ```text
 protocol/session-events/
@@ -831,6 +867,8 @@ protocol/session-projection/   folds per family, public tables, selectors
 - **No builders in `protocol/`.** Facts are typed literals built by their owners: the session machine and `hitl/` for lifecycle, the emission code for content and calls.
 - **Authoring maps are checked against the catalog.** The hook and channel maps stay explicit, so a new fact doesn't silently become a hook event, but they're type-checked against the catalog.
 
+</details>
+
 ### Compatibility at the break
 
 - **No upcaster.** Clients read v27 only, and the v21–v26 normalization (`protocol/message-version.ts`) is deleted. The CLI, ACP, and eval runners report the existing unsupported-version error against older deployments.
@@ -841,7 +879,10 @@ protocol/session-projection/   folds per family, public tables, selectors
 
 ## Codepaths that change
 
-### "Is my response done?"
+Before and after for the reader and producer paths the break changes most.
+
+<details>
+<summary>"Is my response done?"</summary>
 
 **Today.** `ClientSession` reads until a `TurnSegment` says the segment ended, filtering by `meta.deliveryIds`:
 
@@ -862,13 +903,19 @@ reachedBoundary = segment.observe(event); // folds, then applies the turn.waitin
 
 **With v27.** Read until `delivery.settled` for this `deliveryId`, or `session.ended`. The reply is `turn.settled.reply` for the settled delivery's `turnId`, and `respond()` uses the same rule. `TurnSegment`, `endsTurnSegment`, the stamping of delivery IDs on every event, and the "unattributed event" branches go away.
 
-### "Which text is the reply?"
+</details>
+
+<details>
+<summary>"Which text is the reply?"</summary>
 
 **Today.** About a dozen readers test `message.completed.finishReason !== "tool-calls"`, among them `client/session-utils.ts`, the invocation API, evals, and the Telegram, Twilio, Discord, Teams, GitHub, Linear, Slack, and Chat SDK defaults. The producer reports text in a held step as `tool-calls` so those readers hide it.
 
 **With v27.** Channels post on `content.completed` with `phase: "reply"`, as each part completes. Readers that want the final answer read `turn.settled.reply`. The held-step special case disappears, because narration is narration.
 
-### The client message reducer
+</details>
+
+<details>
+<summary>The client message reducer</summary>
 
 **Today.** `client/message-reducer.ts` and its helpers (about 1,350 lines) build UI messages from events keyed by `turnId` and `stepIndex`, and repair what the stream doesn't say. When a turn ends, it marks streaming text done and drops tool parts still streaming their input:
 
@@ -880,13 +927,19 @@ Task calls special-case the receipt, and approval state is pieced together from 
 
 **With v27.** The shared fold produces the tables, and the UI model is a projection of them keyed by run, part, and call IDs. Every repair becomes a terminal the producer wrote: interrupted parts complete with `interrupted: true`, abandoned runs drop their previews, calls settle explicitly. The per-event repair code and the receipt special cases are deleted.
 
-### Following a stream
+</details>
+
+<details>
+<summary>Following a stream</summary>
 
 **Today.** `client/open-stream.ts` reconnects on every transport ending, counting empty reconnects against `streamIdleReconnectPolicy` (five by default). `keepAlive` makes the budget infinite, and `AgentStreamFollower` sets `maxAttempts: Infinity`. The client and the route negotiate a control version before lease records are used.
 
 **With v27.** The connection-ending table in [Reading the stream](#reading-the-stream) replaces the heuristics: `stream.ended` stops, a lease end reconnects at once, and anything else is a transport failure with backoff. Readers stop on facts. The idle budget, `keepAlive`, the `Infinity` special case, and the control-version branches are deleted.
 
-### Publishing a commit
+</details>
+
+<details>
+<summary>Publishing a commit</summary>
 
 **Today.** `execution/publish-session-events.ts` publishes one event at a time. Channel forwarding and the adapter run before the write, and the adapter may reshape the event (the continuation token on `session.waiting`):
 
@@ -901,7 +954,10 @@ const emit = async (event) => {
 
 **With v27.** The publisher writes a whole transition as one line, counts it in the projection, then runs channel handlers and hooks with `ctx.view` and `ctx.position`. Relay forwarding moves to an execution effect after the write. The `session.waiting` notification comes from the idle selector rather than an event.
 
-### Server readers that scan the stream
+</details>
+
+<details>
+<summary>Server readers that scan the stream</summary>
 
 **Today,** three server readers scan the stream by hand:
 
@@ -911,17 +967,25 @@ const emit = async (event) => {
 
 **With v27.** Telegram and the invocation API use the shared fold, skipping closed progress, and read `openInteractions({kind: "sign-in"})`. The proxy reads the child's private side stream. All three scans are deleted. The first two fixes can land before the break, on today's fold.
 
-### Retried model calls and steps
+</details>
+
+<details>
+<summary>Retried model calls and steps</summary>
 
 **Today.** `harness/model-call/retry.ts` retries regardless of what the failed attempt published, and a retried step starts over with new IDs. The dead attempt's output stays on the stream, and readers clean up with heuristics: the client reducer drops tool parts still streaming their input (`removeStreamingToolParts`) and marks streaming text done (`closeStreamingRuns`).
 
 **With v27.** An in-step retry abandons the run if the emitter accepted anything, and a retried step recovers from its checkpoint position ([Retries and recovery](#retries-and-recovery)). Readers just fold.
 
-### The relay callback route
+</details>
+
+<details>
+<summary>The relay callback route</summary>
 
 **Today.** `subagents/callback-route.ts` parses child events with `.strict()` objects and closed enums such as `z.enum(["pending", "rejected", "failed", "timed-out", "stale"])`. A newer child with one new field is rejected by an older parent.
 
 **With v27.** Relay messages are keyed by child IDs and parsed tolerantly under the new remote protocol version. Local and remote children converge on one message shape, replacing the parallel paths in `forward-session-input.ts`, `subagents/hitl-proxy.ts`, and `subagents/event-proxy-step.ts`.
+
+</details>
 
 ## Future proofing
 
@@ -952,7 +1016,8 @@ After the break, and through 1.x, the stream should evolve without breaking anyo
   - an old-reader conformance test: the v27.0 fold, frozen at release, run over golden streams from the current producer;
   - the stream checker in tests.
 
-**What a change needs:**
+<details>
+<summary>What each kind of change ships as</summary>
 
 | Change                                                                                                                            | Ships as | Why older readers stay correct                                    |
 | --------------------------------------------------------------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------- |
@@ -965,9 +1030,14 @@ After the break, and through 1.x, the stream should evolve without breaking anyo
 | A new `$eve` transport record                                                                                                     | Minor    | Transport records are never counted, and unknown ones are ignored |
 | A new outcome in a closed set, a newly required field, a removed type, or a change to ownership or to what an existing fact means | Major    | Older readers would misread a lifecycle                           |
 
+</details>
+
 ### Directions that fit
 
 These are hypothetical, and none is planned. Each lands as a minor, using a mechanism the contract already has.
+
+<details>
+<summary>Fifteen directions, and how each lands</summary>
 
 | Direction                                            | How it lands                                                                                                                                                                      |
 | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -986,6 +1056,8 @@ These are hypothetical, and none is planned. Each lands as a minor, using a mech
 | Server-side views of children (#2087, #3945)         | Selectors over followed child streams                                                                                                                                             |
 | One stream for clients that don't fold children      | Read-time multiplexing of selected child streams, each line tagged with its source stream and position, with nothing stored twice                                                 |
 | Durable-before-observers, fencing, coalescing        | Producer changes behind the writer, with no change to the vocabulary                                                                                                              |
+
+</details>
 
 Realtime media transport (#637) doesn't fit, and isn't meant to: the stream records the transcript, and media stays out of band.
 
@@ -1041,6 +1113,9 @@ compatibility deletions · docs · release notes
 
 ### Coordination
 
+<details>
+<summary>PRs and issues, and the plan for each</summary>
+
 | PR or issue                        | Relation                                                   | Plan                                                                                                                                                    |
 | ---------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | #4342–#4344 HumanInput             | Rewrites `hitl/`; the interaction family follows its model | Land first. In review, ask for an "answer admitted" output for `interaction.responded`, and for `commitSessionStep` to become the session's commit path |
@@ -1056,7 +1131,14 @@ compatibility deletions · docs · release notes
 | #1725 forward child events (#666)  | Conflicts with separate child streams                      | Close ([why](#child-sessions-and-relays))                                                                                                               |
 | #4092 stranded sessions            | Self-hosted impact of the break                            | Align the release notes                                                                                                                                 |
 
+</details>
+
 ### Size
+
+About −400 lines net in source (plausibly +300 to −1,200) across roughly 10,000 touched, plus about −1,900 from the compatibility cut. Tests are the largest churn. All estimates come from reading code.
+
+<details>
+<summary>Estimates by area, and facts per turn</summary>
 
 This is an estimate from reading `main` at `285d4e09b`, to within a few hundred lines per row.
 
@@ -1104,7 +1186,12 @@ Lifecycle records per turn, not counting progress:
 
 v27 writes a few more lifecycle facts, because deliveries get explicit ends and every call gets its own request. Facts in one commit share a line, so the line count is lower than the fact count. Progress dominates line counts either way, and catch-up skipping removes it from reloads.
 
+</details>
+
 ### Validation
+
+<details>
+<summary>Checks for each family change, and before release</summary>
 
 - **Every family change runs:**
   - the checker over golden streams;
@@ -1126,7 +1213,12 @@ v27 writes a few more lifecycle facts, because deliveries get explicit ends and 
 - **Cost:** the golden-stream metrics rerun after the envelope lands and before release: lines, bytes, reload time to first byte, catch-up memory high-water, and writer flush latency.
 - **Scale smoke:** 32 working tasks with long progress, and a 100,000-line session reload, on world-local and world-vercel.
 
+</details>
+
 ### Accepted risks and non-goals
+
+<details>
+<summary>The risks this accepts, and what it doesn't try to do</summary>
 
 **Accepted risks:**
 
@@ -1147,6 +1239,8 @@ v27 writes a few more lifecycle facts, because deliveries get explicit ends and 
 - A declarative state-machine language.
 - Publishing private records to make state reconstructible.
 - Unifying HITL execution or authorization rules just because their lifecycle is unified.
+
+</details>
 
 ### Open questions
 

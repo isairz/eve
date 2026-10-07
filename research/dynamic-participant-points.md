@@ -55,6 +55,9 @@ The naming rule for authors: **past tense (`turn.started`) is a fact on a stream
 
 Instructions, skills, connections, and subagents are limited to session and turn boundaries, so the model's input doesn't change between tool-loop steps. The rule is enforced in different places for each:
 
+<details>
+<summary>Where each participant's restriction is checked</summary>
+
 | Participant  | `defineDynamic` from   | Checked at build                                      | Checked at runtime                                       |
 | ------------ | ---------------------- | ----------------------------------------------------- | -------------------------------------------------------- |
 | Tools        | `eve/tools`            | Typed map; all three keys allowed                     | `ALLOWED_DYNAMIC_TOOL_EVENTS`                            |
@@ -64,6 +67,8 @@ Instructions, skills, connections, and subagents are limited to session and turn
 | Subagents    | `eve`                  | `normalize-subagent.ts`, with its own copy of the set | A second copy in `context/dynamic-subagent-lifecycle.ts` |
 | Skills       | `eve/skills`           | None: the shared type allows `step.started`           | `ALLOWED_DYNAMIC_SKILL_EVENTS`                           |
 | Memory       | `defineMemoryProvider` | Typed `recall` and `capture` maps                     | An if/else chain on the event type                       |
+
+</details>
 
 A skill resolver keyed on `step.started` compiles, then silently never runs.
 
@@ -86,6 +91,9 @@ Each dispatcher in steps 4–5 checks its own allowed set and returns early for 
 
 **Synthetic events.** Several paths need participants to run when nothing is being published. They rebuild an event by hand with the v26 builders, from `harness/session-machine/resolver-events.ts`. Each is a replay of an event published earlier, or a preview of one about to be published, with approximate fields:
 
+<details>
+<summary>The six paths, and how they accumulated</summary>
+
 | Path                      | Where                                                  | Rebuilds                          | Differs from the real event                                                  |
 | ------------------------- | ------------------------------------------------------ | --------------------------------- | ---------------------------------------------------------------------------- |
 | Model selection           | `harness/model-call/run.ts` `selectModel`              | `step.started`, ahead of time     | `modelId` is the static model or `"dynamic"`, since choosing it is the point |
@@ -98,6 +106,8 @@ Each dispatcher in steps 4–5 checks its own allowed set and returns early for 
 None of them carries `meta` or `at`. Memory never receives one; it runs only on published events.
 
 The pattern is as old as dynamic model selection (#581), which had to choose the model before the model call that the published `step.started` records. Recovery fixes added the replays one at a time (#1133, #1370, #2384, #2738, #2751, #3763, #3983). #4177 gathered them into `resolver-events.ts`.
+
+</details>
 
 **Untyped payloads.** A handler's first argument is `unknown` (`DynamicEvents` in `dynamic/definition.ts`). The docs tell authors to read messages from `ctx` and say only that "the event itself contains turn metadata".
 

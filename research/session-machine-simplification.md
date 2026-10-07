@@ -29,6 +29,11 @@ The rest are independent, and can land before or after it.
 
 ## Where the lines go
 
+About 30,000 lines, most of them in the step pipeline, delegated work, and execution glue.
+
+<details>
+<summary>Lines by area</summary>
+
 | Area                                                                                     | Where                                                                                      | Lines |
 | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ----- |
 | Session workflow program: the session loop, the turn loop, the turn step, waits, handoff | `execution/session/`                                                                       | 4,600 |
@@ -38,6 +43,8 @@ The rest are independent, and can land before or after it.
 | Delegated work: tasks, workflow tools, agent sessions, subagents                         | `execution/tasks/`, `execution/tools/workflow/`, `execution/agent-sessions/`, `subagents/` | 7,900 |
 | Inbox and other execution glue                                                           | `execution/session-inbox/`, `execution/` top level                                         | 5,600 |
 | Legacy compatibility                                                                     | `execution/legacy-session/`, `execution/legacy-remote-agent/`                              | 810   |
+
+</details>
 
 Outside that total are model-call plumbing (2,300), compaction (1,100), sandboxes (9,000), and other tool implementations.
 
