@@ -97,7 +97,7 @@ describe("tool replacement through the session runtime", () => {
     },
   );
 
-  it("reports matcher compilation failure as a terminal session failure", async () => {
+  it("reports validator initialization failure as a terminal session failure", async () => {
     const rules = parseToolStubs([
       {
         id: "broken",
@@ -115,7 +115,7 @@ describe("tool replacement through the session runtime", () => {
           input: {},
           serializedContext: {
             ...buildSerializedContext({ channelKind: "http" }),
-            [STUB_CONTEXT_KEY]: { token: "broken-compilation", rules },
+            [STUB_CONTEXT_KEY]: { token: "broken-validator", rules },
           },
         },
       ]);
@@ -126,7 +126,7 @@ describe("tool replacement through the session runtime", () => {
         const events = await stream.nextTurn();
         expect(filterEventsByType(events, "session.failed")).toHaveLength(1);
         expect(await readStubFailure(run.runId)).toBe(
-          'Could not compile matcher "value" in tool stub "broken".',
+          'Could not create validator for matcher "value" in tool stub "broken".',
         );
       } finally {
         stream.dispose();

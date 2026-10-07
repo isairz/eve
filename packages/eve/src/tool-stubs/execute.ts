@@ -1,4 +1,4 @@
-import { stubToolPath } from "#tool-stubs/target.js";
+import { findStubTarget, stubCallId } from "#tool-stubs/target.js";
 import { contextStorage } from "#context/container.js";
 import { SessionKey, ToolStubsKey } from "#context/keys.js";
 import { ToolStubPlaybackKey, type ToolStubPlayback } from "#context/providers/tool-stubs-key.js";
@@ -13,18 +13,9 @@ export function executeWithToolStub(
   options: ToolExecuteOptions,
   execute: () => unknown,
 ): unknown {
-  const context = contextStorage.getStore();
-  const scope = context?.get(ToolStubsKey);
-  tool = stubToolPath(scope, tool);
-  if (scope === undefined || !scope.rules.some((rule) => rule.tool === tool)) return execute();
-  const session = context!.require(SessionKey);
-  const callId = `${session.sessionId}:${session.turn.id}:${options.toolCallId}`;
-  return executeStubbedTool(
-    context!.require(ToolStubPlaybackKey),
-    { callId, input, tool },
-    options,
-    execute,
-  );
+  const stub = contextStubCall(tool, input, options.toolCallId);
+  if (stub === undefined) return execute();
+  return executeStubbedTool(stub.playback, stub.call, options, execute);
 }
 
 async function* executeStubbedTool(
@@ -51,17 +42,24 @@ export async function connectionToolStub(
   input: unknown,
   callId: string,
 ): Promise<StubResult> {
+  const stub = contextStubCall(tool, input, callId);
+  return stub === undefined ? { kind: "real" } : await stub.playback.call(stub.call);
+}
+
+function contextStubCall(tool: string, input: unknown, callId: string) {
   const context = contextStorage.getStore();
-  const scope = context?.get(ToolStubsKey);
-  tool = stubToolPath(scope, tool);
-  if (scope === undefined || !scope.rules.some((rule) => rule.tool === tool))
-    return { kind: "real" };
-  const session = context!.require(SessionKey);
-  return await context!.require(ToolStubPlaybackKey).call({
-    tool,
-    input,
-    callId: `${session.sessionId}:${session.turn.id}:${callId}`,
-  });
+  if (context === undefined) return undefined;
+  const target = findStubTarget(context.get(ToolStubsKey), tool);
+  if (target === undefined) return undefined;
+  const session = context.require(SessionKey);
+  return {
+    playback: context.require(ToolStubPlaybackKey),
+    call: {
+      tool: target.tool,
+      input,
+      callId: stubCallId(session.sessionId, session.turn.id, callId),
+    },
+  };
 }
 
 /** Record errors converting stub responses so eval verification can detect them. */
@@ -77,7 +75,7 @@ export async function recordToolStubFailure(
   await context!
     .require(ToolStubPlaybackKey)
     .fail(
-      `${session.sessionId}:${turnId ?? session.turn.id}:${callId}`,
+      stubCallId(session.sessionId, turnId ?? session.turn.id, callId),
       `Stubbed tool "${tool}" failed during output processing.`,
     );
 }
@@ -92,7 +90,15 @@ export async function observeToolOutput<T>(
   try {
     return await project();
   } catch (error) {
-    for (const call of calls) await recordToolStubFailure(tool, call.callId, call.turnId);
+    try {
+      for (const call of calls) await recordToolStubFailure(tool, call.callId, call.turnId);
+    } catch (reportingError) {
+      throw new AggregateError(
+        [error, reportingError],
+        "Tool output processing and failure reporting failed.",
+        { cause: error },
+      );
+    }
     if (recover !== undefined) return recover(error);
     throw error;
   }

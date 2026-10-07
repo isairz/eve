@@ -1,4 +1,5 @@
-import { stubToolPath } from "#tool-stubs/target.js";
+import { findStubTarget, stubCallId } from "#tool-stubs/target.js";
+import type { StubScope } from "#tool-stubs/types.js";
 import type { SessionContext } from "#context/session-context.js";
 import { callToolStubStep } from "#execution/tool-stubs/steps.js";
 import type { AgentSessionContext } from "#execution/agent-sessions/context.js";
@@ -7,7 +8,6 @@ import { createRunUsageTally, type RunUsageTally } from "#execution/agent-sessio
 import {
   ask,
   attachWorkflowToolRunContext,
-  findWorkflowToolRunContext,
   WorkflowToolRunAsks,
   type WorkflowToolRunContext,
 } from "#execution/tools/workflow/ask.js";
@@ -378,13 +378,12 @@ async function executeServeBody(
 ): Promise<WorkflowToolRunOutcome> {
   let outcome: WorkflowToolRunOutcome;
   try {
-    const scope = input.agentContext.toolStubs;
-    const tool = stubToolPath(scope, input.toolName);
-    const serve =
-      scope !== undefined && scope.rules.some((rule) => rule.tool === tool)
-        ? serveStub
-        : resolveWorkflowEntryPoint<ServeEntryPoint>(input);
-    const output = await serve(() => calls.receive(), ctx);
+    const target = findStubTarget(input.agentContext.toolStubs, input.toolName);
+    const receive = () => calls.receive();
+    const output =
+      target === undefined
+        ? await resolveWorkflowEntryPoint<ServeEntryPoint>(input)(receive, ctx)
+        : await serveStub(target.scope, target.tool, receive, ctx);
     outcome = { output, status: "completed" };
   } catch (error) {
     outcome = toFailedOutcome(error, calls.runSignal);
@@ -439,6 +438,8 @@ function createPendingReceive(): PendingReceive {
 }
 
 async function serveStub(
+  scope: StubScope,
+  tool: string,
   receive: WorkflowServeReceive<JsonValue>,
   ctx: ServeContext,
 ): Promise<JsonValue> {
@@ -447,11 +448,10 @@ async function serveStub(
   while (true) {
     const call = await receive();
     if (call.abortSignal.aborted) continue;
-    const scope = findWorkflowToolRunContext(ctx)!.agentContext.toolStubs!;
     const result = await callToolStubStep(scope, {
-      callId: `${ctx.session.id}:${ctx.session.turn.id}:${call.callId}`,
+      callId: stubCallId(ctx.session.id, ctx.session.turn.id, call.callId),
       input: call.input,
-      tool: stubToolPath(scope, ctx.toolName),
+      tool,
       persistent: true,
     });
     if (result.kind !== "stub")

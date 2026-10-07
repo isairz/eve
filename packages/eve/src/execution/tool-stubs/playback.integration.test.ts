@@ -3,6 +3,7 @@ import { ContextContainer, contextStorage } from "#context/container.js";
 import { SessionKey, ToolStubsKey } from "#context/keys.js";
 import { toolStubProvider } from "#context/providers/tool-stubs.js";
 import { appendTaskContext } from "#execution/tasks/model-step.js";
+import { toolCallModelOutput } from "#harness/tool-call-io.js";
 import {
   createTask,
   readTaskTable,
@@ -61,9 +62,14 @@ describe("durable tool stub playback", () => {
       expect(await readStubFailure(run.runId)).toBeUndefined();
     });
   });
-  it.each([true, false])(
-    "attributes delayed task projection to its original call (stubbed: %s)",
-    async (stubbed) => {
+  it.each([
+    { stubbed: true, reportingFails: false, recover: true },
+    { stubbed: false, reportingFails: false, recover: true },
+    { stubbed: true, reportingFails: true, recover: true },
+    { stubbed: true, reportingFails: true, recover: false },
+  ])(
+    "preserves output errors and recovery without passing an unverifiable eval: %j",
+    async ({ stubbed, reportingFails, recover }) => {
       const runtime = await createTestRuntime();
       await runtime.run(async () => {
         const rules = [
@@ -117,37 +123,50 @@ describe("durable tool stub playback", () => {
             auth: { current: null, initiator: null },
           });
           await contextStorage.run(context, async () => {
-            context.set(ToolStubsKey, scope);
+            context.set(
+              ToolStubsKey,
+              reportingFails ? { ...scope, token: "unavailable-playback" } : scope,
+            );
             context.setVirtualContext(
               toolStubProvider.key,
               toolStubProvider.create(context)!.value,
             );
+            const outputError = new Error("Invalid output.");
+            const definition = {
+              name: "lookup",
+              description: "Lookup",
+              inputSchema: jsonSchema({ type: "object" }),
+              toModelOutput: () => {
+                throw outputError;
+              },
+            };
+            if (!recover) {
+              await expect(toolCallModelOutput(definition, "raw", "lookup")).rejects.toBe(
+                outputError,
+              );
+              return;
+            }
             const delivered = await appendTaskContext({
               session,
               messages: [],
               projectHistory: (messages) => messages,
-              tools: new Map([
-                [
-                  "lookup",
-                  {
-                    name: "lookup",
-                    description: "Lookup",
-                    inputSchema: jsonSchema({ type: "object" }),
-                    toModelOutput: () => {
-                      throw new Error("Invalid output.");
-                    },
-                  },
-                ],
-              ]),
+              tools: new Map([["lookup", definition]]),
             });
             expect(JSON.stringify(delivered.messages)).toContain("raw");
             expect(readTaskTable(delivered.session.state).tasks[0]?.results).toEqual([]);
           });
-          expect(await readStubFailure(run.runId)).toBe(
-            stubbed ? 'Stubbed tool "lookup" failed during output processing.' : undefined,
-          );
+          if (reportingFails) {
+            expect(await run.status).toBe("cancelled");
+            expect(await readStubFailure(run.runId)).toBe(
+              "Tool stub session failed before verification.",
+            );
+          } else {
+            expect(await readStubFailure(run.runId)).toBe(
+              stubbed ? 'Stubbed tool "lookup" failed during output processing.' : undefined,
+            );
+          }
         } finally {
-          await run.cancel();
+          if ((await run.status) !== "cancelled") await run.cancel();
         }
       });
     },

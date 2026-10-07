@@ -1,4 +1,4 @@
-import { stubToolPath } from "#tool-stubs/target.js";
+import { findStubTarget, stubCallId } from "#tool-stubs/target.js";
 import { getWorkflowMetadata } from "#compiled/@workflow/core/index.js";
 import { callToolStubStep } from "#execution/tool-stubs/steps.js";
 
@@ -174,12 +174,11 @@ async function executeCallBody(
   from: WorkflowToolRunRef,
 ): Promise<WorkflowToolRunOutcome> {
   try {
-    const scope = input.agentContext.toolStubs;
-    const tool = stubToolPath(scope, input.toolName);
-    if (scope !== undefined && scope.rules.some((rule) => rule.tool === tool)) {
-      const result = await callToolStubStep(scope, {
-        callId: `${input.session.id}:${input.session.turn.id}:${input.callId}`,
-        tool,
+    const target = findStubTarget(input.agentContext.toolStubs, input.toolName);
+    if (target !== undefined) {
+      const result = await callToolStubStep(target.scope, {
+        callId: stubCallId(input.session.id, input.session.turn.id, input.callId),
+        tool: target.tool,
         input: input.input,
       });
       if (result.kind === "error") throw new Error(result.error);
