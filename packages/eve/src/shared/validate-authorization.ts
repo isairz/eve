@@ -99,13 +99,10 @@ export function normalizeAuthorizationSpec(
   const backend = readConnectionEventsBackend(
     (auth.vercelConnect as { experimental_events?: unknown } | undefined)?.experimental_events,
   );
-  const runtimeConnect =
-    vercelConnect === undefined
-      ? undefined
-      : {
-          ...vercelConnect,
-          ...(backend === undefined ? {} : { experimental_events: backend }),
-        };
+  let runtimeConnect: AuthorizationDefinition["vercelConnect"] = vercelConnect;
+  if (backend !== undefined && vercelConnect !== undefined) {
+    runtimeConnect = { ...vercelConnect, experimental_events: backend };
+  }
   const displayName = auth.displayName as string | undefined;
   const evict =
     typeof auth.evict === "function" ? (auth.evict as AuthorizationDefinition["evict"]) : undefined;

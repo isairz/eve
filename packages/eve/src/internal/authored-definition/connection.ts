@@ -121,9 +121,12 @@ export function normalizeMcpClientConnectionDefinition(
         `${message} experimental_events requires a static Connect auth provider with the events bridge.`,
       );
     }
-    result.experimental_events = events as unknown as NonNullable<
-      McpClientConnectionDefinition["experimental_events"]
-    >;
+    type Events = NonNullable<McpClientConnectionDefinition["experimental_events"]>;
+    result.experimental_events = {
+      onEvent: events.onEvent as Events["onEvent"],
+      onGap: events.onGap as Events["onGap"],
+      onTerminated: events.onTerminated as Events["onTerminated"],
+    };
   }
 
   if (record.protocolVersionDiscovery !== undefined) {
