@@ -1,6 +1,6 @@
 import { createHook } from "#compiled/@workflow/core/index.js";
 import { claimHookOwnership, disposeHook } from "#execution/hook-ownership.js";
-import { StubPlayback } from "#tool-stubs/rules.js";
+import { StubPlayback } from "#tool-stubs/playback.js";
 import {
   failStubSessionStep,
   publishStubFailureStep,
