@@ -1,3 +1,4 @@
+import { hitlStepKey } from "#harness/hitl/index.js";
 import { openLimit } from "#harness/session-machine/view.js";
 import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
@@ -263,7 +264,9 @@ describe("session machine", () => {
     const partial = await respond(machine, {
       inputResponses: [{ optionId: "approve", requestId: "approval-call-1" }],
     });
-    expect(partial.turn.suspended[0]?.answers).toEqual({
+    expect(
+      partial.turn.hitl?.steps?.[hitlStepKey(partial.turn.suspended[0]!.event)]?.answers,
+    ).toEqual({
       "approval-call-1": { optionId: "approve", requestId: "approval-call-1" },
     });
     expect(machine.eventsSince(before)).toEqual([]);
@@ -542,10 +545,17 @@ describe("answers", () => {
     await machine.apply({
       turn: {
         ...machine.view().turn,
-        suspended: machine.view().turn.suspended.map((step) => ({
-          ...step,
-          approvalKeys: { "approval-call-1": "deploy:api" },
-        })),
+        hitl: {
+          ...machine.view().turn.hitl,
+          steps: Object.fromEntries(
+            machine
+              .view()
+              .turn.suspended.map((step) => [
+                hitlStepKey(step.event),
+                { answers: {}, approvalKeys: { "approval-call-1": "deploy:api" } },
+              ]),
+          ),
+        },
       },
       events: [],
     });

@@ -1,3 +1,4 @@
+import { hitlStepKey } from "./record.js";
 import { openLimit } from "#harness/session-machine/view.js";
 import type { UserContent } from "ai";
 import { coalesceTurnInputs } from "#harness/messages.js";
@@ -190,23 +191,27 @@ export async function acceptHumanInput(
   for (const parked of view.turn.suspended) {
     if (!parked.requests.some((request) => approvingIds.has(request.requestId))) continue;
     const tools = await restoreTools(parked);
+    const key = hitlStepKey(parked.event);
+    const previous = view.turn.hitl?.steps?.[key];
     view.turn = {
       ...view.turn,
-      suspended: view.turn.suspended.map((candidate) =>
-        candidate !== parked
-          ? candidate
-          : {
-              ...candidate,
-              approvalKeys: Object.fromEntries(
-                candidate.requests.map((request) => [
-                  request.requestId,
-                  tools.get(request.action.toolName)?.approvalKey?.(request.action.input) ??
-                    candidate.approvalKeys?.[request.requestId] ??
-                    request.action.toolName,
-                ]),
-              ),
-            },
-      ),
+      hitl: {
+        ...view.turn.hitl,
+        steps: {
+          ...view.turn.hitl?.steps,
+          [key]: {
+            answers: previous?.answers ?? {},
+            approvalKeys: Object.fromEntries(
+              parked.requests.map((request) => [
+                request.requestId,
+                tools.get(request.action.toolName)?.approvalKey?.(request.action.input) ??
+                  previous?.approvalKeys[request.requestId] ??
+                  request.action.toolName,
+              ]),
+            ),
+          },
+        },
+      },
     };
   }
   const requestedChecks = policyChecksBeforeStep(view, arrivals);

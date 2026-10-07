@@ -1,3 +1,4 @@
+import { hitlStepKey } from "./record.js";
 import { readClientContext } from "#internal/client-context.js";
 import { openInputs } from "#protocol/session-projection.js";
 import { isApprovalRequest } from "#harness/input-request-class.js";
@@ -24,15 +25,16 @@ export function sameStep(left: StepCoordinates, right: StepCoordinates): boolean
 export function projectHumanInput(view: SessionView, step?: SuspendedStep): HumanInputState {
   const requests: Record<string, HumanInputState["requests"][string]> = {};
   if (step !== undefined) {
+    const record = view.turn.hitl?.steps?.[hitlStepKey(step.event)];
     for (const request of step.requests) {
       const approval: OpenApproval = {
         kind: "tool-approval",
         at: step.event,
         request,
         requester: step.requester ?? null,
-        approvalKey: step.approvalKeys?.[request.requestId] ?? request.action.toolName,
-        ...(step.answers?.[request.requestId] !== undefined && {
-          answer: step.answers[request.requestId],
+        approvalKey: record?.approvalKeys?.[request.requestId] ?? request.action.toolName,
+        ...(record?.answers?.[request.requestId] !== undefined && {
+          answer: record.answers[request.requestId],
         }),
         ...(step.responseAuthRequiredRequestIds?.includes(request.requestId) && {
           responsePolicy: true,
@@ -111,6 +113,22 @@ export function projectedTurn(
     (request): request is OpenApproval => request.kind === "tool-approval",
   );
   const suspended = [...view.turn.suspended];
+  const steps = { ...view.turn.hitl?.steps };
+  if (at !== undefined) {
+    const key = hitlStepKey(at);
+    if (approvals.length === 0) delete steps[key];
+    else
+      steps[key] = {
+        approvalKeys: Object.fromEntries(
+          approvals.map((approval) => [approval.request.requestId, approval.approvalKey]),
+        ),
+        answers: Object.fromEntries(
+          approvals.flatMap((approval) =>
+            approval.answer === undefined ? [] : [[approval.request.requestId, approval.answer]],
+          ),
+        ),
+      };
+  }
   if (at !== undefined) {
     const index = suspended.findIndex((step) => sameStep(step.event, at));
     if (state.held === undefined) {
@@ -127,14 +145,6 @@ export function projectedTurn(
         approved: state.held.approved,
         following: state.held.following,
         requester: approvals[0]?.requester ?? previous?.requester,
-        approvalKeys: Object.fromEntries(
-          approvals.map((approval) => [approval.request.requestId, approval.approvalKey]),
-        ),
-        answers: Object.fromEntries(
-          approvals.flatMap((approval) =>
-            approval.answer === undefined ? [] : [[approval.request.requestId, approval.answer]],
-          ),
-        ),
         responseAuthRequiredRequestIds: approvals
           .filter((approval) => approval.responsePolicy === true)
           .map((approval) => approval.request.requestId),
@@ -158,6 +168,7 @@ export function projectedTurn(
     queued: state.queued,
     hitl: {
       ...view.turn.hitl,
+      steps,
       audit,
       ...(at === undefined && {
         relayedRoutes: Object.fromEntries(

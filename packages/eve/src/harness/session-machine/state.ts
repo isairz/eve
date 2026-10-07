@@ -3,7 +3,7 @@ import type { ModelMessage } from "ai";
 import type { SessionAuthContext } from "#channel/types.js";
 import type { SessionStateMap, StepInput } from "#harness/types.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
-import type { InputRequest, InputResponse } from "#shared/input.js";
+import type { InputRequest } from "#shared/input.js";
 
 import { hasHitlRecord, type HitlRecord } from "#harness/hitl/index.js";
 
@@ -38,9 +38,6 @@ export interface SuspendedStep {
    * its step starts and its budget allows it, as calls the model makes do.
    */
   readonly approved?: readonly InputRequest[];
-  /** Partial answers remain with their originating step until its batch resolves. */
-  readonly answers?: Readonly<Record<string, InputResponse>>;
-  readonly approvalKeys?: Readonly<Record<string, string>>;
   readonly following?: StepInput;
   /** Workflow and agent calls the runtime runs for the step. */
   readonly tasks: readonly RuntimeWorkflowTaskRequest[];

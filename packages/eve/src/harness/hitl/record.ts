@@ -1,3 +1,5 @@
+import type { InputResponse } from "#shared/input.js";
+import type { StepCoordinates } from "#harness/session-machine/view.js";
 import type { InputOption } from "#shared/input.js";
 import type { SessionAuthContext } from "#channel/types.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
@@ -91,6 +93,15 @@ export interface ProxyInputQuestion {
 
 /** Data owned by human-input rules, not by the session projection or execution machine. */
 export interface HitlRecord {
+  readonly steps?: Readonly<
+    Record<
+      string,
+      {
+        readonly answers: Readonly<Record<string, InputResponse>>;
+        readonly approvalKeys: Readonly<Record<string, string>>;
+      }
+    >
+  >;
   readonly audit?: ApprovalAudit;
   readonly relayedRoutes?: Readonly<Record<string, RelayRoute>>;
   readonly relayedAuthorizations?: Readonly<
@@ -118,6 +129,12 @@ export function hasHitlRecord(record: HitlRecord | undefined): boolean {
     record?.audit !== undefined ||
     record?.readsResults === true ||
     Object.keys(record?.relayedRoutes ?? {}).length > 0 ||
-    Object.keys(record?.relayedAuthorizations ?? {}).length > 0
+    Object.keys(record?.relayedAuthorizations ?? {}).length > 0 ||
+    Object.keys(record?.steps ?? {}).length > 0
   );
+}
+
+/** Coordinates, not call ids, identify an originating step. */
+export function hitlStepKey(at: StepCoordinates): string {
+  return JSON.stringify([at.turnId, at.sequence, at.stepIndex]);
 }

@@ -236,3 +236,4 @@ export type {
 } from "./record.js";
 export { cleanupHitl, type HitlRecord } from "./record.js";
 export { hasHitlRecord } from "./record.js";
+export { hitlStepKey } from "./record.js";
