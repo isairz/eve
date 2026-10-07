@@ -198,6 +198,21 @@ describe("tool stubs", () => {
       { id: "sequence", tool: "list", responses: [false, 0, "", null] },
     ]);
   });
+
+  it.each([
+    [{ minimum: "1" }, "#/minimum", "number"],
+    [{ properties: { count: { minimun: 1 } } }, "#/properties/count/minimun", "Unsupported"],
+    [{ pattern: "[" }, "#/pattern", "regex"],
+  ])("identifies the rule, property, and invalid schema keyword: %j", (schema, path, detail) => {
+    expect(() =>
+      parseToolStubs([
+        { id: "valid", tool: "lookup", response: null },
+        { id: "broken-filter", tool: "lookup", match: { filter: schema }, response: null },
+      ]),
+    ).toThrow(
+      new RegExp(`Invalid matcher "filter" in tool stub "broken-filter" at ${path}: .*${detail}`),
+    );
+  });
 });
 
 it("does not consume another rule's sequence or advance on unmatched calls", () => {

@@ -1,21 +1,20 @@
 import { z } from "#compiled/zod/index.js";
 import { isObject } from "#shared/guards.js";
-import { jsonObjectSchema, jsonValueSchema } from "#shared/json-schemas.js";
 import { parseJsonValue } from "#shared/json.js";
-import { compileStubConstraint, validateStubConstraint } from "#tool-stubs/schema.js";
+import { createStubValidator, validateStubConstraint } from "#tool-stubs/schema.js";
 import type { StubCall, StubResult, ToolStub } from "#tool-stubs/types.js";
 
 const ruleSchema = z.strictObject({
   id: z.string().min(1),
   tool: z.string().min(1),
-  match: z.record(z.string(), z.union([z.boolean(), jsonObjectSchema])).optional(),
+  match: z.record(z.string(), z.union([z.boolean(), z.record(z.string(), z.json())])).optional(),
 });
 
 const toolStubsSchema = z
   .array(
     z.union([
-      ruleSchema.extend({ response: jsonValueSchema }),
-      ruleSchema.extend({ responses: z.tuple([jsonValueSchema]).rest(jsonValueSchema) }),
+      ruleSchema.extend({ response: z.json() }),
+      ruleSchema.extend({ responses: z.tuple([z.json()]).rest(z.json()) }),
     ]),
   )
   .max(100);
@@ -33,7 +32,8 @@ export function parseToolStubs(value: unknown): readonly ToolStub[] {
         "Stub connection operations by their qualified connection__tool name; connection discovery and validation remain live.",
       );
     }
-    for (const schema of Object.values(rule.match ?? {})) validateStubConstraint(schema);
+    for (const [property, schema] of Object.entries(rule.match ?? {}))
+      validateStubConstraint(schema, rule.id, property);
   }
   return rules;
 }
@@ -52,11 +52,14 @@ export class StubPlayback {
       ...rule,
       constraints: Object.entries(rule.match ?? {}).map(([property, schema]) => {
         try {
-          return { property, validator: compileStubConstraint(schema) };
+          return { property, validator: createStubValidator(schema) };
         } catch (cause) {
-          throw new Error(`Could not compile matcher "${property}" in tool stub "${rule.id}".`, {
-            cause,
-          });
+          throw new Error(
+            `Could not create validator for matcher "${property}" in tool stub "${rule.id}".`,
+            {
+              cause,
+            },
+          );
         }
       }),
     }));
