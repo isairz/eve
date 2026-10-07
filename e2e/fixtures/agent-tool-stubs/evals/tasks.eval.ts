@@ -12,19 +12,23 @@ export default defineEval({
         {
           id: "tasks",
           tool: "list_tasks",
-          responses: [
+          outcomes: [
             {
-              tasks: [
-                { id: "milk", title: "Buy milk" },
-                { id: "dog", title: "Walk dog" },
-                { id: "rent", title: "Pay rent" },
-              ],
+              response: {
+                tasks: [
+                  { id: "milk", title: "Buy milk" },
+                  { id: "dog", title: "Walk dog" },
+                  { id: "rent", title: "Pay rent" },
+                ],
+              },
             },
             {
-              tasks: [
-                { id: "dog", title: "Walk dog" },
-                { id: "rent", title: "Pay rent" },
-              ],
+              response: {
+                tasks: [
+                  { id: "dog", title: "Walk dog" },
+                  { id: "rent", title: "Pay rent" },
+                ],
+              },
             },
           ],
         },
@@ -32,7 +36,7 @@ export default defineEval({
           id: "complete-milk",
           tool: "complete_task",
           match: { task_id: { const: "milk" } },
-          response: { success: true },
+          outcome: { response: { success: true } },
         },
       ],
     });

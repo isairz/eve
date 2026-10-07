@@ -19,7 +19,7 @@ it.each([undefined, "Complete the milk task."])(
         id: "milk",
         tool: "complete_task",
         match: { task_id: { const: "milk" } },
-        responses: [{ success: true }, { success: false }],
+        outcomes: [{ response: { success: true } }, { response: { success: false } }],
       },
     ] satisfies ToolStub[];
     if (message === undefined) {
@@ -34,7 +34,7 @@ it.each([undefined, "Complete the milk task."])(
           id: "milk",
           tool: "complete_task",
           match: { task_id: { const: "milk" } },
-          responses: [{ success: true }, { success: false }],
+          outcomes: [{ response: { success: true } }, { response: { success: false } }],
         },
       ],
     };
