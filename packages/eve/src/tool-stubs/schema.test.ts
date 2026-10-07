@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { JsonObject, JsonValue } from "#shared/json.js";
-import { parseToolStubs, StubPlayback } from "#tool-stubs/rules.js";
+import { StubPlayback } from "#tool-stubs/playback.js";
+import { parseToolStubs } from "#tool-stubs/rules.js";
 
 function matches(schema: JsonObject | boolean, value: JsonValue): boolean {
   const playback = new StubPlayback(
