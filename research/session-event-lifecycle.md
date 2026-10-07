@@ -673,6 +673,8 @@ Wrapped for reading; on the wire, each record is one line. `…` marks fields le
 
 </details>
 
+**Why one line per commit.** Workflow stores one chunk whole, but makes no such promise for several chunks flushed together. If a commit's facts were separate lines, a crash or a step retry could leave half a decision on the stream, as v26 can. Avoiding that would put commit boundaries on every line, as Kafka transactions do with control markers. Every reader would then buffer to the boundary, advance its cursor only at commit ends, and skip torn commits that stay on the append-only stream forever. Systems that store the commit as one record avoid all of that: pi's durable package delivers event batches one per commit, NEventStore stores a commit as one timestamp and a list of events, and a Datomic transaction carries one timestamp for all its datoms. The cost here is the `facts` array, and a fact index in each fact's identity.
+
 **Positions:**
 
 - **A line is one stored chunk.** The writer stores one chunk per write, so a commit is atomic on the stream: a crash leaves the whole commit or none of it.
