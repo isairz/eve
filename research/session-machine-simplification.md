@@ -14,7 +14,7 @@ The core of a session is simple. A session is a loop of turns. A turn is a seque
 
 - each kind of wait has its own record, step result, waiter, and resume path;
 - each kind of work implements each lifecycle operation separately;
-- five state channels are kept in sync by hand;
+- model history, private records, and the context container are kept consistent with the stream by hand;
 - 63 durable steps each repeat the same ceremony;
 - eve intercepts the AI SDK's inner loop instead of owning it.
 
@@ -47,11 +47,115 @@ Outside that total are model-call plumbing (2,300), compaction (1,100), sandboxe
 
 A durable step can't stay open while a person or a run works. So each kind of wait needs all of these:
 
-- **A private record:** the turn's suspended steps, a runtime wait's call IDs, `pendingAuthorization`, `proxyInputRequests`, the workflow tool run registry, the task table.
+- **A private record.** After HumanInput, these are `TurnState` (suspended steps with their approvals and runtime work, relayed routes, the session-limit request), the sign-in challenges (`eve.runtime.pendingAuthorization`), the workflow tool run registry, and the task table.
 - **A step-result variant.** `DurableStepResult` has `continue` or `done`, `cancelled`, `steered`, `held` on tasks, `held` on a request, and `park` with pending calls.
 - **A workflow-side waiter:** `waitForHeldRequest`, `waitForHeldTurn`, `waitForRuntimeActionResults`, `nextParkedActivity`.
 - **A resume stage** at the start of the next step, such as settling runtime work or accepting human input.
 - **Facts** in the projection.
+
+<details>
+<summary>One wait end to end: a sign-in</summary>
+
+A tool that needs a sign-in touches every piece, across six files. The excerpts are trimmed, and HumanInput keeps the same shape.
+
+**History.** The step drops the interrupted calls, so the model never sees a call without its result. The interrupt itself comes from the out-of-band stash (`harness/inline-tool-authorization.ts`):
+
+```ts
+return {
+  callIdsByName,
+  challenges: resolveActiveAuthorizationChallenges(signals.flatMap((signal) => signal.challenges)),
+  history: withoutCalls(input.messages, interruptedCallIds),
+};
+```
+
+**Record.** The machine's commit stores the challenges under their own key (`harness/session-machine/commit.ts`):
+
+```ts
+transition.signIns.length === 0
+  ? clearPendingAuthorization(session.state)
+  : setPendingAuthorization(clearPendingAuthorization(session.state), {
+      challenges: transition.signIns,
+    });
+```
+
+**Step result.** The turn step reports the hold as its own variant (`execution/session/turn-step-types.ts`):
+
+```ts
+| {
+    readonly action: "held";
+    readonly hold: "request";
+    readonly authorizationAttemptIds: readonly string[];
+    readonly hasPendingInputBatch: boolean;
+    readonly inputRequestIds: readonly string[];
+  }
+```
+
+**Waiter.** The turn loop branches on that variant to a waiter of its own (`execution/session/turn.ts`). `takeAuthorizations` returns nothing until every attempt has called back:
+
+```ts
+if (result.action === "held" && result.hold === "request") {
+  const woke = await this.waitForHeldRequest(turn, result);
+  if (woke === "cancelled") return await this.finishCancelledTurn(turn);
+  nextStepInput = { delivery: woke };
+  continue;
+}
+
+private async waitForHeldRequest(turn, held) {
+  const attemptIds = new Set(held.authorizationAttemptIds);
+  const requestIds = new Set(held.inputRequestIds);
+  while (true) {
+    const callbacks = this.input.queue.takeAuthorizations(attemptIds);
+    if (callbacks !== undefined) return { kind: "deliver", payloads: callbacks };
+    const answer = await turn.takeInputResponses(requestIds);
+    if (answer !== undefined) return answer;
+    const steering = await turn.takeSteering({ heldOnPerson: true });
+    if (steering !== undefined) return steering;
+    const next = await turn.nextRuntimeEvent([]);
+    if (next === "cancelled") return next;
+    if (next.kind === "workflow") await this.handleWorkflowMessage(next.message);
+  }
+}
+```
+
+**Resume stage.** Before anything else, the next turn step matches the callbacks against the record, hands their results to the tool through the context container, and clears the record (`execution/session/turn-step.ts`):
+
+```ts
+const pendingAuth = getPendingAuthorization(durableSession.state);
+if (pendingAuth && delivery !== undefined) {
+  const { matches, remainingPayloads } = matchAuthorizationCallbacks(
+    pendingAuth,
+    delivery.payloads,
+  );
+  delivery = { ...delivery, payloads: remainingPayloads };
+  if (matches.length > 0) {
+    const matchedAttemptIds = matches.map((match) => match.result.attemptId);
+    ctx.set(
+      PendingAuthorizationResultKey,
+      matches.map((match) => match.result),
+    );
+    durableSession = {
+      ...durableSession,
+      state: clearPendingAuthorization(durableSession.state, matchedAttemptIds),
+    };
+  }
+}
+```
+
+**Facts.** Separately, the projection folds `authorization.required` and `authorization.completed` into its own table, keyed by attempt (`protocol/session-projection.ts`):
+
+```ts
+case "authorization.required": {
+  const attemptId = typed.data.attemptId ?? typed.data.name;
+  // … status: "required"
+}
+case "authorization.completed": {
+  // … status: typed.data.outcome
+}
+```
+
+Approvals share this step result and waiter. Waits on tasks and on runtime work have their own record, step result, waiter, and resume stage.
+
+</details>
 
 ### Kinds of work times lifecycle operations
 
@@ -69,31 +173,84 @@ A durable step can't stay open while a person or a run works. So each kind of wa
 Each pair is implemented per kind:
 
 - **Two executors for inline calls.** The SDK runs most of them through the wrappers in `harness/tools.ts` and the stash in `tool-interrupts.ts`. `harness/hitl/approved-calls.ts` (340 lines) reimplements validation, `Promise.allSettled`, partial outputs, and `toModelOutput` for approved ones.
-- **25 cancel functions in 17 files.**
+- **25 cancel functions in 17 files.** One turn's cancel shows why: `cancelTurnWork()` fans out to a different mechanism for each kind of work.
 - **Two registries for running work:** blocking workflow tool runs (`harness/workflow-tool-runs.ts`) and the task table (`execution/tasks/table.ts`). Both store a run ID and a hook token.
-- **At least five internal protocols for the same handful of messages:**
-  - workflow tool run messages (17 kinds);
-  - the session inbox;
-  - hook payloads for subagent requests and runtime results;
-  - remote HTTP callbacks, plus remote agent protocol 1;
-  - parent notifications.
+- **Three message vocabularies, in five encodings,** for about six ideas: started, asks a person, needs a sign-in, answer or withdraw, result and usage, and stop.
 
-### Five state channels, synced by hand
+<details>
+<summary>Stopping one turn's work</summary>
 
-1. **Model history.** The AI SDK's pairing rules force repair helpers wherever calls are interrupted.
-2. **Private records,** about ten of them.
-3. **The serialized context container.**
-4. **The projection.**
-5. **The stream.**
+| Stops                       | Through                                                 | How                                                                                                                                                                                                                |
+| --------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Blocking `execute` runs     | `cancelDescendantTurnsStep` → `cancelWorkflowToolRun`   | `cancel` on the run's control hook; then polls the run's status every 250 ms for up to 35 seconds; then `cancelRun`                                                                                                |
+| Tasks                       | `cancelWorkingTasks` → `cancelTasksStep` → `cancelTask` | A table transition, with branches for resumable tasks and for runs that haven't started, which hold the cancel. Then `cancel` on the control hook, withdrawals for what a `task()` run relayed, and `task.settled` |
+| Agent sessions a run opened | `cancelAgentSessionTurnStep`, fire and forget on abort  | Remote: an HTTP POST to `cancel-turn`, with its own response schema. Local: a `cancel` session command                                                                                                             |
+| Runs, when steering arrives | `interruptWorkflowToolRun`                              | `interrupt` on the control hook, if it still exists                                                                                                                                                                |
+| Every task, at session end  | `terminateChildSessionsStep`                            | `end` instead of `cancel`, through the same signal, poll, and force path as blocking runs                                                                                                                          |
 
-On top of those come adapter state, instrumentation, and workflow attributes.
+The same run stops differently depending on who stops it. A task cancelled with its turn gets a hook message and is trusted to end itself; at session end, the same task is forced after 35 seconds.
 
-**Example:** turn identity is derived independently four times, always as `` `turn_${n}` ``:
+```ts
+// execution/session/turn.ts
+async cancelTurnWork(): Promise<void> {
+  const { cursor } = this.input;
+  if (mayWaitOnWorkflowToolRuns(cursor.sessionState)) {
+    await cancelDescendantTurnsStep({ serializedContext: cursor.serializedContext, sessionState: cursor.sessionState });
+  }
+  await cancelWorkingTasks(cursor, "turn_cancelled");
+}
 
-- in `protocol/session-projection.ts`;
-- in `harness/session-machine/view.ts`;
-- in `execution/workflow-trace-context.ts`;
-- in `execution/session/program.ts`, which keeps its own counter. That counter restarts in every owner run, so after a handoff a failure is attributed to the wrong turn.
+// execution/tools/workflow/cancel.ts
+try {
+  await resumeHook(run.hookToken, stop);
+  signalled = true;
+} catch (error) {
+  // A fresh run may not have registered its control hook yet.
+}
+await settleWorkflowToolRunCancellation(run.runId, reason, signalled); // poll, then cancelRun
+
+// execution/tasks/table.ts
+if (record.resumable) return cancelResumableTask(table, record);
+// …
+if (run === undefined || !run.started) return { settled, table: next }; // the cancel is held
+return { send: cancelCommand(run), settled, table: next };
+
+// execution/agent-sessions/steps.ts
+if (address.kind === "remote") {
+  await cancelRemoteAgentTurn({ remote, sessionId: address.sessionId }); // HTTP
+  return;
+}
+await requestWorkflowTurnCancellation({ sessionId: address.sessionId }); // session inbox
+```
+
+</details>
+
+<details>
+<summary>The vocabularies and their encodings</summary>
+
+| Encoding                                                        | Between                                                                 | Messages                                                                                                                                                                                                                                                                                  |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workflow run messages (`execution/tools/workflow/messages.ts`)  | A session and the runs it starts for `execute`, `task()`, and `serve()` | Run to session: `started`, `agent-started`, `request` (an `ask`, an `input-batch` from a child, or an `authorization-request`), `withdraw`, `report`, `reply`, `usage`, `outcome`. Session to run, on the run's control hook: `call`, `cancel`, `end`, `interrupt`, `answer`, `withdrawn` |
+| Child hook payloads (`HookPayload` in `channel/types.ts`)       | A local child session and its parent                                    | `subagent-input-request`; `subagent-authorization-event`, which nests v26 approval and sign-in events; `runtime-action-result`                                                                                                                                                            |
+| Remote callbacks (`subagents/callback-route.ts`)                | A remote child session and its parent                                   | The same payloads as HTTP POSTs, validated with strict schemas. Results arrive as `turn.completed` or `turn.failed`. Answers go back through `forward-session-input.ts`                                                                                                                   |
+| Session inbox (`SessionCommand` and the delivery hook payloads) | Anyone and a session                                                    | `send`, `deliver`, `cancel`, `clear`, `compact`, `reset`, `session-timeout`. Remotely, the agent API's send, cancel-turn, and reset endpoints; remote agent protocol 1 is the legacy version                                                                                              |
+| Parent notifications (`subagents/parent-notification.ts`)       | A child session's turn and its caller                                   | A settled turn as a `subagent-result` with a lifecycle verdict, by `resumeHook` locally or a callback POST remotely, plus a separate variant for a cancelled caller                                                                                                                       |
+
+A question from a session that a run opened changes vocabulary at each hop. The child sends `subagent-input-request`, the run forwards it as `request {input-batch}`, and the owner publishes it as `input.requested`.
+
+</details>
+
+### State kept consistent by hand
+
+The projection is a fold of the stream, so the two can't disagree. But each transition also updates three other kinds of state, and nothing checks that they agree with the stream:
+
+1. **Model history.** The AI SDK's pairing rules mean an interrupted call has to leave history or get a result, so repair helpers run wherever calls stop.
+2. **Private records,** listed above.
+3. **The serialized context container,** which carries values between steps, such as the turn's delivery IDs and dynamic resolver results.
+
+The sign-in above touches all three, and the stream. When they drift, the projection says one thing and execution does another. One bug caught while building the session-state stack: withdrawing a sign-in left its challenge in the record after the projection had closed it.
+
+Turn identity shows the same problem in a single value. Three places compute it from the projection's sequence, as `` `turn_${n}` ``: `protocol/session-projection.ts`, `harness/session-machine/view.ts`, and `execution/workflow-trace-context.ts`. But `execution/session/program.ts` keeps its own counter, which restarts in every owner run, so after a handoff a failure is attributed to the wrong turn.
 
 ### 63 durable steps, each with its own ceremony
 
@@ -154,6 +311,11 @@ This cluster overlaps the areas above.
 
 **Problem.** Some lifecycle status lives in two places: in the projection, and in private records such as human input's request and batch state. Two authorities can disagree, and readers outside `hitl/` are tempted to read the private one. HumanInput also builds turn and message events itself (`turn.waiting` and `message.completed`, among its 26 v26 event builder calls).
 
+**Why the records are still there.** The session-state work (#4177) moved the status of sign-ins and relayed requests into the projection, and HumanInput moves relayed routes into `TurnState`. The records stayed for two reasons:
+
+- **They hold data that can't go on the stream:** a sign-in's callback URL, principal, requester, and resume value; a relayed request's continuation token, inbox, and remote binding.
+- **v26 lacks the facts that would make the projection the only authority.** `attemptId` is optional, so the projection falls back to the connection name, and nothing reports a call that a sign-in stopped. The session-state stack stayed on v26 and deferred both. In v27, every sign-in attempt is an interaction with its own ID, and a stopped call settles `interrupted`.
+
 **Cut.**
 
 - The projection is the only lifecycle authority.
@@ -177,7 +339,7 @@ This cluster overlaps the areas above.
 
 ### One registry and protocol for running work
 
-**Problem.** Two registries, about 25 cancel functions, and at least five protocols for the same messages.
+**Problem.** Two registries, about 25 cancel functions, and three message vocabularies in five encodings.
 
 **Cut:**
 
