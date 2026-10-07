@@ -176,7 +176,7 @@ Timing is unchanged from today.
 | `session.start`       | After the session's opening commit                     | Dynamic model, tools, instructions, skills, connections, subagents | `session.started`      |
 | `turn.start`          | After the turn's opening commit                        | Memory recall and memory tools, then the dynamic ones              | `turn.started`         |
 | `model.start`         | Before each responding model call                      | Dynamic model and tools                                            | `step.started`         |
-| `compaction.start`    | Before the compaction run                              | Memory capture                                                     | `compaction.requested` |
+| `compaction.start`    | Before a compaction                                    | Memory capture                                                     | `compaction.requested` |
 | `compaction.complete` | After compaction replaces the context, on success only | Memory recall                                                      | `compaction.completed` |
 | `turn.complete`       | After the turn settles `completed`, on success only    | Memory capture                                                     | `turn.completed`       |
 
@@ -194,8 +194,8 @@ type ParticipantPoint =
   | { point: "session.start"; entry: Entry }
   | { point: "turn.start"; turnId: string; entry: Entry }
   | { point: "model.start"; turnId: string; runId: string; entry: Entry }
-  | { point: "compaction.start"; turnId?: string; runId: string; entry: Entry }
-  | { point: "compaction.complete"; turnId?: string; runId: string; entry: Entry }
+  | { point: "compaction.start"; turnId?: string; changeId: string; entry: Entry }
+  | { point: "compaction.complete"; turnId?: string; changeId: string; entry: Entry }
   | { point: "turn.complete"; turnId: string; entry: Entry };
 
 type Entry = "initial" | "restore" | "redeploy";
