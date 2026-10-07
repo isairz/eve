@@ -1,6 +1,6 @@
 import { z } from "#compiled/zod/index.js";
 import { parseJsonValue } from "#shared/json.js";
-import { validateStubConstraint } from "#tool-stubs/schema.js";
+import { createStubValidator, validateStubConstraint } from "#tool-stubs/schema.js";
 import type { ToolStub } from "#tool-stubs/types.js";
 
 const ruleSchema = z.strictObject({
@@ -33,8 +33,16 @@ export function parseToolStubs(value: unknown): readonly ToolStub[] {
         "Cannot stub connection_execute or connection_search. Stub a specific connection operation, such as linear__list_issues.",
       );
     }
-    for (const [property, schema] of Object.entries(rule.match ?? {}))
+    for (const [property, schema] of Object.entries(rule.match ?? {})) {
       validateStubConstraint(schema, rule.id, property);
+      try {
+        createStubValidator(schema);
+      } catch (cause) {
+        throw new Error(`Could not create matcher "${property}" in tool stub "${rule.id}".`, {
+          cause,
+        });
+      }
+    }
   }
   return rules;
 }
