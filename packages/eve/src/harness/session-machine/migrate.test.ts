@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { adaptHumanInput } from "#harness/hitl/adapter.js";
 import { beforeStep, afterStep } from "#harness/hitl/decisions.js";
-import { LEGACY_PARKING_KEYS } from "#harness/hitl/state-legacy.js";
+import { LEGACY_PARKING_KEYS } from "#harness/session-machine/migrate-legacy.js";
 import { HumanInput } from "#harness/hitl/human-input.js";
 import type { HumanInputState } from "#harness/hitl/state.js";
 import type { InputRequest } from "#shared/input.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 import type { SessionStateMap } from "#harness/types.js";
-import { hydrateMachineState } from "./hydrate.js";
+import { migrateSessionState } from "./migrate.js";
 import { sessionView } from "./commit.js";
 import { runtimeWait, storedProjection } from "./view.js";
 
@@ -28,11 +28,11 @@ const task: RuntimeWorkflowTaskRequest = {
 };
 function upgrade(state: SessionStateMap) {
   const original: { state: SessionStateMap } = { state: { authored: { keep: true }, ...state } };
-  const saved = hydrateMachineState(original);
+  const saved = migrateSessionState(original);
   expect(original.state).toMatchObject(state);
   for (const key of LEGACY_PARKING_KEYS) expect(saved.state?.[key]).toBeUndefined();
   expect(saved.state?.authored).toEqual({ keep: true });
-  expect(hydrateMachineState(saved)).toBe(saved);
+  expect(migrateSessionState(saved)).toBe(saved);
   return sessionView(storedProjection(saved.state), saved.state);
 }
 
@@ -131,4 +131,10 @@ describe("machine hydration upgrades", () => {
     ]);
     expect(resumed.transition.turn.relayedRoutes).toEqual({});
   });
+});
+
+it("refuses to resume malformed legacy coordination checkpoints", () => {
+  expect(() =>
+    migrateSessionState({ state: { "eve.runtime.pendingCoordinationBatch": { callId: "old" } } }),
+  ).toThrow("cannot resume session");
 });

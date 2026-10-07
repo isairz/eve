@@ -1,7 +1,5 @@
-import {
-  hydrateMachineState,
-  sessionView as routingView,
-} from "#harness/session-machine/commit.js";
+import { sessionView as routingView } from "#harness/session-machine/commit.js";
+import { migrateSessionState } from "#harness/session-machine/migrate.js";
 import { storedProjection as routingProjection } from "#harness/session-machine/view.js";
 import { legacyRelayEntries } from "#internal/testing/relay-routing.js";
 import { describe, expect, it } from "vitest";
@@ -492,7 +490,7 @@ function routeDeliverPayload(
     readonly state?: Record<string, unknown>;
   },
 ) {
-  const session = hydrateMachineState({ state: input.state });
+  const session = migrateSessionState({ state: input.state });
   return routeDecision({
     ...input,
     view: routingView(routingProjection(session.state), session.state),

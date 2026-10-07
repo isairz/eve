@@ -11,10 +11,6 @@ import type {
 import { turnPosition } from "#harness/session-machine/view.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
 import type { HumanInputState, HeldStep, OpenApproval } from "./state.js";
-import { readState } from "./state-legacy.js";
-import { LEGACY_BATCH_KEY, LEGACY_GRANTS_KEY, STATE_KEY } from "./state.js";
-import { getProxyInputRequests } from "./state-legacy.js";
-import type { SessionStateMap } from "#harness/types.js";
 
 export function sameStep(left: StepCoordinates, right: StepCoordinates): boolean {
   return (
@@ -211,59 +207,6 @@ export function projectedSignIns(
     ),
   );
   return [...remaining, ...added];
-}
-
-/** Pure upgrade projection. Hydration will apply it and clear the old keys in the migration phase. */
-export function legacyProjection(
-  view: SessionView,
-  state: SessionStateMap | undefined,
-): { readonly turn: TurnState; readonly signIns: readonly AuthorizationChallenge[] } {
-  const legacy = readState(state);
-  const hasHumanState = [STATE_KEY, LEGACY_BATCH_KEY, LEGACY_GRANTS_KEY].some(
-    (key) => state !== undefined && Object.hasOwn(state, key),
-  );
-  const global = hasHumanState ? projectedTurn(view, legacy) : view.turn;
-  const turn =
-    !hasHumanState || legacy.held === undefined
-      ? global
-      : projectedTurn({ ...view, turn: global }, legacy, legacy.held.at);
-  const proxyRoutes = Object.fromEntries(
-    [...getProxyInputRequests(state)].map(([id, route]) => [
-      id,
-      {
-        childContinuationToken: route.childContinuationToken,
-        childSessionInbox: route.childSessionInbox,
-        remote: route.remote,
-        inputSource: route.inputSource,
-        runId: route.runId,
-        control: route.workflowAsk?.control,
-      },
-    ]),
-  );
-  return {
-    turn: {
-      ...turn,
-      grants: [...new Set([...turn.grants, ...view.turn.grants])],
-      queued: view.turn.queued ?? turn.queued,
-      audit: view.turn.audit ?? turn.audit,
-      relayedRoutes: {
-        ...proxyRoutes,
-        ...Object.fromEntries(
-          Object.entries(legacy.requests).flatMap(([id, request]) =>
-            request.kind === "relayed" ? [[id, request.route]] : [],
-          ),
-        ),
-        ...view.turn.relayedRoutes,
-      },
-      relayedAuthorizations: {
-        ...legacy.relayedAuthorizations,
-        ...view.turn.relayedAuthorizations,
-      },
-    },
-    signIns: hasHumanState
-      ? projectedSignIns(view, { grants: [], requests: {} }, legacy)
-      : view.signIns,
-  };
 }
 
 /** Queued input that can run now, rather than wait for more answers. */

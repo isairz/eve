@@ -25,8 +25,13 @@ import {
 import { adaptHumanInput } from "./adapter.js";
 import { HumanInput } from "./human-input.js";
 import { beforeStep, afterStep, type HumanInputDecision } from "./decisions.js";
-import { legacyProjection, projectHumanInput } from "./projection.js";
-import { LEGACY_BATCH_KEY, LEGACY_GRANTS_KEY, STATE_KEY } from "./state.js";
+import { projectHumanInput } from "./projection.js";
+import { migrateSessionState } from "#harness/session-machine/migrate.js";
+import {
+  LEGACY_BATCH_KEY,
+  LEGACY_GRANTS_KEY,
+  STATE_KEY,
+} from "#harness/session-machine/migrate-legacy.js";
 import type { Command } from "./command.js";
 import { reduce } from "./reducer.js";
 
@@ -317,7 +322,7 @@ describe("HumanInput adapter", () => {
       },
     };
     const unchanged = JSON.stringify(legacy);
-    const migrated = legacyProjection(view(), legacy);
+    const migrated = sessionView(view().projection, migrateSessionState({ state: legacy }).state);
     const projected = projectHumanInput(
       { ...view(), turn: migrated.turn },
       migrated.turn.suspended[0],
@@ -586,7 +591,7 @@ describe("HumanInput adapter", () => {
         held: { at: AT, messages: stepResponse([request]) },
       },
     };
-    const migration = legacyProjection(view(), legacy);
+    const migration = sessionView(view().projection, migrateSessionState({ state: legacy }).state);
     const saved = await applyTransition(session(), { ...migration, events: [] }, async () => {});
     expect(saved.state?.[STATE_KEY]).toBeUndefined();
     const restarted = sessionView(initialSessionProjection(), saved.state);
@@ -650,7 +655,9 @@ describe("HumanInput adapter", () => {
     const waiting = { ...v, turn: opened.turn };
     const pending = beforeStep(waiting, [answer("approve", "deploy")], () => undefined);
     expect(Object.keys(pending.turn.audit?.activeCandidates ?? {})).toHaveLength(1);
-    const cancelled = beforeStep({ ...waiting, turn: pending.turn }, [{ type: "cancel.requested" }]);
+    const cancelled = beforeStep({ ...waiting, turn: pending.turn }, [
+      { type: "cancel.requested" },
+    ]);
     expect(cancelled.turn.audit?.activeCandidates).toEqual({});
     expect(cancelled.turn.audit?.candidateHistory).toEqual([
       expect.objectContaining({ status: "stale", reason: "Cancelled." }),

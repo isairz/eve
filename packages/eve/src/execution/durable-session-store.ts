@@ -1,5 +1,5 @@
 import type { HarnessModelMessage } from "#harness/messages.js";
-import { hydrateMachineState } from "#harness/session-machine/hydrate.js";
+import { migrateSessionState } from "#harness/session-machine/migrate.js";
 import { relayedRoutes } from "#harness/session-machine/view.js";
 import type { HarnessSession, HarnessSessionBase, SessionStateMap } from "#harness/types.js";
 import { projectToDurableSession } from "#execution/session.js";
@@ -18,7 +18,7 @@ export { DURABLE_SESSION_VERSION } from "#execution/durable-session-read.js";
  * migration is too heavy for workflow bodies, which use `#execution/durable-session-read.js`.
  */
 export function readDurableSession(state: DurableSessionState): DurableSession {
-  return hydrateMachineState(readCheckpointSession(state));
+  return migrateSessionState(readCheckpointSession(state));
 }
 
 /**
@@ -110,7 +110,6 @@ export function replaceDurableSessionSnapshot(input: {
 }
 
 function projectDurableSessionState(session: DurableSession): DurableSessionState {
-  session = hydrateMachineState(session);
   return {
     continuationToken: session.continuationToken,
     hasProxyInputRequests: Object.keys(relayedRoutes(session.state)).length > 0,

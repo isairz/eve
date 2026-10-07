@@ -11,7 +11,6 @@ import { drainMemoryCommit, prepareMemoryPreamble } from "#context/memory-lifecy
 import { type HarnessModelMessage, validateHarnessModelMessages } from "#harness/messages.js";
 import {
   applyTransition,
-  hydrateMachineState,
   type Publish,
   sessionView,
   type Transition,
@@ -83,7 +82,7 @@ export function createStep(input: {
 }): Step {
   const { ctx, live } = input;
   const step: Step = {
-    session: hydrateMachineState(input.session),
+    session: input.session,
     frameworkToolNames: new Set(),
     config: input.config,
     ctx,

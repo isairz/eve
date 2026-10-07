@@ -35,7 +35,7 @@ import {
   requireAuthorizations,
 } from "./authorization.js";
 import { type HumanInputState, type Reduced, isOpenRelayed } from "./state.js";
-import { readState, store } from "./state-legacy.js";
+import { readState, store } from "#harness/session-machine/migrate-legacy.js";
 import { typedAnswers } from "./input-typed-reply.js";
 
 // ---------------------------------------------------------------------------

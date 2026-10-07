@@ -1,4 +1,5 @@
-import { hydrateMachineState, sessionView } from "#harness/session-machine/commit.js";
+import { sessionView } from "#harness/session-machine/commit.js";
+import { migrateSessionState } from "#harness/session-machine/migrate.js";
 import { storedProjection } from "#harness/session-machine/view.js";
 import { describe, expect, it } from "vitest";
 
@@ -423,7 +424,7 @@ function routeDeliverPayload(
     readonly state?: HarnessSession["state"];
   },
 ) {
-  const session = hydrateMachineState({ state: input.state });
+  const session = migrateSessionState({ state: input.state });
   return routeDecision({
     ...input,
     view: sessionView(storedProjection(session.state), session.state),

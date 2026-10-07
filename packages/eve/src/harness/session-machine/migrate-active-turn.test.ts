@@ -8,7 +8,7 @@ import {
   type DurableSessionState,
 } from "#execution/durable-session-store.js";
 import { createSessionLimitContinuationRequest } from "#harness/hitl/budget-question.js";
-import { LEGACY_PARKING_KEYS } from "#harness/hitl/state-legacy.js";
+import { LEGACY_PARKING_KEYS } from "#harness/session-machine/migrate-legacy.js";
 import { sessionView } from "#harness/session-machine/commit.js";
 import {
   SESSION_PROJECTION_STATE_KEY,
@@ -19,8 +19,8 @@ import type { SessionStateMap } from "#harness/types.js";
 import { createSessionStartedEvent, createTurnStartedEvent } from "#protocol/message.js";
 import { foldSession, initialSessionProjection } from "#protocol/session-projection.js";
 import type { InputRequest } from "#shared/input.js";
-import { ActiveTurn } from "./active-turn.js";
-import type { SessionExecutionInput } from "./turn.js";
+import { ActiveTurn } from "#execution/session/active-turn.js";
+import type { SessionExecutionInput } from "#execution/session/turn.js";
 
 const at = { sequence: 7, stepIndex: 1, turnId: "turn_7" };
 const approval: InputRequest = {

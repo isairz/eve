@@ -30,8 +30,9 @@ import { reduce, verdictsOf } from "./reducer.js";
 import { relayedRequestIds } from "./relay.js";
 import { awaitedAuthorizations } from "./authorization.js";
 import { staleAnswersAsText } from "./input-stale-answer.js";
-import { LEGACY_BATCH_KEY, type HumanInputState, isOpenRelayed } from "./state.js";
-import { readState, store } from "./state-legacy.js";
+import { type HumanInputState, isOpenRelayed } from "./state.js";
+import { LEGACY_BATCH_KEY } from "#harness/session-machine/migrate-legacy.js";
+import { readState, store } from "#harness/session-machine/migrate-legacy.js";
 
 export { approvalsRequested, withoutApprovalParts } from "./approval.js";
 export { createSessionLimitContinuationRequest } from "./budget-question.js";

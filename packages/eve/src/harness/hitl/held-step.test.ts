@@ -1,3 +1,4 @@
+import { STATE_KEY, LEGACY_BATCH_KEY } from "#harness/session-machine/migrate-legacy.js";
 import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
 
@@ -18,7 +19,7 @@ import {
 // and calls that run as runtime work (`build`, a workflow tool). The step is
 // held out of history, in one place, until every call it made has a result.
 
-const LEGACY_KEY = "eve.runtime.pendingCoordinationBatch";
+const LEGACY_KEY = LEGACY_BATCH_KEY;
 
 const buildTask = {
   callId: "call-build",
@@ -260,13 +261,10 @@ describe("a session parked on runtime calls under the old coordination key", () 
     const asked = Turn.idle()
       .input(approvalsRequested([approval("deploy")]))
       .stored();
-    const { held: _held, ...stored } = asked.state!["eve.harness.humanInput"] as Record<
-      string,
-      unknown
-    >;
+    const { held: _held, ...stored } = asked.state![STATE_KEY] as Record<string, unknown>;
     const history = response(call("call-deploy", "deploy"));
 
-    const cancelled = reduceHumanInput({ "eve.harness.humanInput": stored }, cancel);
+    const cancelled = reduceHumanInput({ [STATE_KEY]: stored }, cancel);
     const appended = cancelled.events.flatMap((e) =>
       e.type === "appendHistory" ? [e.message] : [],
     );

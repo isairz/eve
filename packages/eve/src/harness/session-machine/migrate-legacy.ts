@@ -1,3 +1,6 @@
+export const STATE_KEY = "eve.harness.humanInput";
+export const LEGACY_BATCH_KEY = "eve.runtime.pendingCoordinationBatch";
+export const LEGACY_GRANTS_KEY = "eve.runtime.hitl.approvedTools";
 import type {
   WorkflowAskRoute,
   ProxyInputQuestion,
@@ -29,17 +32,10 @@ import type { SessionProjection } from "#protocol/session-projection.js";
 import type { InputRequest } from "#shared/input.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 
-import { adoptCandidateAuthorizations } from "./approval-candidate.js";
-import { withMessages } from "./held-step.js";
-import type { RequestAt } from "./input.js";
-import {
-  LEGACY_BATCH_KEY,
-  LEGACY_GRANTS_KEY,
-  parseState,
-  STATE_KEY,
-  type HeldStep,
-  type HumanInputState,
-} from "./state.js";
+import { adoptCandidateAuthorizations } from "#harness/hitl/approval-candidate.js";
+import { withMessages } from "#harness/hitl/held-step.js";
+import type { RequestAt } from "#harness/hitl/input.js";
+import { parseState, type HeldStep, type HumanInputState } from "#harness/hitl/state.js";
 
 /**
  * The session's human input. A session parked on runtime calls before the
@@ -80,7 +76,7 @@ interface LegacyBatch {
   readonly followingInput?: StepInput;
 }
 
-function parseLegacyBatch(value: unknown): LegacyBatch | undefined {
+export function parseLegacyBatch(value: unknown): LegacyBatch | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const batch = value as LegacyBatch;
   if (
@@ -183,7 +179,7 @@ export function legacyRequestedEvents(
   return events;
 }
 
-const APPROVAL_STATE_KEY = "eve.runtime.hitl.approvalState";
+export const APPROVAL_STATE_KEY = "eve.runtime.hitl.approvalState";
 
 type ApprovalCandidateStatus =
   | "pending"
@@ -342,7 +338,7 @@ export function mergeApprovalAudits(
   };
 }
 
-const PROXY_INPUT_REQUESTS_KEY = "eve.runtime.proxyInputRequests";
+export const PROXY_INPUT_REQUESTS_KEY = "eve.runtime.proxyInputRequests";
 
 const PROXY_INPUT_REQUEST_KINDS = {
   question: true,

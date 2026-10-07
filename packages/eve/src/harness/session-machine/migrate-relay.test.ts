@@ -1,4 +1,4 @@
-import { getProxyInputRequests as getRelayedRequests } from "./state-legacy.js";
+import { getProxyInputRequests as getRelayedRequests } from "#harness/session-machine/migrate-legacy.js";
 import { describe, expect, it } from "vitest";
 
 import {

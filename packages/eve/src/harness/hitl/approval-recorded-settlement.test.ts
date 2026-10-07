@@ -1,3 +1,5 @@
+import { migrateSessionState } from "#harness/session-machine/migrate.js";
+import { APPROVAL_STATE_KEY } from "#harness/session-machine/migrate-legacy.js";
 import { describe, expect, it } from "vitest";
 
 import { sessionView } from "#harness/session-machine/commit.js";
@@ -7,7 +9,7 @@ import { approversOf } from "./approved-call-callers.js";
 import { beforeStep } from "./decisions.js";
 
 const request = approval("deploy");
-const LEGACY_KEY = "eve.runtime.hitl.approvalState";
+const LEGACY_KEY = APPROVAL_STATE_KEY;
 
 function settlement(outcome: "allowed" | "cancelled") {
   return {
@@ -56,7 +58,7 @@ describe("an approval settled before its answer reached the step", () => {
     ["allowed", "machine"],
     ["cancelled", "machine"],
   ] as const)("applies a recorded %s settlement (%s audit) as its answer", (outcome, where) => {
-    const state = settledButWaiting(outcome, where);
+    const state = migrateSessionState({ state: settledButWaiting(outcome, where) }).state;
     const decision = beforeStep(sessionView(storedProjection(state), state), []);
     expect(decision.turn.suspended.flatMap((step) => step.requests)).toEqual([]);
     const resolved = decision.commands.flatMap((command) =>
@@ -119,7 +121,8 @@ it("an approved call saved with the old audit still runs as its approver", () =>
     },
     [LEGACY_KEY]: legacyAudit("allowed"),
   };
-  const view = sessionView(storedProjection(state), state);
+  const migrated = migrateSessionState({ state }).state;
+  const view = sessionView(storedProjection(migrated), migrated);
   expect(approversOf(view.turn.suspended[0]!.approved!, view)).toEqual({
     [request.action.callId]: ALICE,
   });

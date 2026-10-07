@@ -191,15 +191,12 @@ export function humanInputContext(step: Step): {
   };
 }
 
-const APPROVAL_STATE_KEY = "eve.runtime.hitl.approvalState";
-
 /**
  * Drops what a cleared context owned: sign-in attempts and responders' approval progress. `clear`
  * reported each close; relay routes for live tasks stay.
  */
 export function discardClearedHumanInput<T extends HarnessSessionBase>(session: T): T {
-  const { [APPROVAL_STATE_KEY]: _approvals, ...state } =
-    clearPendingAuthorization(session.state) ?? {};
+  const state = clearPendingAuthorization(session.state) ?? {};
   return { ...session, state: Object.keys(state).length > 0 ? state : undefined };
 }
 

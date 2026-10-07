@@ -1,3 +1,4 @@
+import { LEGACY_BATCH_KEY } from "#harness/session-machine/migrate-legacy.js";
 import { describe, expect, it } from "vitest";
 import { importConversation, normalizeHistory } from "./snapshot.js";
 import type { LegacySession } from "./snapshot.js";
@@ -13,7 +14,7 @@ describe("conversation import", () => {
       sandboxState: { session: null },
       state: {
         "app.color": "blue",
-        "eve.runtime.pendingCoordinationBatch": { callId: "old" },
+        [LEGACY_BATCH_KEY]: { callId: "old" },
         "eve.agent.handles": { handles: [] },
         "eve.harness.turnUsage": { session: { inputTokens: 42 } },
         "eve.harness.emission": {
@@ -34,9 +35,7 @@ describe("conversation import", () => {
         "eve.harness.turnUsage": session.state!["eve.harness.turnUsage"],
       },
     });
-    expect(result.snapshot.session.state).not.toHaveProperty(
-      "eve.runtime.pendingCoordinationBatch",
-    );
+    expect(result.snapshot.session.state).not.toHaveProperty(LEGACY_BATCH_KEY);
     expect(result.snapshot.session.state).not.toHaveProperty("eve.agent.handles");
     const projection = storedProjection(result.snapshot.session.state);
     expect(turnPosition(projection).sequence).toBe(9);

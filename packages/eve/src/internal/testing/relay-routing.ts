@@ -1,3 +1,4 @@
+import { PROXY_INPUT_REQUESTS_KEY } from "#harness/session-machine/migrate-legacy.js";
 import { foldSession } from "#protocol/session-projection.js";
 import { writeTurnState } from "#harness/session-machine/state.js";
 import { SESSION_PROJECTION_STATE_KEY } from "#harness/session-machine/view.js";
@@ -5,7 +6,8 @@ import type { SubagentInputRequestHookPayload } from "#channel/types.js";
 import type { HarnessSessionBase, SessionStateMap } from "#harness/types.js";
 import type { InputRequestKind } from "#shared/input.js";
 import type { RemoteAgentBinding } from "#eve-channel/support.js";
-import { hydrateMachineState, sessionView } from "#harness/session-machine/commit.js";
+import { sessionView } from "#harness/session-machine/commit.js";
+import { migrateSessionState } from "#harness/session-machine/migrate.js";
 import { storedProjection } from "#harness/session-machine/view.js";
 import type { SessionInboxAddress } from "#execution/session-inbox/address.js";
 import type { DeliverPayload } from "#channel/types.js";
@@ -150,7 +152,6 @@ export function routeDeliverPayload(input: {
   };
 }
 
-const PROXY_INPUT_REQUESTS_KEY = "eve.runtime.proxyInputRequests";
 /** Routing and control metadata for one descendant-owned input request. */
 export interface LegacyRelayFixture {
   readonly remote?: RemoteAgentBinding & { readonly sessionId: string };
@@ -302,7 +303,7 @@ function readLegacyRoutes(state: SessionStateMap | undefined): LegacyRelayFixtur
   return (state?.[PROXY_INPUT_REQUESTS_KEY] as LegacyRelayFixtureMap | undefined) ?? {};
 }
 export function getRelayedRequests(state: SessionStateMap | undefined) {
-  const machine = hydrateMachineState({ state });
+  const machine = migrateSessionState({ state });
   return new Map(
     Object.entries(
       sessionView(storedProjection(machine.state), machine.state).turn.relayedRoutes ?? {},
@@ -317,7 +318,7 @@ export function seedRelaySession<S extends HarnessSessionBase>(input: {
   readonly forChildContinuationToken: string;
   readonly session: S;
 }): S {
-  let session = hydrateMachineState(input.session);
+  let session = migrateSessionState(input.session);
   const groups = Map.groupBy(input.entries, ([, route]) =>
     JSON.stringify({
       token: route.childContinuationToken,

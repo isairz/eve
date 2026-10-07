@@ -1,10 +1,10 @@
 import { expect, it } from "vitest";
 import { sessionView } from "#harness/session-machine/commit.js";
-import { hydrateMachineState } from "#harness/session-machine/hydrate.js";
+import { migrateSessionState } from "#harness/session-machine/migrate.js";
 import { initialSessionProjection } from "#protocol/session-projection.js";
 import { ALICE as alice, AT, approval, stepResponse } from "#internal/testing/hitl.js";
-import { approversOf } from "./approved-call-callers.js";
-import { beforeStep } from "./decisions.js";
+import { approversOf } from "#harness/hitl/approved-call-callers.js";
+import { beforeStep } from "#harness/hitl/decisions.js";
 import { storedProjection } from "#harness/session-machine/view.js";
 import { writeTurnState } from "#harness/session-machine/state.js";
 
@@ -43,20 +43,20 @@ function savedSession() {
   };
 }
 it("preserves Owen's persisted approval audit on hydration", () => {
-  const saved = hydrateMachineState(savedSession());
+  const saved = migrateSessionState(savedSession());
   expect(
     sessionView(initialSessionProjection(), saved.state).turn.audit?.settlements.r1?.approver,
   ).toEqual(alice);
   expect(saved.state["eve.runtime.hitl.approvalState"]).toBeUndefined();
 });
 it("resumes an approved call as its approver and hydrates idempotently", () => {
-  const saved = hydrateMachineState(savedSession());
+  const saved = migrateSessionState(savedSession());
   const view = sessionView(initialSessionProjection(), saved.state);
   expect(approversOf(view.turn.suspended[0]!.approved!, view)).toEqual({ c1: alice });
-  expect(hydrateMachineState(saved)).toEqual(saved);
+  expect(migrateSessionState(saved)).toEqual(saved);
 });
 it("removes the old approval key in the hydration write", () => {
-  expect(hydrateMachineState(savedSession()).state).not.toHaveProperty(
+  expect(migrateSessionState(savedSession()).state).not.toHaveProperty(
     "eve.runtime.hitl.approvalState",
   );
 });
@@ -77,7 +77,7 @@ it("maps candidate challenges, retains history, and lets machine audit win dupli
     status: "allowed" as const,
     completedAt: 2,
   };
-  const saved = hydrateMachineState({
+  const saved = migrateSessionState({
     state: {
       ...savedSession().state,
       "eve.runtime.hitl.approvalState": {
@@ -93,7 +93,7 @@ it("maps candidate challenges, retains history, and lets machine audit win dupli
   );
   expect(upgraded.candidateHistory).toEqual([history]);
   expect(upgraded.nextCandidateSequence).toBe(3);
-  const mixed = hydrateMachineState({
+  const mixed = migrateSessionState({
     state: {
       ...saved.state,
       "eve.runtime.hitl.approvalState": {
@@ -120,11 +120,11 @@ it("maps candidate challenges, retains history, and lets machine audit win dupli
     history,
   ]);
   expect(merged.nextCandidateSequence).toBe(3);
-  expect(hydrateMachineState(mixed)).toEqual(mixed);
+  expect(migrateSessionState(mixed)).toEqual(mixed);
 });
 it("never restores the old approval key when resumed candidates expire", () => {
   const gated = approval("deploy", "r2");
-  const resumed = hydrateMachineState({
+  const resumed = migrateSessionState({
     state: {
       "eve.harness.turnState": {
         ...turn,
@@ -170,7 +170,7 @@ it("never restores the old approval key when resumed candidates expire", () => {
   expect(upgraded.settlements.r3?.approver).toEqual(alice);
 });
 it("defaults legacy candidates without decisions to Approve and derives missing sequences", () => {
-  const saved = hydrateMachineState({
+  const saved = migrateSessionState({
     state: {
       "eve.runtime.hitl.approvalState": {
         activeCandidates: {
@@ -198,7 +198,7 @@ it.each(["allowed", "cancelled"] as const)(
   "upgrades a %s settlement whose answer hadn't reached its step, once",
   (outcome) => {
     const gated = approval("deploy");
-    const saved = hydrateMachineState({
+    const saved = migrateSessionState({
       state: {
         "eve.harness.turnState": {
           grants: [],
@@ -228,7 +228,7 @@ it.each(["allowed", "cancelled"] as const)(
         },
       },
     });
-    expect(hydrateMachineState(saved)).toEqual(saved);
+    expect(migrateSessionState(saved)).toEqual(saved);
     const view = sessionView(storedProjection(saved.state), saved.state);
     const decision = beforeStep(view, [{ type: "time", now: 101 }]);
     expect(decision.turn.suspended.flatMap((step) => step.requests)).toEqual([]);

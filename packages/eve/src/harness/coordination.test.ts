@@ -1,5 +1,5 @@
 import { readTurnState } from "#harness/session-machine/state.js";
-import { hydrateMachineState } from "#harness/session-machine/hydrate.js";
+import { migrateSessionState } from "#harness/session-machine/migrate.js";
 import { describe, expect, it } from "vitest";
 import { createPresentedRuntimeActionRequestFromToolCall } from "#harness/action-presentation.js";
 import {
@@ -372,7 +372,7 @@ describe("runtime results", () => {
     });
 
     const finished = forgetFinishedRuns(
-      hydrateMachineState(session),
+      migrateSessionState(session),
       [{ callId: "call-1", kind: "tool-result", output: { deployed: true }, toolName: "deploy" }],
       "turn_0",
     );

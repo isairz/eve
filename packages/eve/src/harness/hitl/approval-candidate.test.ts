@@ -1,4 +1,5 @@
-import { readState } from "./state-legacy.js";
+import { STATE_KEY } from "#harness/session-machine/migrate-legacy.js";
+import { readState } from "#harness/session-machine/migrate-legacy.js";
 import { describe, expect, it } from "vitest";
 
 import type { SessionAuthContext } from "#channel/types.js";
@@ -193,7 +194,7 @@ describe("approval response policies", () => {
 
   it("a responder's authorization belongs to its candidate, not to the turn's requests", () => {
     const authorization = bobMustAuthorize().stored();
-    const stored = authorization.state!["eve.harness.humanInput"] as {
+    const stored = authorization.state![STATE_KEY] as {
       readonly audit: {
         readonly activeCandidates: Record<string, { readonly authorizations?: unknown[] }>;
       };
@@ -212,7 +213,7 @@ describe("approval response policies", () => {
 
   it("a session stored while a responder's authorization was a request of its own reads it as the candidate's", () => {
     const authorization = bobMustAuthorize().stored();
-    const answered = authorization.state!["eve.harness.humanInput"] as {
+    const answered = authorization.state![STATE_KEY] as {
       readonly audit: { readonly activeCandidates: Record<string, Record<string, unknown>> };
       readonly requests: Record<string, unknown>;
     };
@@ -221,7 +222,7 @@ describe("approval response policies", () => {
     ];
     const { authorizations, ...waiting } = candidate;
     const legacy = Turn.from({
-      "eve.harness.humanInput": {
+      [STATE_KEY]: {
         ...answered,
         audit: { ...answered.audit, activeCandidates: { [candidateId]: waiting } },
         requests: {

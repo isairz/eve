@@ -15,10 +15,6 @@ import type { RelayRoute, RequestAt } from "./input.js";
 // Read-only rule projection; the session machine owns persisted execution state.
 // ---------------------------------------------------------------------------
 
-export const STATE_KEY = "eve.harness.humanInput";
-/** Where sessions parked before the held step held runtime calls kept them. */
-export const LEGACY_BATCH_KEY = "eve.runtime.pendingCoordinationBatch";
-
 /** What a rule leaves: the state, and the events it reports, in order. */
 export interface Reduced<S = HumanInputState> {
   readonly events: readonly Command[];
@@ -49,12 +45,9 @@ type OpenRequest =
 
 const EMPTY: HumanInputState = { grants: [], requests: {} };
 
-/** Where sessions before `HumanInput` kept the tools approved for the session. */
-export const LEGACY_GRANTS_KEY = "eve.runtime.hitl.approvedTools";
-
 /**
  * The state stored under the session key, as stored. `readState`
- * (`state-legacy.ts`) upgrades what earlier releases stored.
+ * (`session-machine/migrate-legacy.ts`) upgrades what earlier releases stored.
  */
 export function parseState(value: unknown): HumanInputState {
   if (typeof value !== "object" || value === null) return EMPTY;

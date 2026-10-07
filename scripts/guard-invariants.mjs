@@ -508,13 +508,14 @@ function checkRule47(posix, lines, violations) {
 const HUMAN_INPUT_DIR = "packages/eve/src/harness/hitl/";
 // Migration is the pure hydration seam for step-side checkpoint readers.
 const HUMAN_INPUT_PRIVATE_IMPORT_RE =
-  /["'](?:#harness\/|(?:\.\.?\/)+)hitl\/(?!(?:index|approved-call-callers|migration)\.js["'])/;
+  /["'](?:#harness\/|(?:\.\.?\/)+)hitl\/(?!(?:index|approved-call-callers)\.js["'])/;
 
 /** @param {string} posix @param {string[]} lines @param {Violation[]} violations */
 function checkRule50(posix, lines, violations) {
   if (
     !posix.startsWith("packages/eve/src/") ||
     posix.startsWith(HUMAN_INPUT_DIR) ||
+    /packages\/eve\/src\/harness\/session-machine\/migrate(?:-legacy)?\.ts$/.test(posix) ||
     posix.startsWith("packages/eve/src/internal/testing/") ||
     /\.(?:test|integration\.test|scenario\.test)\.ts$/.test(posix)
   )
@@ -596,6 +597,7 @@ function checkRule51(posix, lines, violations) {
     !posix.startsWith("packages/eve/src/") ||
     posix.startsWith(SESSION_MACHINE_DIR) ||
     posix.startsWith(HUMAN_INPUT_DIR) ||
+    /packages\/eve\/src\/harness\/session-machine\/migrate(?:-legacy)?\.ts$/.test(posix) ||
     posix.startsWith("packages/eve/src/protocol/") ||
     posix.startsWith("packages/eve/src/internal/testing/") ||
     posix.endsWith(".test.ts") ||

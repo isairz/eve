@@ -1,3 +1,4 @@
+import { LEGACY_GRANTS_KEY } from "#harness/session-machine/migrate-legacy.js";
 import { beforeStep } from "./decisions.js";
 import { arrivalsOf } from "./input-arrival.js";
 import { sessionView } from "#harness/session-machine/commit.js";
@@ -411,7 +412,7 @@ describe("tool approvals", () => {
 
   it("a session stored before human input keeps the tools it approved once, and only those", () => {
     const legacy = Turn.from({
-      "eve.runtime.hitl.approvedTools": ["deploy:api", 7, "send_email"],
+      [LEGACY_GRANTS_KEY]: ["deploy:api", 7, "send_email"],
     });
 
     expect(legacy.humanInput.grantedApprovalKeys()).toEqual(new Set(["deploy:api", "send_email"]));
@@ -419,7 +420,7 @@ describe("tool approvals", () => {
     const asked = legacy
       .input(approvalsRequested([approval("deploy")], { approvalKeys: { deploy: "deploy:api" } }))
       .stored();
-    expect(asked.state?.["eve.runtime.hitl.approvedTools"]).toBeUndefined();
+    expect(asked.state?.[LEGACY_GRANTS_KEY]).toBeUndefined();
     expect(asked.humanInput.grantedApprovalKeys()).toEqual(new Set(["send_email"]));
   });
 

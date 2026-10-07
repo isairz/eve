@@ -1,3 +1,9 @@
+import {
+  LEGACY_BATCH_KEY,
+  LEGACY_GRANTS_KEY,
+  PROXY_INPUT_REQUESTS_KEY,
+  APPROVAL_STATE_KEY,
+} from "#harness/session-machine/migrate-legacy.js";
 import { describe, expect, it } from "vitest";
 
 import { migrateSessionCheckpoint } from "#execution/session/checkpoint-migrations.js";
@@ -78,7 +84,7 @@ describe("migrateSessionCheckpoint", () => {
       v11Checkpoint({
         "app.counter": 4,
         "eve.harness.emission": { sessionStarted: true, sequence: 3, stepIndex: 0, turnId: "" },
-        "eve.runtime.hitl.approvedTools": ["deploy:api"],
+        [LEGACY_GRANTS_KEY]: ["deploy:api"],
       }),
     );
     expect(result).toMatchObject({
@@ -115,22 +121,22 @@ describe("migrateSessionCheckpoint", () => {
       "eve.harness.emission",
     );
     expect(result.checkpoint.sessionState.snapshot.session.state).not.toHaveProperty(
-      "eve.runtime.hitl.approvedTools",
+      LEGACY_GRANTS_KEY,
     );
   });
 
   it.each([
     { "eve.runtime.pendingInputBatches": [{ requests: [] }] },
     { "eve.runtime.pendingAuthorization": { challenges: [{}] } },
-    { "eve.runtime.pendingCoordinationBatch": { tasks: [] } },
+    { [LEGACY_BATCH_KEY]: { tasks: [] } },
     { "eve.runtime.deferredStepInput": { message: "Bob asks for a follow-up." } },
-    { "eve.runtime.proxyInputRequests": { child: {} } },
+    { [PROXY_INPUT_REQUESTS_KEY]: { child: {} } },
     {
       "eve.harness.emission": { sessionStarted: true, sequence: 1, stepIndex: 0, turnId: "turn_1" },
     },
     { "eve.runtime.pendingInputBatches": "malformed" },
-    { "eve.runtime.hitl.approvedTools": [7] },
-    { "eve.runtime.hitl.approvalState": { activeCandidates: { alice: {} } } },
+    { [LEGACY_GRANTS_KEY]: [7] },
+    { [APPROVAL_STATE_KEY]: { activeCandidates: { alice: {} } } },
     {
       "eve.workflowTool": {
         version: 4,

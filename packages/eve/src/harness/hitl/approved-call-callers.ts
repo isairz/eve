@@ -2,9 +2,7 @@ import type { SessionAuthContext } from "#channel/types.js";
 import { runAsCaller } from "#context/caller-scope.js";
 import { contextStorage } from "#context/container.js";
 import { ContextKey } from "#context/key.js";
-import { legacyApprovalAudit, mergeApprovalAudits } from "./state-legacy.js";
-import type { SessionView, TurnState } from "#harness/session-machine/view.js";
-import type { SessionStateMap } from "#harness/types.js";
+import type { SessionView } from "#harness/session-machine/view.js";
 import type { InputRequest } from "#shared/input.js";
 
 /**
@@ -14,18 +12,6 @@ import type { InputRequest } from "#shared/input.js";
 const ApprovedCallCallersKey = new ContextKey<ReadonlyMap<string, SessionAuthContext>>(
   "eve.approvedCallCallers",
 );
-
-/**
- * The turn as saved, with an approval audit saved before the machine kept one read into it, so
- * an approved call keeps its approver. Reads only; nothing is written.
- */
-export function withLegacyApprovalAudit(
-  turn: TurnState,
-  state: SessionStateMap | undefined,
-): TurnState {
-  const legacy = legacyApprovalAudit(state);
-  return legacy === undefined ? turn : { ...turn, audit: mergeApprovalAudits(legacy, turn.audit) };
-}
 
 /** Who approved each of the `approved` calls, by call id. */
 export function approversOf(

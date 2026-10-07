@@ -13,7 +13,6 @@ import type { SessionProjection } from "#protocol/session-projection.js";
 import { readTurnState, writeTurnState, type TurnState } from "./state.js";
 import type { SessionView } from "./view.js";
 import { clearPendingAuthorization } from "#harness/authorization.js";
-import { withLegacyApprovalAudit } from "#harness/hitl/approved-call-callers.js";
 
 // The save side of the machine. A transition returns the events that report what changed and
 // the execution state that follows; `applyTransition` publishes the events in order (the publish
@@ -45,7 +44,7 @@ export function sessionView(
   projection: SessionProjection,
   state: SessionStateMap | undefined,
 ): SessionView {
-  const turn = withLegacyApprovalAudit(readTurnState(state), state);
+  const turn = readTurnState(state);
   return {
     projection,
     relayedRequestIds: new Set(Object.keys(turn.relayedRoutes ?? {})),
@@ -117,5 +116,3 @@ export function dropClosedRecords<T extends HarnessSessionBase>(
   );
   return writeTurnState(session, { ...turn, relayedRoutes });
 }
-
-export { hydrateMachineState } from "./hydrate.js";
