@@ -1,3 +1,4 @@
+import { AgentSpanIdGenerator } from "#tracing/lib/index.js";
 import { createTestSessionState } from "#internal/testing/session-state.js";
 import type { ModelMessage } from "ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1698,6 +1699,7 @@ describe("turnStep", () => {
     });
     instrumentationRuntimeOverride.current = {
       forceFlush: async () => undefined,
+      idGenerator: new AgentSpanIdGenerator(),
       hooks: {
         capturesContent: false,
         publish: async (event) => {
