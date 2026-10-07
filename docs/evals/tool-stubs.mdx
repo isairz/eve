@@ -125,7 +125,7 @@ Every property listed in `match` must exist and satisfy its constraint. Extra to
       "properties": { "status": { "const": "open" } },
       "required": ["status"]
     },
-    "query": { "type": "string", "pattern": "\\b[Mm]ilk\\b" },
+    "query": { "type": "string", "pattern": "\\b(?i:milk)\\b" },
     "tags": { "type": "array", "contains": { "const": "urgent" } }
   },
   "outcome": { "response": { "tasks": ["Buy milk"] } }
