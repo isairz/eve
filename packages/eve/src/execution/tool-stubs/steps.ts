@@ -4,6 +4,7 @@ import { getRun, resumeHook } from "#internal/workflow/runtime.js";
 import type { StubRequest } from "#execution/tool-stubs/playback.js";
 import {
   STUB_FAILURE_NAMESPACE,
+  STUB_MATCHES_NAMESPACE,
   stubResponseNamespace,
   type StubCall,
   type StubResult,
@@ -13,8 +14,17 @@ import {
 export async function publishStubResultStep(input: {
   readonly callId: string;
   readonly result: StubResult;
+  readonly matchedRuleId?: string;
 }): Promise<void> {
   "use step";
+  if (input.matchedRuleId !== undefined) {
+    const writer = getWritable<string>({ namespace: STUB_MATCHES_NAMESPACE }).getWriter();
+    try {
+      await writer.write(input.matchedRuleId);
+    } finally {
+      writer.releaseLock();
+    }
+  }
   const writer = getWritable<StubResult>({
     namespace: stubResponseNamespace(input.callId),
   }).getWriter();
@@ -107,4 +117,23 @@ export async function failStubSessionStep(sessionId: string): Promise<void> {
     { sessionId },
     { kind: "session-failure", error: "Tool stub playback failed." },
   );
+}
+
+/** Read completed matches without waiting for the still-running session to finish. */
+export async function readMatchedStubRules(sessionId: string): Promise<readonly string[]> {
+  const stream = getRun(sessionId).getReadable<string>({ namespace: STUB_MATCHES_NAMESPACE });
+  const tail = await stream.getTailIndex();
+  const reader = stream.getReader();
+  const ids = new Set<string>();
+  try {
+    for (let index = 0; index <= tail; index++) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error("Tool stub match records ended unexpectedly.");
+      ids.add(value);
+    }
+    return [...ids];
+  } finally {
+    await reader.cancel();
+    reader.releaseLock();
+  }
 }

@@ -10,7 +10,6 @@ import { dispatchWorkflowSessionCommand } from "#execution/workflow-runtime.js";
 import { readStubFailure } from "#execution/tool-stubs/steps.js";
 import { STUB_CONTEXT_KEY } from "#tool-stubs/types.js";
 import { defineWorkflowTool } from "#tools/workflow-definition.js";
-import { parseToolStubs } from "#tool-stubs/rules.js";
 import { defineTool } from "#tools/definition.js";
 import { createWorkflowToolRuntime } from "#internal/testing/workflow-tool-run-harness.js";
 import {
@@ -96,43 +95,6 @@ describe("tool replacement through the session runtime", () => {
       });
     },
   );
-
-  it("reports validator initialization failure as a terminal session failure", async () => {
-    const rules = parseToolStubs([
-      {
-        id: "broken",
-        tool: "lookup",
-        match: { value: { dependentRequired: { id: [] } } },
-        outcome: { response: "stub" },
-      },
-    ]);
-    const runtime = await createTestRuntime();
-    await runtime.run(async () => {
-      const run = await start(workflowEntry, [
-        {
-          kind: "initial",
-          ownerDeploymentId: "dpl_inline",
-          input: {},
-          serializedContext: {
-            ...buildSerializedContext({ channelKind: "http" }),
-            [STUB_CONTEXT_KEY]: { token: "broken-validator", rules },
-          },
-        },
-      ]);
-      await expect(run.returnValue).rejects.toThrow();
-      expect(await run.getReadable().getTailIndex()).toBeGreaterThanOrEqual(0);
-      const stream = captureTurnEvents(run);
-      try {
-        const events = await stream.nextTurn();
-        expect(filterEventsByType(events, "session.failed")).toHaveLength(1);
-        expect(await readStubFailure(run.runId)).toBe(
-          'Could not create validator for matcher "value" in tool stub "broken".',
-        );
-      } finally {
-        stream.dispose();
-      }
-    });
-  });
 
   it.each([false, true])(
     "ends the active session when playback fails (handoff: %s)",

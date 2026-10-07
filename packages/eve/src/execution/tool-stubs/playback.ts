@@ -6,7 +6,7 @@ import {
   publishStubFailureStep,
   publishStubResultStep,
 } from "#execution/tool-stubs/steps.js";
-import { STUB_CONTEXT_KEY, type StubCall, type StubScope } from "#tool-stubs/types.js";
+import type { StubCall, StubScope } from "#tool-stubs/types.js";
 
 export type StubRequest =
   | { readonly kind: "call"; readonly call: StubCall }
@@ -14,13 +14,11 @@ export type StubRequest =
 
 /** The original workflow serves stub requests even if a newer deployment takes over the session. */
 export async function withStubPlayback<T>(
-  context: Record<string, unknown>,
+  scope: StubScope | undefined,
   sessionId: string,
   run: () => Promise<T>,
 ): Promise<T> {
-  const scope = context[STUB_CONTEXT_KEY] as StubScope | undefined;
   if (scope === undefined || scope.rootSessionId !== undefined) return await run();
-  context[STUB_CONTEXT_KEY] = { ...scope, rootSessionId: sessionId };
   let playback: StubPlayback;
   try {
     playback = new StubPlayback(scope.rules);
@@ -34,6 +32,7 @@ export async function withStubPlayback<T>(
   let failed = false;
   const serve = async (): Promise<never> => {
     for await (const request of hook) {
+      const matchedBefore = playback.matchedRuleCount;
       const result =
         request.kind === "failure"
           ? playback.fail(request.callId, request.error)
@@ -46,6 +45,10 @@ export async function withStubPlayback<T>(
       await publishStubResultStep({
         callId: request.kind === "call" ? request.call.callId : `${request.callId}:failure`,
         result,
+        matchedRuleId:
+          result.kind === "stub" && playback.matchedRuleCount > matchedBefore
+            ? result.ruleId
+            : undefined,
       });
     }
     throw new Error("Tool stub playback ended before its session.");

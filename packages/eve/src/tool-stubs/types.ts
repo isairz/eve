@@ -47,5 +47,6 @@ export interface StubScope {
 }
 
 export const STUB_CONTEXT_KEY = "eve.toolStubs";
+export const STUB_MATCHES_NAMESPACE = "eve.tool-stubs.matches";
 export const STUB_FAILURE_NAMESPACE = "eve.tool-stubs.failure";
 export const stubResponseNamespace = (callId: string): string => `eve.tool-stubs.${callId}`;
