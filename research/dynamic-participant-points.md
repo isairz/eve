@@ -10,16 +10,23 @@ Read on `main` at `285d4e09b`. Nothing was prototyped.
 
 ## Summary
 
-Dynamic resolvers (`defineDynamic({ events })`) and memory providers key their handlers on stream event names: `session.started`, `turn.started`, `step.started`, `compaction.requested`, `compaction.completed`, `turn.completed`. But they don't observe the stream. They take part in the machine's work, before or while it decides, and what they return changes what the model sees. To drive them, the machine fakes events that are never published, and each participant filters those events its own way.
+Dynamic resolvers (`defineDynamic({ events })`) and memory providers key their handlers on stream event names: `session.started`, `turn.started`, `step.started`, `compaction.requested`, `compaction.completed`, `turn.completed`, but they don't actually observe the underlying stream. The state machine needs to create fake non-published events to drive these resolvers. Sometimes, these are replays of events that have already been published, and sometimes they're previews of events that are about to be published.
+
+There are a few problems with this approach:
+- Conceptual inaccuracy
+  - Using the `events` key and using the name of existing events implies that these are essentially hooks that are consuming the real session stream. We have an `event` parameter for these APIs that implies that you are getting access to a raw stream event, but it's generally not a 1-1 mapping with the real event (it will be missing meta fields, for example)
+  - We sometimes run this code before the actual underlying event is produced, so it's possible to act on an "event" that never enters the stream
+- Implementation complexity
+  - We have spaghetti code to maintain these different synthetic event dispatch things
 
 This doc proposes, before 1.0:
 
-- **A small catalog of points** with base-form names (`session.start`, `turn.start`, `model.start`, `compaction.start`, `compaction.complete`, `turn.complete`), separate from the stream's facts.
-- **Every existing key stays a compile-time alias,** with unchanged timing and semantics.
-- **A typed first argument** describing the point, in place of today's `unknown`.
-- **One pipeline that runs every participant,** replacing the synthetic events and the per-participant dispatch.
+- A well-defined catalog of points (`session.start`, `turn.start`, `model.start`, `compaction.start`, `compaction.complete`, `turn.complete`). These are distinct from the stream's facts.
+- A single pipeline for running each of the consumers of this interface, replacing the synthetic events and distributed dispatch code.
 
-It isn't on the critical path for [`session-event-lifecycle.md`](./session-event-lifecycle.md), and either can land first. But that proposal removes `step.started`, `turn.completed`, and `compaction.*` from the stream. Without this change, participant keys would keep naming facts that no longer exist.
+In essence, we should stop lying about which parts of the system are reacting to events on the durable stream (**observers**) and which parts of the system are participating in the state machine, taking effect at different parts of the lifecycle (**participants**).
+
+These changes aren't on the critical path for [`session-event-lifecycle.md`](./session-event-lifecycle.md), and either can land first. However, that proposal removes `step.started`, `turn.completed`, and `compaction.*` from the stream. Without this change, participant keys would keep naming facts that no longer exist.
 
 ## Participants versus observers
 
