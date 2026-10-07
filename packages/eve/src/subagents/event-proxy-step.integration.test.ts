@@ -1,6 +1,4 @@
-import { sessionView as routingView } from "#harness/session-machine/commit.js";
-import { migrateSessionState } from "#harness/session-machine/migrate.js";
-import { storedProjection as routingProjection } from "#harness/session-machine/view.js";
+import { getRelayedRequests as getProxyInputRequests } from "#internal/testing/session-machine.js";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ChannelAdapter } from "#channel/adapter.js";
@@ -29,7 +27,7 @@ import {
   type CompiledBundle,
 } from "#runtime/sessions/runtime-context-keys.js";
 import { emitProxiedSubagentEvent } from "#subagents/event-proxy-step.js";
-import { routeDeliverPayload as routeDecision } from "#internal/testing/relay-routing.js";
+import { decideRelayDelivery as routeDeliverPayload } from "#internal/testing/session-machine.js";
 
 function fixture() {
   const order: string[] = [];
@@ -164,22 +162,36 @@ describe("proxied stream hooks", () => {
       payload: { inputResponses: [{ requestId: f.request.requestId, optionId: "continue" }] },
       state: result.sessionState.snapshot.session.state,
     });
-    expect(routed.forSelf).toBeUndefined();
-    expect(routed.forChildren).toEqual([
+    expect(routed.effects.every((effect) => effect.type === "forwardAnswer")).toBe(true);
+    expect(routed.effects).toEqual([
       {
-        childContinuationToken: "child-token",
-        payload: { inputResponses: [{ requestId: f.request.requestId, optionId: "continue" }] },
-        resolved: {
-          event: { sequence: 7, stepIndex: 2, turnId: "child-turn" },
-          resolutions: [
-            {
-              kind: "session-limit",
-              outcome: "answered",
-              requestId: f.request.requestId,
-              response: { requestId: f.request.requestId, optionId: "continue" },
-            },
-          ],
-        },
+        type: "forwardAnswer",
+        route: { childContinuationToken: "child-token" },
+        responses: [{ requestId: f.request.requestId, optionId: "continue" }],
+      },
+    ]);
+    expect(
+      routed.transition.events
+        .filter((event) => event.type === "input.resolved")
+        .map((event) => ({
+          event: {
+            sequence: event.data.sequence,
+            stepIndex: event.data.stepIndex,
+            turnId: event.data.turnId,
+          },
+          resolutions: event.data.resolutions,
+        })),
+    ).toEqual([
+      {
+        event: { sequence: 7, stepIndex: 2, turnId: "child-turn" },
+        resolutions: [
+          {
+            kind: "session-limit",
+            outcome: "answered",
+            requestId: f.request.requestId,
+            response: { requestId: f.request.requestId, optionId: "continue" },
+          },
+        ],
       },
     ]);
   });
@@ -357,11 +369,11 @@ describe("proxied stream hooks", () => {
       expect(
         routeDeliverPayload({ payload: answer, state: result.sessionState.snapshot.session.state }),
       ).toMatchObject({
-        forSelf: undefined,
-        forChildren: [
+        effects: [
           {
-            childContinuationToken: "child-token",
-            payload: answer,
+            type: "forwardAnswer",
+            route: { childContinuationToken: "child-token" },
+            responses: answer.inputResponses,
           },
         ],
       });
@@ -484,10 +496,12 @@ describe("proxied stream hooks", () => {
         state: session.state,
       });
       expect(
-        routed.forChildren.map(({ childContinuationToken, payload }) => ({
-          childContinuationToken,
-          payload,
-        })),
+        routed.effects
+          .filter((effect) => effect.type === "forwardAnswer")
+          .map(({ route, responses }) => ({
+            childContinuationToken: route.childContinuationToken,
+            payload: { inputResponses: responses },
+          })),
       ).toEqual(
         ["Alice", "Bob"].map((name) => ({
           childContinuationToken: `child-${name}`,
@@ -532,25 +546,3 @@ describe("proxied stream hooks", () => {
     expect(f.sessionWritable.locked).toBe(false);
   });
 });
-
-// Thin input adapter: migration precedes pure dispatch in the production session boundary.
-function routeDeliverPayload(
-  input: Omit<Parameters<typeof routeDecision>[0], "view"> & {
-    readonly state?: Record<string, unknown>;
-  },
-) {
-  const session = migrateSessionState({ state: input.state });
-  return routeDecision({
-    ...input,
-    view: routingView(routingProjection(session.state), session.state),
-  });
-}
-
-function getProxyInputRequests(state: Record<string, unknown> | undefined) {
-  const session = migrateSessionState({ state });
-  return new Map(
-    Object.entries(
-      routingView(routingProjection(session.state), session.state).turn.relayedRoutes ?? {},
-    ),
-  );
-}

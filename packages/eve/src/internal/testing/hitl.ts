@@ -3,17 +3,23 @@ import type { ModelMessage } from "ai";
 import type { SessionAuthContext } from "#channel/types.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
 import type { SessionStateMap, StepInput } from "#harness/types.js";
+import { HumanInput } from "#internal/testing/hitl-observer.js";
+import type { Command, Next } from "#harness/hitl/command.js";
+import type { InputOf } from "#harness/hitl/host.js";
+import type { Input, PolicyCheck, PolicyRun, RequestAt, FromStep } from "#harness/hitl/input.js";
 import {
-  HumanInput,
-  reduceHumanInput,
-  type Command,
-  type InputOf,
-  type Input,
-  type Next,
-  type PolicyCheck,
-  type PolicyRun,
-  type RequestAt,
-} from "#harness/hitl/human-input.js";
+  beforeStep,
+  afterStep,
+  policyChecksBeforeStep,
+  type BeforeStepArrival,
+} from "#harness/hitl/decisions.js";
+import { adaptHumanInput } from "#harness/hitl/adapter.js";
+import { saveTransition, sessionView, dropClosedRecords } from "#harness/session-machine/commit.js";
+import { storedProjection, SESSION_PROJECTION_STATE_KEY } from "#harness/session-machine/view.js";
+import { migrateSessionState } from "#harness/session-machine/migrate.js";
+import { projectHumanInput } from "#harness/hitl/projection.js";
+import { readTurnState } from "#harness/session-machine/state.js";
+import { foldSession } from "#protocol/session-projection.js";
 import type { UnstampedMessageStreamEvent } from "#protocol/message.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 import type { InputRequest, InputResponse } from "#shared/input.js";
@@ -56,17 +62,64 @@ export class Turn {
 
   /** A turn as a session stored it. */
   static from(state: SessionStateMap): Turn {
-    return new Turn(state, []);
+    return new Turn(migrateSessionState({ state }).state, []);
+  }
+
+  get projected() {
+    const view = sessionView(storedProjection(this.state), this.state);
+    return projectHumanInput(view, view.turn.suspended[0]);
   }
 
   get humanInput(): HumanInput {
-    return HumanInput.read(this.state);
+    return HumanInput.fromView(sessionView(storedProjection(this.state), this.state));
   }
 
   /** The turn after the session sees `input`. */
   input(input: Input): Turn {
-    const { events, state } = reduceHumanInput(this.state, input);
-    return new Turn(state, events);
+    const view = sessionView(storedProjection(this.state), this.state);
+    const post = [
+      "approval.requested",
+      "authorization.required",
+      "actions.dispatched",
+      "actions.settled",
+    ].includes(input.type);
+    const decision = post
+      ? afterStep(view, {
+          ...input,
+          at: "at" in input ? input.at : (view.turn.suspended[0]?.event ?? AT),
+        } as FromStep & { at: RequestAt })
+      : beforeStep(view, [input as BeforeStepArrival]);
+    const { transition: adapted } = adaptHumanInput(view, decision);
+    // Intake consumes the resumed delivery between commits, just as acceptHumanInput does.
+    const transition =
+      input.type === "input.resumed"
+        ? { ...adapted, turn: { ...adapted.turn, queued: undefined } }
+        : adapted;
+    const projection = transition.events.reduce(foldSession, view.projection);
+    const saved = saveTransition(
+      { state: this.state, history: [] as ModelMessage[], limits: {} },
+      transition,
+    );
+    const committed = dropClosedRecords(
+      {
+        ...saved,
+        state: { ...saved.state, [SESSION_PROJECTION_STATE_KEY]: projection },
+        sessionId: "fixture",
+        continuationToken: "fixture",
+        agent: { system: "", tools: [], modelReference: { id: "fixture" } },
+        compaction: { recentWindowSize: 10, threshold: 100000 },
+      },
+      projection,
+    );
+    const published = decision.commands.filter((command) => command.type === "publish");
+    const added = transition.events.filter(
+      (event) => !published.some((command) => command.event === event),
+    );
+    const events: Command[] = [
+      ...added.map((event): Command => ({ type: "publish", event })),
+      ...decision.commands,
+    ];
+    return new Turn(committed.state, events);
   }
 
   /** The calls a person approved that the turn has yet to run. */
@@ -88,7 +141,9 @@ export class Turn {
 
   /** The response policies the runtime runs before it commits `input`. */
   checks(input: Input): readonly PolicyCheck[] {
-    return this.humanInput.policyChecks(input as InputOf<"pre-step">);
+    return policyChecksBeforeStep(sessionView(storedProjection(this.state), this.state), [
+      input as InputOf<"pre-step">,
+    ]);
   }
 
   /** `input`, committed once each response policy it needs did `ran`. */
@@ -132,9 +187,18 @@ export class Turn {
     return this.reported("appendHistory").map((event) => event.message);
   }
 
-  /** Nothing is stored for the session once nothing is open. */
+  /** No HITL execution records remain; unrelated session state and public lifecycle facts do not count. */
   storesNothing(): boolean {
-    return this.state === undefined;
+    const turn = readTurnState(this.state);
+    return (
+      Object.values(turn).every(
+        (value) =>
+          value === undefined ||
+          (Array.isArray(value)
+            ? value.length === 0
+            : typeof value === "object" && value !== null && Object.keys(value).length === 0),
+      ) && sessionView(storedProjection(this.state), this.state).signIns.length === 0
+    );
   }
 }
 
@@ -323,6 +387,6 @@ export function parkedOnRuntimeCalls<T extends { readonly state?: SessionStateMa
     readonly tasks: readonly RuntimeWorkflowTaskRequest[];
   },
 ): T {
-  const { state } = reduceHumanInput(session.state, { ...input, type: "actions.dispatched" });
-  return { ...session, state };
+  const turn = Turn.from(session.state ?? {}).input({ ...input, type: "actions.dispatched" });
+  return { ...session, state: turn.state };
 }

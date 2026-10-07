@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { replaceDurableSessionSnapshot } from "#execution/durable-session-store.js";
 import { emitWorkflowToolRunReportStep } from "#execution/tools/workflow/emit-workflow-tool-run-report-step.js";
 import { withdrawWorkflowToolRunQuestionStep } from "#execution/tools/workflow/withdraw-step.js";
-import { seedRelaySession } from "#internal/testing/relay-routing.js";
+import { withRelayedRequests } from "#internal/testing/session-machine.js";
 import type { HarnessSession } from "#harness/types.js";
 import { createTestRuntime } from "#internal/testing/app-harness.js";
 import { createTestSessionState } from "#internal/testing/session-state.js";
@@ -84,21 +84,8 @@ it("publishes a session step's action.partial to the stream and its hooks", asyn
 it("relays a withdrawn workflow question's input.resolved to the stream and its hooks", async () => {
   const { hooked, runtime, sessionWritable, streamed } = await createPublishingRuntime();
   const base = createTestSessionState();
-  const asked = seedRelaySession({
-    entries: [
-      [
-        "ask-1",
-        {
-          workflowAsk: { control: "control", question: {} },
-          runId: "run-1",
-          childContinuationToken: "ask-1",
-          event: { sequence: 1, stepIndex: 0, turnId: "turn-1" },
-          kind: "question",
-        },
-      ],
-    ],
-    forChildContinuationToken: "ask-1",
-    session: withPublished(base.snapshot.session as HarnessSession, [
+  const asked = withRelayedRequests(
+    withPublished(base.snapshot.session as HarnessSession, [
       createInputRequestedEvent({
         callId: "call-1",
         requests: [
@@ -114,7 +101,25 @@ it("relays a withdrawn workflow question's input.resolved to the stream and its 
         turnId: "turn-1",
       }),
     ]),
-  });
+    [
+      {
+        at: { sequence: 1, stepIndex: 0, turnId: "turn-1" },
+        route: {
+          childContinuationToken: "ask-1",
+          runId: "run-1",
+          control: "control",
+        },
+        requests: [
+          {
+            requestId: "ask-1",
+            kind: "question",
+            prompt: "",
+            action: { kind: "tool-call", callId: "ask-1", toolName: "fixture", input: {} },
+          },
+        ],
+      },
+    ],
+  );
 
   await runtime.run(async () => {
     await withdrawWorkflowToolRunQuestionStep({

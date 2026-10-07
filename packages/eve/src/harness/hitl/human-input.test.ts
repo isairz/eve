@@ -1,4 +1,4 @@
-import { reduceHumanInput, type Input } from "#harness/hitl/human-input.js";
+import type { Input } from "#harness/hitl/input.js";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -79,7 +79,7 @@ describe("HumanInput", () => {
     const { humanInput } = Turn.idle();
 
     expect(humanInput.next()).toEqual({ run: "model" });
-    expect(reduceHumanInput({ other: 1 }, { now: 0, type: "time" }).state).toEqual({ other: 1 });
+    expect(Turn.from({ other: 1 }).input({ now: 0, type: "time" }).state?.other).toEqual(1);
   });
 
   it("the model never runs while a request of the turn's own is open", () => {
@@ -164,6 +164,6 @@ describe("HumanInput", () => {
     expect(input?.message).toEqual(
       expect.stringContaining("This does not authorize an earlier action"),
     );
-    expect(displayMessage).toBe("approve");
+    expect(displayMessage).toBe("Approve");
   });
 });

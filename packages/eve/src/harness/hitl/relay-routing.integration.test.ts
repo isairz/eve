@@ -1,7 +1,3 @@
-import { sessionView as routingView } from "#harness/session-machine/commit.js";
-import { migrateSessionState } from "#harness/session-machine/migrate.js";
-import { storedProjection as routingProjection } from "#harness/session-machine/view.js";
-import { legacyRelayEntries } from "#internal/testing/relay-routing.js";
 import { describe, expect, it } from "vitest";
 
 import type { ChannelAdapter, ChannelAdapterContext } from "#channel/adapter.js";
@@ -17,7 +13,7 @@ import { applyTransition, sessionView } from "#harness/session-machine/commit.js
 import { relay } from "#harness/session-machine/transitions.js";
 import { storedProjection } from "#harness/session-machine/view.js";
 import { withOpenTurn } from "#internal/testing/session-machine.js";
-import { hasRelayedRequests, seedRelaySession } from "#internal/testing/relay-routing.js";
+import { getRelayedRequests, withRelayedRequests } from "#internal/testing/session-machine.js";
 import type { HarnessEmitFn, HarnessSession } from "#harness/types.js";
 import type { UnstampedMessageStreamEvent } from "#protocol/message.js";
 import type { InputRequest } from "#shared/input.js";
@@ -25,7 +21,7 @@ import { createRuntimeAdapterRegistry } from "#runtime/channels/registry.js";
 import type { RuntimeCompiledArtifactsSource } from "#runtime/compiled-artifacts-source.js";
 import { createRuntimeHookRegistry } from "#runtime/hooks/registry.js";
 import type { ResolvedChannelDefinition } from "#runtime/types.js";
-import { routeDeliverPayload as routeDecision } from "#internal/testing/relay-routing.js";
+import { decideRelayDelivery as routeDeliverPayload } from "#internal/testing/session-machine.js";
 
 /**
  * Integration coverage for subagent HITL proxy emission and routing.
@@ -183,12 +179,21 @@ function buildOpenTurnSession(continuationToken: string, sessionId: string): Har
 /** Relays a child's batch through the parent's machine, returning the routes it leaves. */
 async function emitProxiedInputRequest(input: {
   readonly emit: HarnessEmitFn;
-  readonly hookPayload: Parameters<typeof legacyRelayEntries>[0];
+  readonly hookPayload: SubagentInputRequestHookPayload;
   readonly session: HarnessSession;
 }) {
   const view = sessionView(storedProjection(input.session.state), input.session.state);
   await applyTransition(input.session, relay(view, { payload: input.hookPayload }), input.emit);
-  return legacyRelayEntries(input.hookPayload);
+  return {
+    at: input.hookPayload.event,
+    requests: input.hookPayload.event.requests,
+    route: {
+      childContinuationToken: input.hookPayload.childContinuationToken,
+      childSessionInbox: input.hookPayload.childSessionInbox,
+      inputSource: input.hookPayload.inputSource,
+      remote: input.hookPayload.remote,
+    },
+  };
 }
 
 /**
@@ -265,20 +270,11 @@ describe("subagent HITL proxy → Slack-style text-approve regression (Finding #
     expect((afterEmitAdapter.state as SlackishState | undefined)?.pendingRequests).toEqual([
       approvalRequest,
     ]);
-    expect(entries).toEqual([
-      [
-        "req-approve-1",
-        {
-          batch: {
-            approvalRequestIds: ["req-approve-1"],
-            requestIds: ["req-approve-1"],
-          },
-          childContinuationToken: "subagent:parent:call-1",
-          event: { sequence: 0, stepIndex: 0, turnId: "turn_0" },
-          kind: "tool-approval",
-        },
-      ],
-    ]);
+    expect(entries).toEqual({
+      at: hookPayload.event,
+      requests: [approvalRequest],
+      route: { childContinuationToken: "subagent:parent:call-1" },
+    });
 
     // The proxied `input.requested` parks the parent's open turn with
     // `turn.waiting`; the call that asked is still running, so the turn
@@ -329,35 +325,45 @@ describe("subagent HITL proxy → Slack-style text-approve regression (Finding #
     // The resolved responses now flow through the proxy router. With
     // the child's proxy entry recorded on the parent session, the
     // response routes back down to the right descendant.
-    const parkedSession = seedRelaySession({
+    const parkedSession = withRelayedRequests(buildEmptySession("parent-token", "sess-parent"), [
       entries,
-      forChildContinuationToken: hookPayload.childContinuationToken,
-      session: buildEmptySession("parent-token", "sess-parent"),
-    });
+    ]);
 
     const routed = routeDeliverPayload({
       payload: deliverResult as DeliverPayload,
       state: parkedSession.state,
     });
 
-    expect(routed.forSelf).toBeUndefined();
-    expect(routed.forChildren).toEqual([
+    expect(routed.effects.every((effect) => effect.type === "forwardAnswer")).toBe(true);
+    expect(routed.effects).toEqual([
       {
-        childContinuationToken: "subagent:parent:call-1",
-        payload: {
-          inputResponses: [{ optionId: "approve", requestId: "req-approve-1" }],
-        },
-        resolved: {
-          event: { sequence: 0, stepIndex: 0, turnId: "turn_0" },
-          resolutions: [
-            {
-              kind: "tool-approval",
-              outcome: "approved",
-              requestId: "req-approve-1",
-              response: { optionId: "approve", requestId: "req-approve-1" },
-            },
-          ],
-        },
+        type: "forwardAnswer",
+        route: { childContinuationToken: "subagent:parent:call-1" },
+        responses: [{ optionId: "approve", requestId: "req-approve-1" }],
+      },
+    ]);
+    expect(
+      routed.transition.events
+        .filter((event) => event.type === "input.resolved")
+        .map((event) => ({
+          event: {
+            sequence: event.data.sequence,
+            stepIndex: event.data.stepIndex,
+            turnId: event.data.turnId,
+          },
+          resolutions: event.data.resolutions,
+        })),
+    ).toEqual([
+      {
+        event: { sequence: 0, stepIndex: 0, turnId: "turn_0" },
+        resolutions: [
+          {
+            kind: "tool-approval",
+            outcome: "approved",
+            requestId: "req-approve-1",
+            response: { optionId: "approve", requestId: "req-approve-1" },
+          },
+        ],
       },
     ]);
   });
@@ -426,18 +432,10 @@ describe("subagent HITL proxy → concurrent-descendant routing", () => {
     // entries (what the parent runtime would accumulate across the
     // two proxy steps).
     let parkedSession = buildEmptySession("parent-token", "sess-parent");
-    parkedSession = seedRelaySession({
-      entries: entriesA,
-      forChildContinuationToken: payloadA.childContinuationToken,
-      session: parkedSession,
-    });
-    parkedSession = seedRelaySession({
-      entries: entriesB,
-      forChildContinuationToken: payloadB.childContinuationToken,
-      session: parkedSession,
-    });
+    parkedSession = withRelayedRequests(parkedSession, [entriesA]);
+    parkedSession = withRelayedRequests(parkedSession, [entriesB]);
 
-    expect(hasRelayedRequests(parkedSession.state)).toBe(true);
+    expect(getRelayedRequests(parkedSession.state).size > 0).toBe(true);
 
     // One inbound deliver carrying responses for both descendants.
     // Simulates a UI that lets the user answer both prompts before
@@ -452,13 +450,15 @@ describe("subagent HITL proxy → concurrent-descendant routing", () => {
       state: parkedSession.state,
     });
 
-    expect(routed.forSelf).toBeUndefined();
-    expect(routed.forChildren).toHaveLength(2);
+    expect(routed.effects.every((effect) => effect.type === "forwardAnswer")).toBe(true);
+    expect(routed.effects).toHaveLength(2);
 
     // Each descendant receives only its own response — no cross
     // contamination.
     const byChild = new Map(
-      routed.forChildren.map((entry) => [entry.childContinuationToken, entry.payload]),
+      routed.effects
+        .filter((entry) => entry.type === "forwardAnswer")
+        .map((entry) => [entry.route.childContinuationToken, { inputResponses: entry.responses }]),
     );
 
     expect(byChild.get("subagent:parent:call-a")).toEqual({
@@ -477,22 +477,20 @@ describe("subagent HITL proxy → concurrent-descendant routing", () => {
       state: parkedSession.state,
     });
 
-    expect(unrouted.forChildren).toEqual([]);
-    expect(unrouted.forSelf).toEqual({
-      inputResponses: [{ requestId: "req-unknown", text: "stray" }],
-    });
+    expect(unrouted.effects).toEqual([]);
+    expect(
+      unrouted.transition.events
+        .filter((event) => event.type === "input.resolved")
+        .map((event) => ({
+          event: {
+            sequence: event.data.sequence,
+            stepIndex: event.data.stepIndex,
+            turnId: event.data.turnId,
+          },
+          resolutions: event.data.resolutions,
+        })),
+    ).toEqual([]);
+    expect(unrouted.decision.commands).toEqual([]);
+    expect(unrouted.transition.events).toEqual([]);
   });
 });
-
-// Thin input adapter: migration precedes pure dispatch in the production session boundary.
-function routeDeliverPayload(
-  input: Omit<Parameters<typeof routeDecision>[0], "view"> & {
-    readonly state?: Record<string, unknown>;
-  },
-) {
-  const session = migrateSessionState({ state: input.state });
-  return routeDecision({
-    ...input,
-    view: routingView(routingProjection(session.state), session.state),
-  });
-}

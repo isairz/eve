@@ -1,5 +1,5 @@
 import type { AuthorizationChallenge } from "#harness/authorization.js";
-import { projectedSignIns, projectedTurn } from "#harness/hitl/projection.js";
+import { projectedSignIns, projectedTurn, sameStep } from "#harness/hitl/projection.js";
 import { readTurnState, type TurnState } from "#harness/session-machine/state.js";
 import { SESSION_PROJECTION_STATE_KEY, storedProjection } from "#harness/session-machine/view.js";
 import { getSessionUsage } from "#harness/turn-tag-state.js";
@@ -63,7 +63,14 @@ function projectLegacyState(
   view: SessionView,
   state: SessionStateMap | undefined,
 ): { readonly turn: TurnState; readonly signIns: readonly AuthorizationChallenge[] } {
-  const legacy = readState(state);
+  const read = readState(state);
+  const approval = Object.values(read.requests).find((request) => request.kind === "tool-approval");
+  // Old releases committed the asking transcript before parking its approval; preserve the
+  // empty originating step so cancellation still commits the missing denied-call results.
+  const legacy =
+    read.held === undefined && approval !== undefined
+      ? { ...read, held: { at: approval.at, messages: [] } }
+      : read;
   const hasHumanState = [STATE_KEY, LEGACY_BATCH_KEY, LEGACY_GRANTS_KEY].some(
     (key) => state !== undefined && Object.hasOwn(state, key),
   );
@@ -88,6 +95,14 @@ function projectLegacyState(
   return {
     turn: {
       ...turn,
+      suspended:
+        read.held === undefined && approval !== undefined
+          ? turn.suspended.map((step) =>
+              sameStep(step.event, approval.at)
+                ? { ...step, transcriptCommitted: true as const }
+                : step,
+            )
+          : turn.suspended,
       grants: [...new Set([...turn.grants, ...view.turn.grants])],
       queued: view.turn.queued ?? turn.queued,
       audit: view.turn.audit ?? turn.audit,

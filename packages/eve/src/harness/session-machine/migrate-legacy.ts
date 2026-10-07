@@ -90,34 +90,6 @@ export function parseLegacyBatch(value: unknown): LegacyBatch | undefined {
   return batch;
 }
 
-/**
- * Pure legacy rule-test compatibility transform; runtime entry points never call it.
- * Returns the old keyed representation, removing its key when nothing is open.
- */
-export function store(
-  sessionState: SessionStateMap | undefined,
-  state: HumanInputState,
-): SessionStateMap | undefined {
-  const next: Record<string, unknown> = { ...sessionState };
-  // `readState` moved a legacy batch and grants into `state`.
-  delete next[LEGACY_BATCH_KEY];
-  delete next[LEGACY_GRANTS_KEY];
-  if (isEmpty(state)) delete next[STATE_KEY];
-  else next[STATE_KEY] = state;
-  return Object.keys(next).length > 0 ? next : undefined;
-}
-
-function isEmpty(state: HumanInputState): boolean {
-  return (
-    Object.keys(state.requests).length === 0 &&
-    state.queued === undefined &&
-    state.held === undefined &&
-    state.grants.length === 0 &&
-    state.audit === undefined &&
-    Object.keys(state.relayedAuthorizations ?? {}).length === 0
-  );
-}
-
 /** Upgrade keys are inspected only at hydration; the replacement is saved as one state map. */
 export const LEGACY_PARKING_KEYS = [
   STATE_KEY,

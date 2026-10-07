@@ -23,7 +23,7 @@ import {
   stepResponse,
 } from "#internal/testing/hitl.js";
 import { adaptHumanInput } from "./adapter.js";
-import { HumanInput } from "./human-input.js";
+import { HumanInput } from "#internal/testing/hitl-observer.js";
 import { beforeStep, afterStep, type HumanInputDecision } from "./decisions.js";
 import { projectHumanInput } from "./projection.js";
 import { migrateSessionState } from "#harness/session-machine/migrate.js";

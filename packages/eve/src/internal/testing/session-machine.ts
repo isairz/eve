@@ -1,8 +1,9 @@
+import { readAnswerText } from "#internal/input-text.js";
 import type { ModelMessage } from "ai";
 
 import { contextStorage } from "#context/container.js";
 import { grantedApprovalKeys } from "#harness/hitl/projection.js";
-import { afterStep } from "#harness/hitl/decisions.js";
+import { afterStep, beforeStep } from "#harness/hitl/decisions.js";
 import { adaptHumanInput } from "#harness/hitl/adapter.js";
 import { renderPendingApprovalsSnippet } from "#harness/hitl/index.js";
 import { createFrameworkUserMessage } from "#harness/messages.js";
@@ -10,7 +11,7 @@ import type { Transition } from "#harness/session-machine/commit.js";
 import type { SessionView } from "#harness/session-machine/view.js";
 import { suspendStep } from "#harness/session-machine/transitions.js";
 import { withoutApprovalParts } from "#harness/step/after-model.js";
-import { sessionView } from "#harness/session-machine/commit.js";
+import { sessionView, saveTransition } from "#harness/session-machine/commit.js";
 import { readTurnState, writeTurnState } from "#harness/session-machine/state.js";
 import {
   ensureSessionProjection,
@@ -221,4 +222,59 @@ export function parkOnApprovals(
       ...(transition.commit ?? []),
     ],
   };
+}
+
+/** Child batches arrive through the live HITL decision and machine persistence seam. */
+export function withRelayedRequests<
+  S extends Pick<import("#harness/types.js").HarnessSessionBase, "state" | "limits">,
+>(
+  session: S,
+  batches: readonly {
+    readonly at: StepCoordinates;
+    readonly route: import("#harness/hitl/input.js").RelayRoute;
+    readonly requests: readonly InputRequest[];
+  }[],
+): S {
+  let current = session;
+  for (const batch of batches) {
+    const view = sessionView(storedProjection(current.state), current.state);
+    const { transition } = adaptHumanInput(
+      view,
+      beforeStep(view, [{ ...batch, type: "relayed.requested" }]),
+    );
+    current = saveTransition(
+      {
+        ...current,
+        state: {
+          ...current.state,
+          [SESSION_PROJECTION_STATE_KEY]: transition.events.reduce(foldSession, view.projection),
+        },
+      },
+      transition,
+    );
+  }
+  return current;
+}
+
+/** Private relay routes currently owned by the machine, without legacy hydration. */
+export function getRelayedRequests(state: SessionStateMap | undefined) {
+  return new Map(Object.entries(readTurnState(state).relayedRoutes ?? {}));
+}
+
+/** Inspect the live relay decision/outbox, not a compatibility-shaped routed payload. */
+export function decideRelayDelivery(input: {
+  readonly state?: SessionStateMap;
+  readonly payload: import("#channel/types.js").DeliverPayload;
+  readonly resolveMessage?: boolean;
+}) {
+  const view = sessionView(storedProjection(input.state), input.state);
+  const text = readAnswerText(input.payload);
+  const decision = beforeStep(view, [
+    {
+      type: "delivery.received",
+      responses: input.payload.inputResponses ?? [],
+      ...(text !== undefined && { message: { text, delegated: input.resolveMessage !== true } }),
+    },
+  ]);
+  return { decision, ...adaptHumanInput(view, decision) };
 }

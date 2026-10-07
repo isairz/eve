@@ -16,7 +16,7 @@ import {
 } from "#harness/workflow-tool-runs.js";
 
 import { toolOutput } from "#tools/model-output.js";
-import { seedRelaySession } from "#internal/testing/relay-routing.js";
+import { withRelayedRequests } from "#internal/testing/session-machine.js";
 import { setTurnUsageState } from "#harness/turn-tag-state.js";
 import type { HarnessSession } from "#harness/types.js";
 import { isRuntimeWorkflowToolAction } from "#shared/action-types.js";
@@ -341,35 +341,45 @@ describe("runtime results", () => {
       address: { runId: "run-1", hookToken: "eve:workflow-tool-run:op-1" },
     });
     const answerToken = "eve:workflow-tool-run-answer:run-1:0";
-    const session = seedRelaySession({
-      entries: [
-        [
-          "other-request",
-          {
-            childContinuationToken: CHILD_CONTINUATION_TOKEN,
-            event: REQUEST_EVENT,
-            kind: "question",
+    const session = withRelayedRequests(
+      withRelayedRequests(withRun, [
+        {
+          at: REQUEST_EVENT,
+          route: {
+            childContinuationToken: answerToken,
+            runId: "run-1",
+            control: "control",
           },
-        ],
-      ],
-      forChildContinuationToken: CHILD_CONTINUATION_TOKEN,
-      session: seedRelaySession({
-        entries: [
-          [
-            answerToken,
+          requests: [
             {
-              runId: "run-1",
-              workflowAsk: { control: "control", question: {} },
-              childContinuationToken: answerToken,
-              event: REQUEST_EVENT,
+              requestId: answerToken,
               kind: "question",
+              prompt: "",
+              action: { kind: "tool-call", callId: answerToken, toolName: "fixture", input: {} },
             },
           ],
-        ],
-        forChildContinuationToken: answerToken,
-        session: withRun,
-      }),
-    });
+        },
+      ]),
+      [
+        {
+          at: REQUEST_EVENT,
+          route: { childContinuationToken: CHILD_CONTINUATION_TOKEN },
+          requests: [
+            {
+              requestId: "other-request",
+              kind: "question",
+              prompt: "",
+              action: {
+                kind: "tool-call",
+                callId: "other-request",
+                toolName: "fixture",
+                input: {},
+              },
+            },
+          ],
+        },
+      ],
+    );
 
     const finished = forgetFinishedRuns(
       migrateSessionState(session),

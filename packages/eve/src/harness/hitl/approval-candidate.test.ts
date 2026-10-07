@@ -1,9 +1,7 @@
-import { STATE_KEY } from "#harness/session-machine/migrate-legacy.js";
-import { readState } from "#harness/session-machine/migrate-legacy.js";
 import { describe, expect, it } from "vitest";
 
 import type { SessionAuthContext } from "#channel/types.js";
-import type { Input, PolicyRun } from "#harness/hitl/human-input.js";
+import type { Input, PolicyRun } from "#harness/hitl/input.js";
 import {
   ALICE,
   AT,
@@ -194,7 +192,7 @@ describe("approval response policies", () => {
 
   it("a responder's authorization belongs to its candidate, not to the turn's requests", () => {
     const authorization = bobMustAuthorize().stored();
-    const stored = authorization.state![STATE_KEY] as {
+    const stored = authorization.projected as {
       readonly audit: {
         readonly activeCandidates: Record<string, { readonly authorizations?: unknown[] }>;
       };
@@ -209,34 +207,6 @@ describe("approval response policies", () => {
     const turn = authorization.checked(callback("r1", "reviewer"), { kind: "threw" }).stored();
     expect(turn.humanInput.awaitedAuthorizations()).toEqual([]);
     expect(turn.humanInput.openRequestIds()).toEqual(new Set(["deploy"]));
-  });
-
-  it("a session stored while a responder's authorization was a request of its own reads it as the candidate's", () => {
-    const authorization = bobMustAuthorize().stored();
-    const answered = authorization.state![STATE_KEY] as {
-      readonly audit: { readonly activeCandidates: Record<string, Record<string, unknown>> };
-      readonly requests: Record<string, unknown>;
-    };
-    const [[candidateId, candidate]] = Object.entries(answered.audit.activeCandidates) as [
-      [string, { readonly authorizations: unknown[] }],
-    ];
-    const { authorizations, ...waiting } = candidate;
-    const legacy = Turn.from({
-      [STATE_KEY]: {
-        ...answered,
-        audit: { ...answered.audit, activeCandidates: { [candidateId]: waiting } },
-        requests: {
-          ...answered.requests,
-          r1: { at: AT, challenge: authorizations[0], kind: "authorization" },
-        },
-      },
-    });
-
-    expect(legacy.humanInput.awaitedAuthorizations()).toEqual(["r1"]);
-    expect(legacy.humanInput.openRequestIds()).toEqual(new Set(["deploy"]));
-    expect(legacy.checks(callback("r1", "reviewer"))).toEqual([
-      expect.objectContaining({ candidateId, responder: BOB }),
-    ]);
   });
 
   it("a candidate times out after ten minutes, failing its authorization and ignoring its callback", () => {
@@ -304,13 +274,13 @@ describe("durable response candidate audit", () => {
       kind: "threw",
       challenges: [challenge("r1", { requester: responder, name: "reviewer" })],
     });
-    const candidate = Object.values(readState(active.stored().state).audit!.activeCandidates)[0]!;
+    const candidate = Object.values(active.stored().projected.audit!.activeCandidates)[0]!;
     expect(candidate.responder).toEqual(responder);
     const rejected = active.checked(callback("r1", "reviewer"), {
       kind: "returned",
       value: { status: "rejected", reason: "Permission required." },
     });
-    const history = readState(rejected.state).audit!.candidateHistory;
+    const history = rejected.projected.audit!.candidateHistory;
     expect(history[0]?.responder).toEqual({
       authenticator: responder.authenticator,
       issuer: responder.issuer,
@@ -326,11 +296,12 @@ describe("durable response candidate audit", () => {
       kind: "threw",
       challenges: [challenge("r2", { requester: CAROL, principalId: "carol" })],
     });
-    expect(
-      Object.values(readState(both.state).audit!.activeCandidates).map((c) => c.responder),
-    ).toEqual([BOB, CAROL]);
+    expect(Object.values(both.projected.audit!.activeCandidates).map((c) => c.responder)).toEqual([
+      BOB,
+      CAROL,
+    ]);
     const expired = both.input({ type: "time", now: NOW + 60_000 });
-    const audit = readState(expired.state).audit!;
+    const audit = expired.projected.audit!;
     expect(Object.values(audit.activeCandidates).map((c) => c.responder)).toEqual([CAROL]);
     expect(audit.candidateHistory).toEqual([
       expect.objectContaining({
@@ -346,14 +317,14 @@ describe("durable response candidate audit", () => {
     expect(settled.checks(answerAs(BOB))).toEqual([]);
     expect(settled.input(answerAs(BOB)).events).toEqual([]);
     expect(settled.input(callback("r1", "reviewer")).events).toEqual([]);
-    expect(readState(settled.state).audit!.settlements.deploy?.approver).toEqual(CAROL);
+    expect(settled.projected.audit!.settlements.deploy?.approver).toEqual(CAROL);
   });
 
   it("an allowed Cancel stales competing approvals without replacing its settlement", () => {
     const waiting = bobMustAuthorize();
     const cancelled = waiting.checked(answerAs(CAROL, "cancel"), ALLOWED);
     const late = cancelled.input(callback("r1", "reviewer"));
-    const audit = readState(late.state).audit!;
+    const audit = late.projected.audit!;
     expect(audit.activeCandidates).toEqual({});
     expect(audit.candidateHistory).toEqual(
       expect.arrayContaining([
@@ -379,7 +350,7 @@ describe("durable response candidate audit", () => {
       challenges: [challenge("r1", { requester: BOB })],
     });
     const settled = waiting.checked(answerAs(CAROL), ALLOWED);
-    expect(Object.values(readState(settled.state).audit!.activeCandidates)).toEqual([
+    expect(Object.values(settled.projected.audit!.activeCandidates)).toEqual([
       expect.objectContaining({ requestId: "publish", responder: BOB }),
     ]);
   });

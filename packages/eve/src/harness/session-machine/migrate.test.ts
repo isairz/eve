@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { adaptHumanInput } from "#harness/hitl/adapter.js";
 import { beforeStep, afterStep } from "#harness/hitl/decisions.js";
 import { LEGACY_PARKING_KEYS } from "#harness/session-machine/migrate-legacy.js";
-import { HumanInput } from "#harness/hitl/human-input.js";
+import { HumanInput } from "#internal/testing/hitl-observer.js";
 import type { HumanInputState } from "#harness/hitl/state.js";
 import type { InputRequest } from "#shared/input.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";

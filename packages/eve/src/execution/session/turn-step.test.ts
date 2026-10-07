@@ -33,7 +33,7 @@ import { deserializeContext, serializeContext } from "#context/serialize.js";
 import { startWorkflowTask } from "#execution/tools/workflow/start.js";
 import { TurnCancelledError } from "#harness/turn-cancellation.js";
 import { getPendingAuthorization, setPendingAuthorization } from "#harness/authorization.js";
-import { seedRelaySession } from "#internal/testing/relay-routing.js";
+import { withRelayedRequests } from "#internal/testing/session-machine.js";
 import {
   positionOf,
   positionState,
@@ -361,25 +361,25 @@ describe("routeProxiedDeliverStep", () => {
   });
 
   it("drops a consumed question reply's context but keeps channel state", async () => {
-    const session = seedRelaySession({
-      entries: [
-        [
-          "ask-1",
+    const session = withRelayedRequests(createStubSession(), [
+      {
+        at: REQUEST_EVENT,
+        route: {
+          childContinuationToken: "ask-1",
+          runId: "run-1",
+          control: "control",
+        },
+        requests: [
           {
-            workflowAsk: {
-              control: "control",
-              question: { options: [{ id: "2", label: "Production" }] },
-            },
-            runId: "run-1",
-            childContinuationToken: "ask-1",
-            event: REQUEST_EVENT,
+            requestId: "ask-1",
             kind: "question",
+            prompt: "",
+            action: { kind: "tool-call", callId: "ask-1", toolName: "fixture", input: {} },
+            options: [{ id: "2", label: "Production" }],
           },
         ],
-      ],
-      forChildContinuationToken: "ask-1",
-      session: createStubSession(),
-    });
+      },
+    ]);
     installSessionStoreMocks([session]);
     const result = await routeProxiedDeliverStep({
       serializedContext: createSerializedContext(),
@@ -411,24 +411,29 @@ describe("routeProxiedDeliverStep", () => {
   });
 
   it("replies to the saved child inbox after its continuation alias changes", async () => {
-    const session = seedRelaySession({
-      entries: [
-        [
-          "request-1",
-          {
-            childContinuationToken: "stale-alias",
-            childSessionInbox: { sessionId: "original-child" },
-            event: REQUEST_EVENT,
-            kind: "question",
-          },
-        ],
-      ],
-      forChildContinuationToken: "stale-alias",
-      session: createStubSession({
+    const session = withRelayedRequests(
+      createStubSession({
         continuationToken: "parent-token",
         sessionId: "parent-session",
       }),
-    });
+      [
+        {
+          at: REQUEST_EVENT,
+          route: {
+            childContinuationToken: "stale-alias",
+            childSessionInbox: { sessionId: "original-child" },
+          },
+          requests: [
+            {
+              requestId: "request-1",
+              kind: "question",
+              prompt: "",
+              action: { kind: "tool-call", callId: "request-1", toolName: "fixture", input: {} },
+            },
+          ],
+        },
+      ],
+    );
     installSessionStoreMocks([session]);
 
     await routeProxiedDeliverStep({
@@ -475,22 +480,25 @@ describe("routeProxiedDeliverStep", () => {
   });
 
   it("answers a root question once when one delivery carries several messages", async () => {
-    const session = seedRelaySession({
-      entries: [
-        [
-          "ask-1",
+    const session = withRelayedRequests(createStubSession(), [
+      {
+        at: REQUEST_EVENT,
+        route: {
+          childContinuationToken: "ask-1",
+          runId: "run-1",
+          control: "control",
+        },
+        requests: [
           {
-            workflowAsk: { control: "control", question: { allowFreeform: true } },
-            runId: "run-1",
-            childContinuationToken: "ask-1",
-            event: REQUEST_EVENT,
+            requestId: "ask-1",
             kind: "question",
+            prompt: "",
+            action: { kind: "tool-call", callId: "ask-1", toolName: "fixture", input: {} },
+            allowFreeform: true,
           },
         ],
-      ],
-      forChildContinuationToken: "ask-1",
-      session: createStubSession(),
-    });
+      },
+    ]);
     installSessionStoreMocks([session]);
 
     const result = await routeProxiedDeliverStep({
@@ -529,28 +537,26 @@ describe("routeProxiedDeliverStep", () => {
       },
     ],
   ])("does not answer a delegated %s question from steering text", async (_, serializedContext) => {
-    const session = seedRelaySession({
-      entries: [
-        [
-          "ask-1",
+    const session = withRelayedRequests(createStubSession(), [
+      {
+        at: REQUEST_EVENT,
+        route: {
+          childContinuationToken: "ask-1",
+          runId: "run-1",
+          control: "control",
+        },
+        requests: [
           {
-            workflowAsk: {
-              control: "control",
-              question: {
-                allowFreeform: false,
-                options: [{ id: "approve", label: "Approve" }],
-              },
-            },
-            runId: "run-1",
-            childContinuationToken: "ask-1",
-            event: REQUEST_EVENT,
+            requestId: "ask-1",
             kind: "question",
+            prompt: "",
+            action: { kind: "tool-call", callId: "ask-1", toolName: "fixture", input: {} },
+            allowFreeform: false,
+            options: [{ id: "approve", label: "Approve" }],
           },
         ],
-      ],
-      forChildContinuationToken: "ask-1",
-      session: createStubSession(),
-    });
+      },
+    ]);
     installSessionStoreMocks([session]);
 
     const result = await routeProxiedDeliverStep({
@@ -574,23 +580,32 @@ describe("routeProxiedDeliverStep", () => {
       principalId: "user-1",
       principalType: "user",
     };
-    const session = seedRelaySession({
-      entries: [
-        [
-          "request-1",
-          { childContinuationToken: "child-token", event: REQUEST_EVENT, kind: "tool-approval" },
-        ],
-        [
-          "request-2",
-          { childContinuationToken: "child-token", event: REQUEST_EVENT, kind: "tool-approval" },
-        ],
-      ],
-      forChildContinuationToken: "child-token",
-      session: createStubSession({
+    const session = withRelayedRequests(
+      createStubSession({
         continuationToken: "parent-token",
         sessionId: "parent-session",
       }),
-    });
+      [
+        {
+          at: REQUEST_EVENT,
+          route: { childContinuationToken: "child-token" },
+          requests: [
+            {
+              requestId: "request-1",
+              kind: "tool-approval",
+              prompt: "",
+              action: { kind: "tool-call", callId: "request-1", toolName: "fixture", input: {} },
+            },
+            {
+              requestId: "request-2",
+              kind: "tool-approval",
+              prompt: "",
+              action: { kind: "tool-call", callId: "request-2", toolName: "fixture", input: {} },
+            },
+          ],
+        },
+      ],
+    );
     installSessionStoreMocks([session]);
 
     const result = await routeProxiedDeliverStep({
@@ -633,29 +648,48 @@ describe("routeProxiedDeliverStep", () => {
       replyTo: { kind: "hook" as const, token: "parent-turn" },
       subagentName: "research",
     };
-    const session = seedRelaySession({
-      entries: [
-        [
-          "child-a",
-          { childContinuationToken: "child-token-a", event: REQUEST_EVENT, kind: "question" },
-        ],
-        [
-          "child-b",
-          { childContinuationToken: "child-token-b", event: REQUEST_EVENT, kind: "question" },
-        ],
-      ],
-      forChildContinuationToken: "child-token-a",
-      session: seedRelaySession({
-        entries: [
-          [
-            "child-b",
-            { childContinuationToken: "child-token-b", event: REQUEST_EVENT, kind: "question" },
+    const session = withRelayedRequests(
+      withRelayedRequests(createStubSession(), [
+        {
+          at: REQUEST_EVENT,
+          route: { childContinuationToken: "child-token-b" },
+          requests: [
+            {
+              requestId: "child-b",
+              kind: "question",
+              prompt: "",
+              action: { kind: "tool-call", callId: "child-b", toolName: "fixture", input: {} },
+            },
           ],
-        ],
-        forChildContinuationToken: "child-token-b",
-        session: createStubSession(),
-      }),
-    });
+        },
+      ]),
+      [
+        {
+          at: REQUEST_EVENT,
+          route: { childContinuationToken: "child-token-a" },
+          requests: [
+            {
+              requestId: "child-a",
+              kind: "question",
+              prompt: "",
+              action: { kind: "tool-call", callId: "child-a", toolName: "fixture", input: {} },
+            },
+          ],
+        },
+        {
+          at: REQUEST_EVENT,
+          route: { childContinuationToken: "child-token-b" },
+          requests: [
+            {
+              requestId: "child-b",
+              kind: "question",
+              prompt: "",
+              action: { kind: "tool-call", callId: "child-b", toolName: "fixture", input: {} },
+            },
+          ],
+        },
+      ],
+    );
     installSessionStoreMocks([session]);
 
     const delivery = {

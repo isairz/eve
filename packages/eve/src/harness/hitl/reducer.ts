@@ -1,5 +1,4 @@
 import { answerBudget, askBudget, stopBudget, withdrawBudget } from "#harness/hitl/budget-rule.js";
-import type { SessionStateMap } from "#harness/types.js";
 
 import {
   answerApprovals,
@@ -16,7 +15,6 @@ import {
   proposeCandidates,
   staleCandidates,
 } from "./approval-candidate.js";
-import type { Command } from "./command.js";
 import { cancelStep, dispatchCalls, ranApproved, takeQueued } from "./held-step.js";
 import type { Phase } from "./host.js";
 import type { Input, PolicyCheck, PolicyRun } from "./input.js";
@@ -35,26 +33,11 @@ import {
   requireAuthorizations,
 } from "./authorization.js";
 import { type HumanInputState, type Reduced, isOpenRelayed } from "./state.js";
-import { readState, store } from "#harness/session-machine/migrate-legacy.js";
 import { typedAnswers } from "./input-typed-reply.js";
 
 // ---------------------------------------------------------------------------
 // The rules: one reducer, (state, input) -> (state, events).
 // ---------------------------------------------------------------------------
-
-/**
- * The rules alone: the session state `input` leaves and the events it
- * reports, with nothing carried out. Only rule tests call this; the runtime
- * commits.
- */
-export function reduceHumanInput(
-  sessionState: SessionStateMap | undefined,
-  input: Input,
-  phase: Phase = "parked",
-): { readonly events: readonly Command[]; readonly state: SessionStateMap | undefined } {
-  const reduced = reduce(readState(sessionState), input, phase, verdictsOf(input));
-  return { events: reduced.events, state: store(sessionState, reduced.state) };
-}
 
 const STEERED_REASON = "Cancelled because a new message arrived.";
 const CANCELLED_REASON = "Cancelled.";

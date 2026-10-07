@@ -26,6 +26,8 @@ export interface StepCoordinates {
  * never reaches the model without its result.
  */
 export interface SuspendedStep {
+  /** Upgrade-only: the asking transcript was already committed before approvals parked. */
+  readonly transcriptCommitted?: true;
   readonly event: StepCoordinates;
   /** The withheld response. Results join it as they arrive. */
   readonly messages: readonly ModelMessage[];

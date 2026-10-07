@@ -23,7 +23,7 @@ export interface AdaptedHumanInput {
   readonly effects: readonly EffectCommand[];
 }
 
-/** Unused until the runtime switches: pure command-to-machine adaptation. */
+/** Pure command-to-machine adaptation shared by runtime and live-seam tests. */
 export function adaptHumanInput(
   view: SessionView,
   decision: HumanInputDecision,

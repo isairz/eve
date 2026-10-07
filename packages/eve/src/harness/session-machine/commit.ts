@@ -77,6 +77,14 @@ export async function applyTransition<T extends Pick<HarnessSessionBase, "state"
   for (const event of transition.events) {
     await publish(event, READS_HISTORY.has(event.type) ? messages : undefined);
   }
+  return saveTransition(session, transition);
+}
+
+/** Save a transition after its events have been published and folded into the projection. */
+export function saveTransition<T extends Pick<HarnessSessionBase, "state" | "limits">>(
+  session: T,
+  transition: Transition,
+): T {
   const state =
     transition.signIns === undefined
       ? session.state

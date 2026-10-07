@@ -13,7 +13,7 @@ import {
   writeTaskTable,
   type TaskTable,
 } from "#execution/tasks/table.js";
-import { seedRelayState } from "#internal/testing/relay-routing.js";
+import { withRelayedRequests } from "#internal/testing/session-machine.js";
 import type { HarnessSession } from "#harness/types.js";
 import { withPublished } from "#internal/testing/session-machine.js";
 import { createInputRequestedEvent } from "#protocol/message.js";
@@ -215,21 +215,23 @@ function withQuestion(session: DurableSession, runId: string): DurableSession {
       ...REQUEST_EVENT,
     }),
   ]);
-  const state = seedRelayState({
-    entries: [
-      [
-        requestId,
+  const state = withRelayedRequests({ state: session.state }, [
+    {
+      at: REQUEST_EVENT,
+      route: {
+        childContinuationToken: requestId,
+        runId: runId,
+        control: `${runId}-control`,
+      },
+      requests: [
         {
-          childContinuationToken: requestId,
-          event: REQUEST_EVENT,
+          requestId: requestId,
           kind: "question",
-          runId,
-          workflowAsk: { control: `${runId}-control`, question: {} },
+          prompt: "",
+          action: { kind: "tool-call", callId: requestId, toolName: "fixture", input: {} },
         },
       ],
-    ],
-    forChildContinuationToken: requestId,
-    state: session.state,
-  });
+    },
+  ]).state;
   return { ...session, state };
 }

@@ -1,8 +1,6 @@
-import { STATE_KEY, LEGACY_BATCH_KEY } from "#harness/session-machine/migrate-legacy.js";
 import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
 
-import { HumanInput, reduceHumanInput } from "#harness/hitl/human-input.js";
 import {
   AT,
   Turn,
@@ -18,8 +16,6 @@ import {
 // One model step can make calls that wait on a person (approvals, authorizations)
 // and calls that run as runtime work (`build`, a workflow tool). The step is
 // held out of history, in one place, until every call it made has a result.
-
-const LEGACY_KEY = LEGACY_BATCH_KEY;
 
 const buildTask = {
   callId: "call-build",
@@ -201,94 +197,5 @@ describe("a model step held on runtime calls and a person", () => {
     // A cancel drops it with the turn, before or after the calls join.
     expect(approved.input(cancel).reported("resumeInput")).toEqual([]);
     expect(settled.stored().input(cancel).stored().humanInput.hasQueuedInput()).toBe(false);
-  });
-});
-
-describe("a session parked on runtime calls under the old coordination key", () => {
-  const legacyBatch = {
-    event: AT,
-    followingInput: { message: "Then tell me." },
-    responseMessages: response(call("call-build", "build")),
-    tasks: [buildTask],
-  };
-
-  it("reads as the held step, and the next commit moves it there", () => {
-    const state = { [LEGACY_KEY]: legacyBatch };
-
-    expect(HumanInput.read(state).runtimeCalls()).toEqual({
-      at: AT,
-      calls: [{ callId: "call-build", toolName: "build", waitsOn: "runtime" }],
-      taskToolCalls: [],
-      tasks: [buildTask],
-    });
-
-    const settled = reduceHumanInput(state, { results: [built], type: "actions.settled" });
-    expect(settled.state?.[LEGACY_KEY]).toBeUndefined();
-    expect(settled.events).toEqual([
-      ...legacyBatch.responseMessages.map((m) => ({ message: m, type: "appendHistory" })),
-      { message: built, type: "appendHistory" },
-    ]);
-    expect(reduceHumanInput(settled.state, { type: "input.resumed" }, "pre-step").events).toEqual([
-      { input: { message: "Then tell me." }, type: "resumeInput" },
-    ]);
-  });
-
-  it("joins the approvals' step it parked beside, whose response the batch held", () => {
-    const messages = response(call("call-deploy", "deploy"), call("call-build", "build"));
-    // Before, the approvals' step was empty while the batch held its response.
-    const held = Turn.idle().input(approvalsRequested([approval("deploy")], { messages: [] }));
-    const state = {
-      ...held.stored().state,
-      [LEGACY_KEY]: { ...legacyBatch, responseMessages: messages },
-    };
-
-    const read = HumanInput.read(state);
-    expect(read.heldMessages()).toEqual(messages);
-    expect(read.heldCalls()?.calls.map((c) => [c.callId, c.waitsOn])).toEqual([
-      ["call-build", "runtime"],
-      ["call-deploy", "person"],
-    ]);
-
-    const cancelled = reduceHumanInput(state, cancel);
-    expect(
-      unpaired(cancelled.events.flatMap((e) => (e.type === "appendHistory" ? [e.message] : []))),
-    ).toEqual([]);
-  });
-
-  it("cancels an approval parked with its call already in history, answering the call as not run", () => {
-    // Before steps were held out of history, the asking step joined history
-    // and only the approval was stored.
-    const asked = Turn.idle()
-      .input(approvalsRequested([approval("deploy")]))
-      .stored();
-    const { held: _held, ...stored } = asked.state![STATE_KEY] as Record<string, unknown>;
-    const history = response(call("call-deploy", "deploy"));
-
-    const cancelled = reduceHumanInput({ [STATE_KEY]: stored }, cancel);
-    const appended = cancelled.events.flatMap((e) =>
-      e.type === "appendHistory" ? [e.message] : [],
-    );
-
-    expect(unpaired([...history, ...appended])).toEqual([]);
-    expect(appended).toEqual([
-      {
-        content: [
-          {
-            output: { reason: "Cancelled before anyone answered.", type: "execution-denied" },
-            toolCallId: "call-deploy",
-            toolName: "deploy",
-            type: "tool-result",
-          },
-        ],
-        role: "tool",
-      },
-    ]);
-  });
-
-  it("counts as a held step even when it can't be read, so the session isn't idle", () => {
-    const read = HumanInput.read({ [LEGACY_KEY]: { callId: "old" } });
-
-    expect(read.runtimeCalls()).toBeUndefined();
-    expect(read.holdsStep()).toBe(true);
   });
 });

@@ -3,11 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { HarnessSession, SessionStateMap } from "#harness/types.js";
 import { readDurableSession } from "#execution/durable-session-store.js";
 import { settleCancelledTurnStep } from "#execution/settle-cancelled-turn-step.js";
-import {
-  getRelayedRequests,
-  seedRelayState,
-  type LegacyRelayFixture,
-} from "#internal/testing/relay-routing.js";
+import { getRelayedRequests, withRelayedRequests } from "#internal/testing/session-machine.js";
 import { filterEventsByType } from "#internal/testing/events.js";
 import { createInputRequestedEvent, type MessageStreamEvent } from "#protocol/message.js";
 import type { InputRequest } from "#shared/input.js";
@@ -113,7 +109,7 @@ describe("settleCancelledTurnStep", () => {
       relay(base.snapshot.session.state, "deploy-run-ask-1", {
         kind: "question",
         runId: "deploy-run",
-        workflowAsk: { control: "deploy-run-control", question: {} },
+        control: "deploy-run-control",
       }),
       "reviewer-approval-1",
       { kind: "tool-approval" },
@@ -146,7 +142,11 @@ describe("settleCancelledTurnStep", () => {
 function relay(
   state: SessionStateMap | undefined,
   requestId: string,
-  route: Pick<LegacyRelayFixture, "kind" | "runId" | "workflowAsk">,
+  route: {
+    readonly kind: InputRequest["kind"];
+    readonly runId?: string;
+    readonly control?: string;
+  },
 ): SessionStateMap | undefined {
   const event = { sequence: 2, stepIndex: 0, turnId: "turn_1" };
   const request: InputRequest = {
@@ -158,11 +158,9 @@ function relay(
   const published = withPublished({ ...openSession, state }, [
     createInputRequestedEvent({ callId: `${requestId}-served`, requests: [request], ...event }),
   ]);
-  return seedRelayState({
-    entries: [[requestId, { ...route, childContinuationToken: requestId, event }]],
-    forChildContinuationToken: requestId,
-    state: published.state,
-  });
+  return withRelayedRequests({ state: published.state }, [
+    { at: event, requests: [request], route: { ...route, childContinuationToken: requestId } },
+  ]).state;
 }
 
 const openSession: HarnessSession = {

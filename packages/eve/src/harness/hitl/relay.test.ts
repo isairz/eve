@@ -1,6 +1,7 @@
+import { decideRelayDelivery } from "#internal/testing/session-machine.js";
 import { describe, expect, it } from "vitest";
 
-import type { Input, RelayRoute, RequestAt } from "#harness/hitl/human-input.js";
+import type { Input, RelayRoute, RequestAt } from "#harness/hitl/input.js";
 import {
   BUDGET_QUESTION,
   Turn,
@@ -326,4 +327,81 @@ describe("a child's authorization, relayed", () => {
     expect(otherRunEnded.storesNothing()).toBe(false);
     expect(cancelled.storesNothing()).toBe(true);
   });
+});
+
+it("keeps distinct input batches for one remote session separate", () => {
+  let turn = Turn.idle();
+  const names = ["alice", "bob"];
+  const responses = names.map((name, index) => ({
+    requestId: `ask-${name}`,
+    text: ["lantern", "comet"][index]!,
+  }));
+  const remote = {
+    name: "remote-child",
+    url: "https://remote.example",
+    sessionId: "remote-session",
+  };
+  for (const [index, name] of names.entries()) {
+    turn = relayed([question(`ask-${name}`, true)], {
+      from: turn,
+      at: { sequence: index, stepIndex: index + 1, turnId: `turn-${name}` },
+      route: { childContinuationToken: "remote-inbox", inputSource: `workflow-${name}`, remote },
+    });
+  }
+  const answered = turn.stored().input(delivered(responses));
+  expect(forwarded(answered)).toEqual(
+    names.map((name, index) => ({
+      route: { childContinuationToken: "remote-inbox", inputSource: `workflow-${name}`, remote },
+      responses: [responses[index]],
+    })),
+  );
+  expect(answered.published("input.resolved").map((event) => event.data)).toEqual(
+    names.map((name, index) => ({
+      sequence: index,
+      stepIndex: index + 1,
+      turnId: `turn-${name}`,
+      resolutions: [
+        {
+          kind: "question",
+          outcome: "answered",
+          requestId: `ask-${name}`,
+          response: responses[index],
+        },
+      ],
+    })),
+  );
+});
+
+it("leaves unknown answers and unrelated delivery fields available to intake", () => {
+  const payload = {
+    message: "hello",
+    customField: { foo: 1 },
+    inputResponses: [{ requestId: "unknown", text: "stray" }],
+  };
+  const before = structuredClone(payload);
+  const decision = decideRelayDelivery({ payload });
+  expect(decision.effects).toEqual([]);
+  expect(decision.transition.events).toEqual([]);
+  expect(decision.decision.commands).toEqual([]);
+  expect(payload).toEqual(before);
+});
+
+it("a claimed request id changes its route without removing another child's request", () => {
+  const alice = { childContinuationToken: "child-a" };
+  const bob = { childContinuationToken: "child-b" };
+  const turn = relayed([approval("deploy", "req-1")], {
+    from: relayed([question("req-1"), question("req-2")], { route: alice }),
+    route: bob,
+  }).stored();
+  expect(turn.humanInput.relayedRequestIds()).toEqual(new Set(["req-1", "req-2"]));
+  const answered = turn.input(
+    delivered([
+      { requestId: "req-1", optionId: "approve" },
+      { requestId: "req-2", optionId: "staging" },
+    ]),
+  );
+  expect(forwarded(answered)).toEqual([
+    { route: bob, responses: [{ requestId: "req-1", optionId: "approve" }] },
+    { route: alice, responses: [{ requestId: "req-2", optionId: "staging" }] },
+  ]);
 });

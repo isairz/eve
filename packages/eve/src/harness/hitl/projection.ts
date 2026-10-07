@@ -77,7 +77,8 @@ export function projectHumanInput(view: SessionView, step?: SuspendedStep): Huma
     }
   }
   const held: HeldStep | undefined =
-    step === undefined
+    step === undefined ||
+    (step.transcriptCommitted === true && step.tasks.length === 0 && step.approved === undefined)
       ? undefined
       : {
           at: step.event,

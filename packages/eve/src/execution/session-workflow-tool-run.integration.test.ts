@@ -11,7 +11,7 @@ import {
   writeTaskTable,
 } from "#execution/tasks/table.js";
 import type { WorkflowToolRunRef } from "#execution/tools/workflow/messages.js";
-import { getRelayedRequests } from "#internal/testing/relay-routing.js";
+import { getRelayedRequests } from "#internal/testing/session-machine.js";
 import { createTestRuntime } from "#internal/testing/app-harness.js";
 import { containsEventSequence, filterEventsByType } from "#internal/testing/events.js";
 import { createTestSessionState } from "#internal/testing/session-state.js";
