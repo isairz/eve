@@ -29,6 +29,17 @@ const base = e2eAgentConfig({
       if (request.tools.length === 0) return "Alice asked for the colors of the rendered stripes.";
       const colors = promptStripeColors(request);
       if (colors !== undefined) return colors.join(", ");
+      // This turn already ran a tool, yet no image reached the prompt. Calling
+      // it again can't help, so fail the turn now instead of looping until the
+      // job times out.
+      const roles = request.messages.map((message) => message.role);
+      if (roles.lastIndexOf("tool") > roles.lastIndexOf("user")) {
+        const last = request.toolResults.at(-1);
+        throw new Error(
+          `The ${last?.name ?? "tool"} result reached the prompt without its image ` +
+            `(output: ${String(JSON.stringify(last?.output)).slice(0, 200)}).`,
+        );
+      }
       if (request.lastUserMessage?.includes("`render-stripes` exactly once")) {
         return { toolCalls: [{ name: "render-stripes", input: {} }] };
       }
