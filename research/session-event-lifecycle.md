@@ -206,7 +206,7 @@ Terminal outcome sets are closed for the life of the major version:
 | `context-change.started` | Context change | Introduces           | `compaction.requested`; **new** for a clear                     |
 | `context-change.settled` | Context change | Terminal             | `compaction.completed`, `context.cleared`                       |
 
-`session.waiting` leaves the stream. Readers ask the `idle` selector instead, and hooks and channels keep a derived `session.waiting` notification ([Observers](#observers-hooks-and-channels)).
+`session.waiting` goes away, from the stream and from hooks and channels. Readers ask the `idle` selector instead, and observers key on the fact that ends the work ([Observers](#observers-hooks-and-channels)).
 
 ### Why the new types exist
 
@@ -228,7 +228,7 @@ v26                              v27
 session.started ───────────────▶ session.started        parent?: {sessionId, callId}
 session.completed ─┬───────────▶ session.ended          {completed | failed}
 session.failed ────┘
-session.waiting ───────────────▶ ✕ off the stream: the idle selector; a derived hook and channel notification
+session.waiting ───────────────▶ ✕ removed: the idle selector; observers use delivery.settled, turn.settled, or idle(ctx.view)
 (meta.deliveryIds) ────────────▶ delivery.accepted · delivery.consumed · delivery.settled
 message.received ──────────────▶ delivery.consumed      {turnId, parts}
 
@@ -713,7 +713,14 @@ The channel handler's third argument becomes an observer-only subtype of `Sessio
 
 - **`ctx.view` reflects the whole commit.** A handler for `interaction.settled` sees the call already settled when the same commit settles it. Handlers read what changed from the fact, and where things stand from `ctx.view`.
 - **Order per commit:** write, then channel handlers, then hooks, synchronously. Today channels run before the write, so a channel could post about an event whose write then failed. Progress goes to channels live.
-- **`session.waiting` becomes a derived notification.** Hooks and channels keep the key, with the same data (`usage`, `continuationToken`). It fires after a commit that turns the `idle` selector true, and it's documented as not being a stream fact. It no longer fires while a sign-in callback is outstanding; readers already skipped it then. Adapters stop shaping written events: the continuation token is computed before the write.
+- **Observers see only facts.** `session.waiting` goes away for hooks and channels too, rather than surviving as a notification that isn't a line. What it signalled comes from facts and the view:
+  - "the response to this message is done": `delivery.settled`;
+  - "the turn is over": `turn.settled` or `turn.paused`;
+  - "nothing is running": `idle(ctx.view)`, checked in the handler for the fact that ends the work;
+  - its data: `usage` is a selector, and channel handlers already get the continuation token on their `channel` argument (`channel.continuation`).
+
+  An authored handler keyed on `session.waiting` fails the build with that guidance. Adapters stop shaping written events.
+
 - **What observers can rely on:**
   - **Invocation, not delivery.** Observers run for every fact, in order, and a handler that throws is logged and counts as invoked. eve doesn't guarantee that an external effect succeeded, or happened only once.
   - **Recovery after a step retry.** The order gives an implicit cursor: if line N+1 exists, line N's observers ran. A retried step re-dispatches only the last line it recovers, with that commit's view, so at most one invocation repeats.
@@ -950,7 +957,7 @@ const emit = async (event) => {
 // publish: await dispatcher.runHooks(await emit(event));
 ```
 
-**With v27.** The publisher writes a whole transition as one line, counts it in the projection, then runs channel handlers and hooks with `ctx.view` and `ctx.position`. Relay forwarding moves to an execution effect after the write. The `session.waiting` notification comes from the idle selector rather than an event.
+**With v27.** The publisher writes a whole transition as one line, counts it in the projection, then runs channel handlers and hooks with `ctx.view` and `ctx.position`. Relay forwarding moves to an execution effect after the write, and nothing reshapes what's written.
 
 </details>
 
@@ -1087,7 +1094,7 @@ The participant-point pipeline from [`dynamic-participant-points.md`](./dynamic-
 
 ```text
 envelope · positions · catch-up · transport endings
- ├─ observer context and the derived session.waiting
+ ├─ observer context; session.waiting removed
  ├─ session · turn · model run
  │    └─ content · reply · files
  │         └─ calls · tasks
@@ -1144,7 +1151,7 @@ This is an estimate from reading `main` at `285d4e09b`, to within a few hundred 
 | -------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ---- |
 | Contract                   | `protocol/message.ts` 2,018 lines with 34 builders; event IDs and dedupe 60                    | Zod schemas for 28 types, envelope, runtime catalog, checker; builders become typed literals at owners       | −900 |
 | Emitters                   | 87 builder calls in 18 files; coordinate plumbing                                              | Scope stamped centrally; run and part IDs; no `sequence` or `stepIndex`                                      | −100 |
-| Publisher                  | `publish-session-events.ts` 511, ordered emitter 278                                           | A commit as one line; position counter; write → channels → hooks; observer `ctx`; derived notification       | +100 |
+| Publisher                  | `publish-session-events.ts` 511, ordered emitter 278                                           | A commit as one line; position counter; write → channels → hooks; observer `ctx`; no `session.waiting`       | +100 |
 | Route and transport        | `eve-channel/request.ts` 684, `open-stream.ts` 387, `ndjson.ts` 162                            | Catch-up filtering with markers; `stream.ended`; idle budget and version branches removed                    | +70  |
 | Deliveries                 | Delivery-ID stamping; controls without auth                                                    | Three facts, the settle rule, `ignored` and `refused`, controls with ID and auth, settling at session end    | +380 |
 | Calls, tasks, turn closure | Cancel paths repair history only                                                               | `call.delegated`, `task.ended`, `outputOf`, `turn.resumed`, interrupted parts, best-effort settlement        | +180 |
