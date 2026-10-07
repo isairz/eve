@@ -35,6 +35,7 @@ function fixture() {
     sessionToken: "not-forwarded-either",
   };
   let failure: { path: string; status: number } | undefined;
+  let deleteFailure: Error | undefined;
   const sandbox = {
     async run(options: Parameters<SandboxSession["run"]>[0]) {
       commands.push(options);
@@ -52,6 +53,7 @@ function fixture() {
   const handle: SandboxProviderHandle = {
     sandbox,
     async onSessionDelete() {
+      if (deleteFailure) throw deleteFailure;
       lifecycle.push("delete");
     },
     async onSessionStop() {
@@ -104,6 +106,9 @@ function fixture() {
     },
     fail: (path: string, status: number) => {
       failure = { path, status };
+    },
+    failDelete: (error: Error) => {
+      deleteFailure = error;
     },
   };
 }
@@ -167,10 +172,11 @@ test("missing human GitHub credentials fail before any command and revoke a new 
   await assert.rejects(f.start(), /Login Connections/);
   assert.equal(f.commands.length, 0);
   assert.equal(f.requests.at(-1)?.method, "DELETE");
-  assert.deepEqual(f.lifecycle, ["stop"]);
+  // No state is persisted for a failed start, so nothing could clean up later.
+  assert.deepEqual(f.lifecycle, ["delete"]);
 });
 
-test("a failed reconnect preserves the registration and workspace and hides provider error bodies", async () => {
+test("a failed reconnect stops but preserves the registration and workspace and hides provider error bodies", async () => {
   const f = fixture();
   f.fail("/v1/devbox/register", 403);
   await assert.rejects(f.resume({ ...started, devboxId: "devbox_owner" }), {
@@ -203,12 +209,41 @@ test("deletion revokes the Devbox record first, accepts already deleted, and per
   assert.deepEqual(f.lifecycle, ["delete"]);
 });
 
-test("setup rejection stops compute without exposing the provider body", async () => {
+test("failed fresh setup deletes new compute without exposing the provider body", async () => {
   const f = fixture();
   f.fail("/v1/devbox/setup", 403);
   await assert.rejects(f.start(), {
     message: "Devbox credential request failed (403).",
   });
   assert.equal(f.requests.length, 1);
-  assert.deepEqual(f.lifecycle, ["stop"]);
+  assert.deepEqual(f.lifecycle, ["delete"]);
+});
+
+test("failed fresh registration leaves neither compute nor registration", async () => {
+  const f = fixture();
+  f.fail("/v1/devbox/register", 403);
+  await assert.rejects(f.start(), { message: "Devbox credential request failed (403)." });
+  assert.deepEqual(
+    f.requests.map(({ method, path }) => `${method} ${path}`),
+    ["POST /v1/devbox/setup", "POST /v1/devbox/register", "DELETE /v1/devbox/devbox_owner"],
+  );
+  assert.deepEqual(f.lifecycle, ["delete"]);
+});
+
+test("cleanup failures stay visible alongside the original failure", async () => {
+  const f = fixture();
+  f.setCredentials({ vercelToken: "owner-vercel" });
+  f.failDelete(new Error("compute delete failed"));
+  await assert.rejects(f.start(), (error: unknown) => {
+    assert.ok(error instanceof AggregateError);
+    assert.match(error.message, /Login Connections/);
+    assert.deepEqual(
+      error.errors.map((entry: Error) => entry.message),
+      [
+        "Connect GitHub in your Vercel account's Login Connections, then retry.",
+        "compute delete failed",
+      ],
+    );
+    return true;
+  });
 });

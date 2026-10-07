@@ -91,12 +91,26 @@ export function withDevboxCredentials(
         state: { sandboxName: state.sandboxName, version: state.version, devboxId },
       };
     } catch (error) {
-      // A failed reconnect must preserve the user's existing workspace.
-      // A new registration is disposable and must not survive failed setup.
-      try {
-        if (!previousId && devboxId) await remove();
-      } finally {
-        await handle.onSessionStop();
+      // eve persists provider state only after start() returns, so a failed fresh
+      // start must delete its new sandbox and registration: nothing could clean
+      // them up later. A failed reconnect preserves both for the next attempt.
+      const cleanup = previousId
+        ? [() => handle.onSessionStop()]
+        : [async () => devboxId && (await remove()), () => handle.onSessionDelete()];
+      const failures: unknown[] = [];
+      for (const step of cleanup) {
+        try {
+          await step();
+        } catch (cleanupError) {
+          failures.push(cleanupError);
+        }
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(
+          [error, ...failures],
+          `Managed Git sandbox setup and cleanup both failed: ${errorMessage(error)}`,
+          { cause: error },
+        );
       }
       throw error;
     }
@@ -107,7 +121,15 @@ export function withDevboxCredentials(
     async start(context, options, artifact) {
       const auth = resolveAuth();
       const started = await provider.start(context, options, artifact);
-      return await attach(started.handle, requireState(started.state), auth);
+      let state: ManagedGitSessionState;
+      try {
+        state = requireState(started.state);
+      } catch (error) {
+        await started.handle.onSessionDelete();
+        throw error;
+      }
+      // A fresh start never carries a Devbox identity.
+      return await attach(started.handle, { sandboxName: state.sandboxName, version: 3 }, auth);
     },
     async resume(context, artifact, value) {
       const auth = resolveAuth();
@@ -118,6 +140,10 @@ export function withDevboxCredentials(
       return (await attach(handle, state, auth)).handle;
     },
   };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function requiredString(response: Record<string, unknown>, key: string): string {
