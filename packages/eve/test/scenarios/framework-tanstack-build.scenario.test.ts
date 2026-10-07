@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -65,6 +65,10 @@ describe("framework-tanstack build", () => {
         route.src === "^/eve/v1/(.*)$" &&
         "destination" in route,
     );
+    const userCatchAllIndex = routes.findIndex(
+      (route) =>
+        typeof route === "object" && route !== null && "src" in route && route.src === "/(.*)",
+    );
     const filesystemIndex = routes.findIndex(
       (route) =>
         typeof route === "object" &&
@@ -79,6 +83,8 @@ describe("framework-tanstack build", () => {
         src: "^/eve/v1/(.*)$",
       }),
     );
+    expect(userCatchAllIndex).not.toBe(-1);
+    expect(eveRouteIndex).toBeLessThan(userCatchAllIndex);
     expect(filesystemIndex).not.toBe(-1);
     expect(eveRouteIndex).toBeLessThan(filesystemIndex);
     expect(services.eve).toEqual(
@@ -99,8 +105,17 @@ describe("framework-tanstack build", () => {
       cwd: app.appRoot,
     });
 
-    await expect(
-      readFile(join(app.appRoot, ".output", "server", "index.mjs"), "utf8"),
-    ).resolves.toEqual(expect.any(String));
+    const serverRoot = join(app.appRoot, ".output", "server");
+    await expect(readFile(join(serverRoot, "index.mjs"), "utf8")).resolves.toEqual(
+      expect.any(String),
+    );
+
+    // Building through the host's Vite config would bundle TanStack Start's
+    // SSR output into eve's server.
+    const serverEntries = await readdir(serverRoot);
+    expect(serverEntries).not.toContain("_ssr");
+    expect(serverEntries.filter((entry) => entry.startsWith("_tanstack-start-manifest"))).toEqual(
+      [],
+    );
   }, 300_000);
 });

@@ -462,11 +462,13 @@ export async function runAddCommand(
   return runRegistryAction(logger, appRoot, async () => {
     const address = itemAddress(item);
     const projectRoot =
-      address === itemAddress("channel/web")
-        ? await prepareWebChatProjectRoot(appRoot)
-        : address === itemAddress("channel/tanstack")
-          ? await prepareWebChatProjectRoot(appRoot, "tanstack")
-          : appRoot;
+      options.skipInstall === true
+        ? appRoot
+        : address === itemAddress("channel/web")
+          ? await prepareWebChatProjectRoot(appRoot)
+          : address === itemAddress("channel/tanstack")
+            ? await prepareWebChatProjectRoot(appRoot, "tanstack")
+            : appRoot;
     const config = await readEveRegistryConfig(appRoot);
     if (options.skipInstall === true) {
       if (options.overwrite === true) {

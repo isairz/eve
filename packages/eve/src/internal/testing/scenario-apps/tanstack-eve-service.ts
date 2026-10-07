@@ -19,7 +19,8 @@ interface TanStackEveServiceDescriptorOptions {
 
 /**
  * A TanStack Start host with a generated eve Vercel service. The agent lives
- * in the host root, next to the `vite.config.ts` that registers `nitro()`.
+ * in the host root, next to the `vite.config.ts` that registers `nitro()`
+ * with a user catch-all route that must not shadow eve's route.
  */
 export function createTanStackEveServiceDescriptor(
   options: TanStackEveServiceDescriptorOptions = {},
@@ -88,7 +89,14 @@ import { eveTanStack } from "eve/tanstack";
 import { nitro } from "nitro/vite";
 import { defineConfig } from "vite";
 
-export default defineConfig({ plugins: [eveTanStack(), tanstackStart(), viteReact(), nitro()] });
+export default defineConfig({
+  plugins: [
+    eveTanStack(),
+    tanstackStart(),
+    viteReact(),
+    nitro({ vercel: { config: { routes: [{ src: "/(.*)", dest: "/" }] } } }),
+  ],
+});
 `,
     },
     installDependencies: options.installDependencies,

@@ -27,6 +27,9 @@ function deps(): WebSetupDeps {
       kind: "standalone",
     })),
     writeTextFile: vi.fn(async () => {}),
+    prepareWebAuthScaffold: vi.fn<WebSetupDeps["prepareWebAuthScaffold"]>(),
+    provisionWebChatAuth: vi.fn<WebSetupDeps["provisionWebChatAuth"]>(),
+    installScaffoldDependencies: vi.fn<WebSetupDeps["installScaffoldDependencies"]>(),
   };
 }
 
