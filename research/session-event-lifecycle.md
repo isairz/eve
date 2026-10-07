@@ -34,6 +34,20 @@ This proposal replaces the vocabulary at the next stream-version break (v27). Th
 
 The catalog has 28 types (25 facts and 3 progress types), down from 34. Compatibility is cut on purpose: v27 clients read v27 streams only, and sessions don't cross the break.
 
+### Where the contract lives
+
+Today the event contract has no single home. Its pieces are spread across the package, and several readers re-derive parts of it:
+
+| Piece              | Today                                                                                                                                                                                                                     | With this proposal                                                                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Types and encoding | `protocol/message.ts` (2,018 lines): types, 34 builders, encoding, headers. `message-version.ts` normalizes v21–v26, and `event-id.ts` and `event-dedupe.ts` handle `meta.id`                                             | `protocol/session-events/`: Zod schemas per family, the envelope, a runtime catalog, and a checker. Producers build typed literals, and old versions are deleted      |
+| Lifecycle state    | The server projection (`protocol/session-projection.ts`) and the client reducers (`message-reducer*.ts`, `conversation-reducer.ts`) fold separately. `TurnSegment` and `message-response.ts` add their own boundary rules | One public fold with typed tables and selectors, shared by client and server                                                                                          |
+| Readers' own folds | Telegram's sign-in lookup, the invocation API's 64-event window, evals (`derive-run-facts.ts`), ACP, and the TUI                                                                                                          | Selectors over the shared fold                                                                                                                                        |
+| Authoring surfaces | Hook and channel event maps (`public/definitions/`); dynamic resolver and memory keys reuse event names                                                                                                                   | Hook and channel maps type-checked against the catalog; resolver keys move to participant points ([`dynamic-participant-points.md`](./dynamic-participant-points.md)) |
+| Parent–child relay | `subagents/callback-route.ts` re-declares v26 event shapes with strict schemas                                                                                                                                            | Its own tolerant relay contract, keyed by child IDs                                                                                                                   |
+
+After the break, a new fact or field touches one family module. The checker, the old-reader conformance test, and `extension-contracts` catch drift ([The contract module](#the-contract-module), [Evolving safely after 1.0](#evolving-safely-after-10)).
+
 ### What the current model leaves out
 
 #### A response's end is guessed
@@ -518,7 +532,7 @@ context-change.settled  { changeId, outcome, selects?, error? }
 
 ### Example: a declined approval
 
-One line per commit or progress record; scopes are omitted.
+One line per commit or progress record; scopes are omitted. [Wire format](#wire-format) shows lines 6 and 8 as stored.
 
 ```text
 0 facts     delivery.accepted   {deliveryId: d1, principal}
@@ -573,7 +587,29 @@ session.waiting    {usage, continuationToken}            ← the reader decides 
 
 ## How events move through the system
 
-### Stream lines and positions
+### Wire format
+
+**Transport.** The stream route serves NDJSON over HTTP, as today: UTF-8, one JSON record per line, as `application/x-ndjson; charset=utf-8`. The parameters and headers below keep their names and only the version changes. The `streamControlVersion` parameter goes away, because v27 clients always understand control records.
+
+| Parameter or header                  | Meaning                                                               |
+| ------------------------------------ | --------------------------------------------------------------------- |
+| `startIndex` (query)                 | The position to read from. A negative value counts back from the tail |
+| `includeTailIndex` (query)           | Asks for the tail position at open, for bounded reads                 |
+| `x-eve-stream-version` (response)    | `27`                                                                  |
+| `x-eve-stream-format` (response)     | `ndjson`                                                              |
+| `x-eve-session-id` (response)        | The session                                                           |
+| `x-eve-stream-tail-index` (response) | The tail position when the read opened, if asked                      |
+
+**Four kinds of record.** Readers tell them apart by key.
+
+| Record           | Key                | Stored and counted | Written by                         |
+| ---------------- | ------------------ | ------------------ | ---------------------------------- |
+| Commit           | `facts`            | Yes                | The writer, once per transition    |
+| Progress         | `progress`         | Yes                | The writer, as output streams      |
+| Transport record | `$eve`             | No                 | The stream route                   |
+| Heartbeat        | None: a blank line | No                 | The stream route, every 10 seconds |
+
+Readers ignore `$eve` records they don't recognize, so new ones ship as minors.
 
 ```ts
 type StoredLine =
@@ -597,20 +633,66 @@ interface Scope {
 }
 ```
 
+**Fields:**
+
+- **`at`** is the commit's timestamp: ISO 8601 in UTC, stamped by the writer when it writes the line. Every fact in the commit shares it. It's for display and durations, never ordering: positions order lines, steps run on different machines, and a retried step stamps a new time. Progress carries no timestamp; readers that time deltas, such as time to first token, use arrival time or instrumentation.
+- **`facts`** is always an array, even with one fact. Facts are in order, so a fact may reference an entity introduced earlier in the same line.
+- **`type`** is `family.verb`, with exactly one dot. A multi-word family is hyphenated, as in `context-change`.
+- **`scope`** is stamped by the publisher from the entity's owners: its turn, task, and model run. Owners never change, so scope never goes stale. It lets readers that don't fold, such as log pipelines and eval matchers, place a fact.
+- **`data`** is the payload ([Payloads by family](#payloads-by-family)).
+
+<details>
+<summary>Lines 6 and 8 of the declined approval, as stored</summary>
+
+Wrapped for reading; on the wire, each record is one line. `…` marks fields left out here.
+
+```text
+// Line 6: one commit, four facts
+{"at": "2026-10-07T21:04:11.912Z",
+ "facts": [
+   {"type": "delivery.accepted",
+    "data": {"deliveryId": "d2", "principal": …}},
+   {"type": "interaction.settled", "scope": {"turnId": "t1", "runId": "r1"},
+    "data": {"interactionId": "i1", "outcome": "declined", "cause": {"deliveryId": "d2"}}},
+   {"type": "call.settled", "scope": {"turnId": "t1", "runId": "r1"},
+    "data": {"callId": "c1", "outcome": "rejected", "cause": {"interactionId": "i1"}}},
+   {"type": "turn.resumed", "scope": {"turnId": "t1"},
+    "data": {"turnId": "t1", "cause": {"deliveryId": "d2"}}}
+ ]}
+
+// Line 8: progress that announces a text part
+{"progress": {"type": "content.delta", "scope": {"turnId": "t1", "runId": "r2"},
+              "data": {"partId": "p1", "kind": "text", "delta": "Understood, I won't deploy."}}}
+
+// A later delta for the same part would be minimal
+{"progress": {"type": "content.delta", "data": {"partId": "p1", "delta": " Anything else?"}}}
+
+// What a catch-up read sends instead of line 8, since p1 completed at line 9
+{"$eve": "position", "next": 9}
+```
+
+</details>
+
+**Positions:**
+
 - **A line is one stored chunk.** The writer stores one chunk per write, so a commit is atomic on the stream: a crash leaves the whole commit or none of it.
 - **A position** is a line's zero-based index in the session's stream: the number of lines stored before it.
   - Positions are immutable and never reused, even under a future retention policy.
   - Every fact in a commit shares its line's position. A fact's identity is the session, the position, and its index within the line.
   - Positions are Workflow chunk indexes, the same values as `startIndex`.
-- **Nothing on a line repeats the position.** Lines carry no position field, and facts carry no event IDs; `meta.id` and `meta.deliveryIds` go away. Clients count lines, as they do today. The deduper becomes `position > last`, which handles reconnect overlap and merging a cached log.
+- **Nothing on a line repeats the position.** Lines carry no position field, and facts carry no event IDs; `meta.id` and `meta.deliveryIds` go away. Clients count lines, as they do today. The deduper becomes `position > last`, which handles reconnect overlap and merging a cached log. An app that caches lines stores each line's position with it.
 - **The writer counts too.** The session projection that every publishing step saves gains a line counter, so every checkpoint, including a handoff checkpoint, knows its exact position without reading the stream. That gives observers `ctx.position` and gives retries a starting point.
-- **`scope`** is stamped by the publisher from the entity's owners: its turn, task, and model run. Owners never change, so scope never goes stale. It lets readers that don't fold, such as log pipelines and eval matchers, place a fact.
-- **Progress rules:**
-  1. The first progress record for an entity announces it, with its kind or name and scope. Later records are minimal (`{partId, delta}`).
-  2. Delta granularity is unspecified, and consecutive records may be merged, so coalescing is a producer change (#3701).
-  3. Any progress may be absent. Completing facts always carry the full value.
-  4. Progress for an entity known to be closed is ignored; so is a minimal delta for an unknown entity.
-  5. Previews live outside the lifecycle tables.
+
+**Progress rules:**
+
+1. The first progress record for an entity announces it, with its kind or name and scope. Later records are minimal (`{partId, delta}`).
+2. Delta granularity is unspecified, and consecutive records may be merged, so coalescing is a producer change (#3701).
+3. Any progress may be absent. Completing facts always carry the full value.
+4. Progress for an entity known to be closed is ignored; so is a minimal delta for an unknown entity.
+5. Previews live outside the lifecycle tables.
+
+**Size and duplicates:**
+
 - **Envelope cost matters,** because progress dominates line counts. A five-character delta costs 233 bytes as v26 `message.appended` and about 105 as minimal v27 progress.
 - **Line size.** A commit can't be split without losing atomicity, so the publisher caps lines below the platform's per-chunk limit (10 MiB over the WebSocket writer). Because each call settles in its own commit, no line grows beyond today's largest event.
 - **Duplicates.** A chunk that a transport retry writes twice now shows up at two positions, where the client's `meta.id` deduper used to catch it. On Vercel the WebSocket writer, enabled since the Workflow 5.1 upgrade (#4456), dedupes resends by writer and sequence. The HTTP fallback can still duplicate a multi-page batch after a network failure. The fold's idempotence absorbs duplicated facts; duplicated progress can double preview text until its part completes. That's rare, and accepted.
@@ -622,7 +704,6 @@ interface Scope {
   - After each omitted range, before the next line it sends, the server writes `{"$eve":"position","next":N}`. If the range ends with omitted progress, a trailing marker follows. A reader assigns positions by counting from its requested cursor and jumps forward at each marker, so it can resume after any line it finished processing.
   - Filtering stops at the tail captured when the read opened. Live lines are always contiguous.
   - A full mode, which omits nothing, remains for tools such as `eve logs --events`.
-- **Transport records aren't lines.** Records with an `$eve` key, and blank heartbeat lines, are never counted, and readers ignore `$eve` records they don't recognize.
 - **v27 clients talk only to v27 servers,** so leases (60 s) and heartbeats (10 s) are always on, and the version-negotiation branches go away.
 - **How a connection ends:**
 
