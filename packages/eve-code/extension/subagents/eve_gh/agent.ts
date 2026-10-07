@@ -5,7 +5,7 @@ import extension from "../../extension.ts";
 export default defineDynamic({
   events: {
     "turn.started": () =>
-      extension.config.managedGit?.enabled === true
+      extension.config.eveGh?.enabled === true
         ? defineAgent({
             defaultTools: false,
             description:

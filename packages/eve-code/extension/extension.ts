@@ -5,7 +5,7 @@ import { z } from "zod";
 
 import type { GitHubConfig } from "eve/extensions/git/sandbox";
 
-import type { ManagedGitSettings } from "./lib/managed-git-auth.ts";
+import type { EveGhSettings } from "./lib/eve-gh-auth.ts";
 
 export type CredentialPolicyBroker = (
   sandbox: SandboxSession,
@@ -23,12 +23,12 @@ const openaiReasoningEffort = z.enum(["none", "minimal", "low", "medium", "high"
 
 export default defineExtension({
   config: z.object({
-    managedGit: z
+    eveGh: z
       .object({
         enabled: z.boolean().default(false),
         /** User-scoped Vercel authorization, e.g. `connect()` from `@vercel/connect/eve`. */
         auth: z.custom<ToolAuthProvider>((value) => typeof value === "object" && value !== null),
-        resolveOptions: fn<() => ManagedGitSettings | Promise<ManagedGitSettings>>(),
+        resolveOptions: fn<() => EveGhSettings | Promise<EveGhSettings>>(),
       })
       .optional(),
     /**

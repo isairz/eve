@@ -5,10 +5,7 @@ import type { SandboxSession } from "eve/sandbox";
 import type { SandboxProviderHandle } from "eve/sandbox/provider";
 
 import { withDevboxCredentials } from "../../extension/lib/devbox-credentials.ts";
-import type {
-  ManagedGitImplementation,
-  ManagedGitSessionState,
-} from "../../extension/lib/managed-git-sandbox.ts";
+import type { EveGhImplementation, EveGhSessionState } from "../../extension/lib/eve-gh-sandbox.ts";
 
 const context = {
   host: {} as never,
@@ -20,7 +17,7 @@ const context = {
   storagePath: "/unused",
 };
 const auth = { token: "user-oauth", teamId: "team_user", projectId: "prj_v" };
-const started: ManagedGitSessionState = { sandboxName: "actual-sandbox-name", version: 3 };
+const started: EveGhSessionState = { sandboxName: "actual-sandbox-name", version: 3 };
 
 function fixture() {
   const requests: { path: string; method: string; body: Record<string, unknown> }[] = [];
@@ -63,7 +60,7 @@ function fixture() {
       lifecycle.push("shutdown");
     },
   };
-  const inner: ManagedGitImplementation = {
+  const inner: EveGhImplementation = {
     async prepare() {
       return {};
     },
@@ -96,7 +93,7 @@ function fixture() {
   );
   return {
     start: () => provider.start(context, undefined, {}),
-    resume: (state: ManagedGitSessionState) => provider.resume(context, {}, state),
+    resume: (state: EveGhSessionState) => provider.resume(context, {}, state),
     requests,
     lifecycle,
     commands,
@@ -192,7 +189,7 @@ test("a failed reconnect stops but preserves the registration and workspace and 
 test("an invalid persisted Devbox identity is rejected before reconnecting", async () => {
   const f = fixture();
   await assert.rejects(
-    f.resume({ ...started, devboxId: 42 } as unknown as ManagedGitSessionState),
+    f.resume({ ...started, devboxId: 42 } as unknown as EveGhSessionState),
     /Invalid persisted Devbox identity/,
   );
   assert.deepEqual(f.resumedWith, []);

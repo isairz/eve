@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { managedGitImplementation } from "../../extension/lib/managed-git-sandbox.ts";
+import { eveGhImplementation } from "../../extension/lib/eve-gh-sandbox.ts";
 
 const context = {
   host: {} as never,
@@ -30,7 +30,7 @@ const credentials = {
 const unreachable = () => assert.fail("resolved credentials");
 
 test("preparation never resolves credentials and refuses template seeds", async () => {
-  const provider = managedGitImplementation(unreachable);
+  const provider = eveGhImplementation(unreachable);
   assert.deepEqual(await provider.prepare(prepareContext(emptyResources)), {});
   const seeded = {
     ...emptyResources,
@@ -48,7 +48,7 @@ test("preparation never resolves credentials and refuses template seeds", async 
 });
 
 test("disabled launches fail before accessing the API", async () => {
-  const provider = managedGitImplementation(() => ({ ...credentials, enabled: false }));
+  const provider = eveGhImplementation(() => ({ ...credentials, enabled: false }));
   await assert.rejects(provider.start(context, undefined, {}), /disabled/);
   await assert.rejects(
     provider.resume(context, {}, { sandboxName: "sbx", version: 3 }),
@@ -70,12 +70,12 @@ test("rejects invalid repository URLs and missing credentials before accessing t
     { commitAs: { name: "Test User", email: "" } },
   ]) {
     await assert.rejects(
-      managedGitImplementation(() => ({
+      eveGhImplementation(() => ({
         ...credentials,
         ...invalid,
         fetch: async () => assert.fail("invalid options reached the network"),
       })).start(context, undefined, {}),
-      /Managed Git requires/,
+      /eve-gh requires/,
     );
   }
 });
@@ -83,7 +83,7 @@ test("rejects invalid repository URLs and missing credentials before accessing t
 test("the real Eve SDK sends the preview fields and propagates a managed Git rejection", async () => {
   const requests: Request[] = [];
   await assert.rejects(
-    managedGitImplementation(() => ({
+    eveGhImplementation(() => ({
       ...credentials,
       timeout: 120_000,
       fetch: async (input, init) => {
@@ -183,7 +183,7 @@ test("creates from Git and resumes the same sandbox without recreating its grant
     }
     assert.fail(`Unexpected sandbox request: ${request.method} ${path}`);
   };
-  const provider = managedGitImplementation(() => ({ ...credentials, fetch }));
+  const provider = eveGhImplementation(() => ({ ...credentials, fetch }));
   const started = await provider.start(context, undefined, {});
   assert.equal(started.handle.sandbox.resolvePath("test.ts"), "/workspace/test.ts");
   assert.equal(started.state.sandboxName, name);

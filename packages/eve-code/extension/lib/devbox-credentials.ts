@@ -3,9 +3,9 @@ import type { SandboxProviderHandle } from "eve/sandbox/provider";
 
 import {
   requireState,
-  type ManagedGitImplementation,
-  type ManagedGitSessionState,
-} from "./managed-git-sandbox.ts";
+  type EveGhImplementation,
+  type EveGhSessionState,
+} from "./eve-gh-sandbox.ts";
 
 interface DevboxAuth {
   readonly token: string;
@@ -15,15 +15,15 @@ interface DevboxAuth {
 
 /** Use Devbox's owner credential exchange without installing its agent daemon. */
 export function withDevboxCredentials(
-  provider: ManagedGitImplementation,
+  provider: EveGhImplementation,
   resolveAuth: () => DevboxAuth,
   send: typeof fetch = globalThis.fetch,
-): ManagedGitImplementation {
+): EveGhImplementation {
   async function attach(
     handle: SandboxProviderHandle,
-    state: ManagedGitSessionState,
+    state: EveGhSessionState,
     auth: DevboxAuth,
-  ): Promise<{ handle: SandboxProviderHandle; state: ManagedGitSessionState }> {
+  ): Promise<{ handle: SandboxProviderHandle; state: EveGhSessionState }> {
     const previousId = state.devboxId;
     let devboxId = previousId;
     const request = async (path: string, body?: unknown) => {
@@ -108,7 +108,7 @@ export function withDevboxCredentials(
       if (failures.length > 0) {
         throw new AggregateError(
           [error, ...failures],
-          `Managed Git sandbox setup and cleanup both failed: ${errorMessage(error)}`,
+          `eve-gh sandbox setup and cleanup both failed: ${errorMessage(error)}`,
           { cause: error },
         );
       }
@@ -121,7 +121,7 @@ export function withDevboxCredentials(
     async start(context, options, artifact) {
       const auth = resolveAuth();
       const started = await provider.start(context, options, artifact);
-      let state: ManagedGitSessionState;
+      let state: EveGhSessionState;
       try {
         state = requireState(started.state);
       } catch (error) {

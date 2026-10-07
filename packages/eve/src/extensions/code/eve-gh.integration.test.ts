@@ -7,15 +7,15 @@ import { ensureSandboxAccess } from "#execution/sandbox/ensure.js";
 import { createBundledRuntimeCompiledArtifactsSource } from "#runtime/compiled-artifacts-source.js";
 import type { RuntimeSandboxRegistry } from "#runtime/sandbox/registry.js";
 
-// The managed child has no template: its prepared artifact is always `{}`.
+// The eve-gh child has no template: its prepared artifact is always `{}`.
 vi.mock("#runtime/sandbox/prepared-artifacts.js", () => ({
   loadSandboxPreparedArtifact: vi.fn(async () => ({})),
 }));
 
 /**
- * Drives the built-in code extension's managed Git child through eve's real
- * sandbox access lifecycle: the managed bash tool authorizes the caller, the
- * child's selector opens the managed provider, the real Vercel SDK talks to an
+ * Drives the built-in code extension's eve-gh child through eve's real
+ * sandbox access lifecycle: the eve-gh bash tool authorizes the caller, the
+ * child's selector opens the eve-gh provider, the real Vercel SDK talks to an
  * in-memory API, and persisted provider state resumes in a later access.
  */
 const user = { principalId: "alice", principalType: "user", issuer: "slack:T" } as const;
@@ -24,19 +24,19 @@ let modules: Awaited<ReturnType<typeof load>>;
 
 async function load() {
   (globalThis as Record<symbol, unknown>)[Symbol.for("eve.ext-config-scope")] =
-    "eve-code-managed-git-integration";
+    "eve-gh-integration";
   // Devbox requests use the global fetch captured when the provider is built.
   vi.stubGlobal("fetch", api.fetch);
   const extension = (await import("./extension/extension.ts")).default;
-  const sandbox = await import("./extension/subagents/managed_code/sandbox.ts");
-  const bash = (await import("./extension/subagents/managed_code/tools/bash.ts")).default;
+  const sandbox = await import("./extension/subagents/eve_gh/sandbox.ts");
+  const bash = (await import("./extension/subagents/eve_gh/tools/bash.ts")).default;
   return { extension, sandbox, bash };
 }
 
 beforeAll(async () => {
   modules = await load();
   modules.extension({
-    managedGit: {
+    eveGh: {
       enabled: true,
       auth: { principalType: "user", getToken: async () => ({ token: "unused" }) } as never,
       resolveOptions: () => ({
@@ -59,10 +59,10 @@ function registry(): RuntimeSandboxRegistry {
       definition: {
         environment: modules.sandbox.environment as never,
         kind: "independent",
-        logicalPath: "subagents/managed_code/sandbox.ts",
+        logicalPath: "subagents/eve_gh/sandbox.ts",
         selector: modules.sandbox.default,
         revisionHash: "hash",
-        sourceId: "managed_code/sandbox",
+        sourceId: "eve_gh/sandbox",
         sourceKind: "module",
       },
       workspaceResourceRoot: { logicalPath: "", rootEntries: [] },
@@ -87,7 +87,7 @@ async function inSession<T>(
   return await contextStorage.run(context, async () => {
     const access = await ensureSandboxAccess({
       compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
-      nodeId: "managed_code",
+      nodeId: "eve_gh",
       registry: registry(),
       sessionId,
       state,
@@ -111,7 +111,7 @@ async function inSession<T>(
   });
 }
 
-it("creates, resumes, and deletes a managed sandbox through the managed tool", async () => {
+it("creates, resumes, and deletes an eve-gh sandbox through the eve-gh tool", async () => {
   api.reset();
   const state = await inSession("session-a", null, async ({ access, runBash }) => {
     await runBash("pwd");
@@ -120,7 +120,7 @@ it("creates, resumes, and deletes a managed sandbox through the managed tool", a
     return captured;
   });
 
-  expect(state.session?.providerName).toBe("eve-code-managed-git");
+  expect(state.session?.providerName).toBe("eve-gh");
   expect(state.session?.state).toMatchObject({ devboxId: "devbox_owner", version: 3 });
   const creates = api.calls.filter((call) => call.kind === "create");
   expect(creates).toHaveLength(1);

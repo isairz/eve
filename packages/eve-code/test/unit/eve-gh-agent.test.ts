@@ -2,17 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 (globalThis as Record<symbol, unknown>)[Symbol.for("eve.ext-config-scope")] =
-  "eve-code-managed-agent-test";
+  "eve-code-eve-gh-agent-test";
 const extension = (await import("../../extension/extension.ts")).default;
-const agent = (await import("../../extension/subagents/managed_code/agent.ts")).default;
-const sandboxModule = await import("../../extension/subagents/managed_code/sandbox.ts");
-const bash = (await import("../../extension/subagents/managed_code/tools/bash.ts")).default;
-const readFile = (await import("../../extension/subagents/managed_code/tools/read_file.ts"))
-  .default;
-const writeFile = (await import("../../extension/subagents/managed_code/tools/write_file.ts"))
-  .default;
+const agent = (await import("../../extension/subagents/eve_gh/agent.ts")).default;
+const sandboxModule = await import("../../extension/subagents/eve_gh/sandbox.ts");
+const bash = (await import("../../extension/subagents/eve_gh/tools/bash.ts")).default;
+const readFile = (await import("../../extension/subagents/eve_gh/tools/read_file.ts")).default;
+const writeFile = (await import("../../extension/subagents/eve_gh/tools/write_file.ts")).default;
 
-test("managed coding agent is absent by default and the flag exposes it without loading secrets", async () => {
+test("eve-gh agent is absent by default and the flag exposes it without loading secrets", async () => {
   const resolve = agent.events["turn.started"]!;
   extension({});
   assert.equal(await resolve(undefined as never, undefined as never), null);
@@ -20,17 +18,17 @@ test("managed coding agent is absent by default and the flag exposes it without 
     throw new Error("Availability must not resolve credentials");
   };
   const auth = {} as never;
-  extension({ managedGit: { auth, resolveOptions } });
+  extension({ eveGh: { auth, resolveOptions } });
   assert.equal(await resolve(undefined as never, undefined as never), null);
-  extension({ managedGit: { enabled: true, auth, resolveOptions } });
+  extension({ eveGh: { enabled: true, auth, resolveOptions } });
   const enabled = await resolve(undefined as never, undefined as never);
   assert.ok(enabled);
   assert.equal(enabled.defaultTools, false);
-  extension({ managedGit: { enabled: false, auth, resolveOptions } });
+  extension({ eveGh: { enabled: false, auth, resolveOptions } });
   assert.equal(await resolve(undefined as never, undefined as never), null);
 });
 
-test("every managed child sandbox tool checks the opt-in before authorization or access", async () => {
+test("every eve-gh sandbox tool checks the opt-in before authorization or access", async () => {
   extension({});
   const context = {
     getToken: () => assert.fail("disabled tool requested a token"),
@@ -48,8 +46,8 @@ test("every managed child sandbox tool checks the opt-in before authorization or
   }
 });
 
-test("managed child owns a dedicated template-free provider", () => {
+test("eve-gh child owns a dedicated template-free provider", () => {
   extension({});
-  assert.equal(sandboxModule.environment.provider, "eve-code-managed-git");
+  assert.equal(sandboxModule.environment.provider, "eve-gh");
   assert.equal(typeof sandboxModule.default, "function");
 });

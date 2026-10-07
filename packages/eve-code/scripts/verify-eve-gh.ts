@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 
-import { managedGitImplementation } from "../extension/lib/managed-git-sandbox.ts";
+import { eveGhImplementation } from "../extension/lib/eve-gh-sandbox.ts";
 import { withDevboxCredentials } from "../extension/lib/devbox-credentials.ts";
 
 function required(name: string): string {
@@ -10,24 +10,24 @@ function required(name: string): string {
   return value;
 }
 
-const repository = required("EVE_CODE_MANAGED_GIT_REPOSITORY");
-const revision = required("EVE_CODE_MANAGED_GIT_REVISION");
+const repository = required("EVE_GH_REPOSITORY");
+const revision = required("EVE_GH_REVISION");
 assert.match(revision, /^[a-f0-9]{40}$/i, "Use a full commit SHA for the live check");
 const options = {
   enabled: true,
   repository,
   revision,
-  token: required("MANAGED_GIT_CHECK_TOKEN"),
+  token: required("EVE_GH_CHECK_TOKEN"),
   teamId: required("VERCEL_TEAM_ID"),
   projectId: required("VERCEL_PROJECT_ID"),
   commitAs: {
-    name: required("MANAGED_GIT_CHECK_NAME"),
-    email: required("MANAGED_GIT_CHECK_EMAIL"),
+    name: required("EVE_GH_CHECK_NAME"),
+    email: required("EVE_GH_CHECK_EMAIL"),
   },
   timeout: 120_000,
 };
 const provider = withDevboxCredentials(
-  managedGitImplementation(() => options),
+  eveGhImplementation(() => options),
   () => options,
 );
 const context = {
@@ -35,7 +35,7 @@ const context = {
   session: {
     auth: { current: null, initiator: null },
     id: `eve-code-check-${randomUUID()}`,
-    turn: { id: "managed-git-check", sequence: 0 },
+    turn: { id: "eve-gh-check", sequence: 0 },
   },
   storagePath: process.cwd(),
 };

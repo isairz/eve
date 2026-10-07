@@ -105,10 +105,10 @@ eve-bench trials logs https://github.com/vercel/eve/actions/runs/<id> --harness 
 
 The report's Diagnostics section prints this command with the run URL filled in. The download uses the GitHub CLI and needs read access to this repository. The raw files (`agent.log`, `events.ndjson`, `observability.ndjson`, `verifier.log`) are cached under `~/.cache/eve-bench/runs/`.
 
-## Managed Git sandbox preview
+## eve-gh preview
 
-`managedGit.enabled` exposes the extension's `managed_code` subagent, named
-`code__managed_code` when mounted as `code`. It defaults to false. The child runs
+`eveGh.enabled` exposes the extension's `eve_gh` subagent, named
+`code__eve_gh` when mounted as `code`. It defaults to false. The child runs
 coding tasks with eve's built-in shell and file tools in its own GitHub checkout;
 it does not share the parent's workspace. eve owns sandbox persistence, resume,
 and deletion. The agent server continues to run in the host application.
@@ -118,8 +118,8 @@ import { connect } from "@vercel/connect/eve";
 import code from "eve/extensions/code";
 
 export default code({
-  managedGit: {
-    enabled: process.env.EVE_CODE_MANAGED_GIT_ENABLED === "1",
+  eveGh: {
+    enabled: process.env.EVE_GH_ENABLED === "1",
     auth: connect({
       connector: "<Vercel user OAuth connector UID>",
       principalType: "user",
@@ -142,7 +142,7 @@ export default code({
 
 eve compiles this extension into `eve/extensions/code` and cannot import
 `@vercel/connect/eve` (that adapter imports eve), so the consumer supplies the
-user-scoped authorization as `managedGit.auth`.
+user-scoped authorization as `eveGh.auth`.
 
 The child's first shell or file operation uses eve's interactive authorization
 flow to connect the current user's Vercel account. Configure a Vercel Connect
@@ -179,7 +179,7 @@ stopping preserves both for resume. No Devbox heartbeat or task is created.
 The service currently issues other startup credentials during registration;
 the adapter discards those fields.
 
-The child uses a dedicated sandbox provider, `eve-code-managed-git`, that wraps
+The child uses a dedicated sandbox provider, `eve-gh`, that wraps
 eve's Vercel provider. Credentials are resolved only when a session starts or
 resumes, never during preparation. Keep this child free of skills and workspace
 seeds: those require a template snapshot, which cannot issue the new sandbox's
@@ -206,12 +206,12 @@ merge, and force pushes. Create a new remote branch through the user's GitHub
 API access before pushing to it. Signing changes commit IDs, so the child reports
 the post-push HEAD.
 
-The opt-in live check is `pnpm --filter @eve/code verify:managed-git`. It uses the
+The opt-in live check is `pnpm --filter @eve/code verify:eve-gh`. It uses the
 same provider, but bypasses interactive consent for a manual platform diagnostic.
-Supply a short-lived user token as `MANAGED_GIT_CHECK_TOKEN` and coauthor identity
-as `MANAGED_GIT_CHECK_NAME` / `MANAGED_GIT_CHECK_EMAIL` only in that local process,
-plus `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID`, and `EVE_CODE_MANAGED_GIT_REPOSITORY`.
-The check requires a full commit SHA in `EVE_CODE_MANAGED_GIT_REVISION`, and
+Supply a short-lived user token as `EVE_GH_CHECK_TOKEN` and coauthor identity
+as `EVE_GH_CHECK_NAME` / `EVE_GH_CHECK_EMAIL` only in that local process,
+plus `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID`, and `EVE_GH_REPOSITORY`.
+The check requires a full commit SHA in `EVE_GH_REVISION`, and
 explicitly creates a temporary sandbox regardless of the feature flag. It verifies
 the clean checkout and remote Git read access, stops and resumes the sandbox,
 repeats the read checks, then deletes it. It also exchanges Devbox credentials and

@@ -2,11 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ToolAuthProvider, ToolContext } from "eve/tools";
 
-import {
-  currentManagedGitAuth,
-  getManagedGitSandbox,
-} from "../../extension/lib/managed-git-auth.ts";
-import { managedGitImplementation } from "../../extension/lib/managed-git-sandbox.ts";
+import { currentEveGhAuth, getEveGhSandbox } from "../../extension/lib/eve-gh-auth.ts";
+import { eveGhImplementation } from "../../extension/lib/eve-gh-sandbox.ts";
 
 const vercelAuth = {
   principalType: "user",
@@ -44,12 +41,12 @@ function fixture(id = "alice") {
     },
     async getSandbox() {
       calls.push("sandbox");
-      const auth = currentManagedGitAuth();
+      const auth = currentEveGhAuth();
       assert.equal(auth.token, `token-${id}`);
       assert.deepEqual(auth.commitAs, { name: id, email: `${id}@example.com` });
       assert.equal(auth.projectId, settings.projectId);
       await Promise.resolve();
-      assert.equal(currentManagedGitAuth().token, `token-${id}`);
+      assert.equal(currentEveGhAuth().token, `token-${id}`);
       return { id: `sbx-${id}` };
     },
   } as unknown as ToolContext;
@@ -69,12 +66,12 @@ function fixture(id = "alice") {
 
 test("user authorization and verified identity precede sandbox creation; only ownership is saved", async () => {
   const f = fixture();
-  await getManagedGitSandbox(f.ctx, settings, f.state, f.send);
+  await getEveGhSandbox(f.ctx, settings, f.state, f.send);
   assert.deepEqual(f.calls, ["authorize", "identity", "sandbox"]);
   assert.deepEqual(f.state.get(), { caller: '["slack:T","alice"]', vercelUserId: "vercel-alice" });
-  assert.throws(currentManagedGitAuth, /Authorize Vercel/);
+  assert.throws(currentEveGhAuth, /Authorize Vercel/);
   f.calls.length = 0;
-  await getManagedGitSandbox(f.ctx, settings, f.state, f.send);
+  await getEveGhSandbox(f.ctx, settings, f.state, f.send);
   assert.deepEqual(f.calls, ["authorize", "identity", "sandbox"]);
 });
 
@@ -85,7 +82,7 @@ test("consent challenges and anonymous callers cannot create a sandbox", async (
     throw challenge;
   };
   await assert.rejects(
-    getManagedGitSandbox(f.ctx, settings, f.state, f.send),
+    getEveGhSandbox(f.ctx, settings, f.state, f.send),
     (error) => error === challenge,
   );
   assert.deepEqual(f.calls, []);
@@ -94,16 +91,13 @@ test("consent challenges and anonymous callers cannot create a sandbox", async (
     ...f.ctx,
     session: { ...f.ctx.session, auth: { current: null, initiator: null } },
   };
-  await assert.rejects(
-    getManagedGitSandbox(anonymous, settings, f.state, f.send),
-    /authenticated user/,
-  );
+  await assert.rejects(getEveGhSandbox(anonymous, settings, f.state, f.send), /authenticated user/);
 });
 
 test("expired tokens require consent again before sandbox access", async () => {
   const f = fixture();
   await assert.rejects(
-    getManagedGitSandbox(f.ctx, settings, f.state, async () => new Response(null, { status: 401 })),
+    getEveGhSandbox(f.ctx, settings, f.state, async () => new Response(null, { status: 401 })),
     /consent required/,
   );
   assert.deepEqual(f.calls, ["authorize"]);
@@ -112,16 +106,13 @@ test("expired tokens require consent again before sandbox access", async () => {
 
 test("another caller or another Vercel account cannot reuse the sandbox", async () => {
   const alice = fixture();
-  await getManagedGitSandbox(alice.ctx, settings, alice.state, alice.send);
+  await getEveGhSandbox(alice.ctx, settings, alice.state, alice.send);
   const bob = fixture("bob");
-  await assert.rejects(
-    getManagedGitSandbox(bob.ctx, settings, alice.state, bob.send),
-    /another user/,
-  );
+  await assert.rejects(getEveGhSandbox(bob.ctx, settings, alice.state, bob.send), /another user/);
   assert.deepEqual(bob.calls, []);
   alice.calls.length = 0;
   await assert.rejects(
-    getManagedGitSandbox(alice.ctx, settings, alice.state, async () =>
+    getEveGhSandbox(alice.ctx, settings, alice.state, async () =>
       Response.json({ sub: "vercel-bob", preferred_username: "bob", email: "bob@example.com" }),
     ),
     /another Vercel account/,
@@ -133,17 +124,17 @@ test("concurrent users have isolated creation credentials", async () => {
   const alice = fixture();
   const bob = fixture("bob");
   await Promise.all([
-    getManagedGitSandbox(alice.ctx, settings, alice.state, alice.send),
-    getManagedGitSandbox(bob.ctx, settings, bob.state, bob.send),
+    getEveGhSandbox(alice.ctx, settings, alice.state, alice.send),
+    getEveGhSandbox(bob.ctx, settings, bob.state, bob.send),
   ]);
   assert.notDeepEqual(alice.state.get(), bob.state.get());
-  assert.throws(currentManagedGitAuth, /Authorize Vercel/);
+  assert.throws(currentEveGhAuth, /Authorize Vercel/);
 });
 
 test("identity lookup errors never reach the sandbox or expose the response body", async () => {
   const f = fixture();
   await assert.rejects(
-    getManagedGitSandbox(
+    getEveGhSandbox(
       f.ctx,
       settings,
       f.state,
@@ -157,8 +148,8 @@ test("identity lookup errors never reach the sandbox or expose the response body
 test("the caller's OAuth token and verified identity reach the real Sandbox SDK request", async () => {
   const f = fixture();
   let creates = 0;
-  const provider = managedGitImplementation(() => ({
-    ...currentManagedGitAuth(),
+  const provider = eveGhImplementation(() => ({
+    ...currentEveGhAuth(),
     fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init);
       assert.equal(request.headers.get("authorization"), "Bearer token-alice");
@@ -189,7 +180,7 @@ test("the caller's OAuth token and verified identity reach the real Sandbox SDK 
     );
     return handle.sandbox as never;
   };
-  await assert.rejects(getManagedGitSandbox(f.ctx, settings, f.state, f.send), /Preview disabled/);
+  await assert.rejects(getEveGhSandbox(f.ctx, settings, f.state, f.send), /Preview disabled/);
   assert.equal(creates, 1);
-  assert.throws(currentManagedGitAuth, /Authorize Vercel/);
+  assert.throws(currentEveGhAuth, /Authorize Vercel/);
 });

@@ -9,9 +9,9 @@ import {
 import { z } from "zod";
 
 import extension from "../extension.ts";
-import type { ManagedGitSandboxOptions } from "./managed-git-sandbox.ts";
+import type { EveGhSandboxOptions } from "./eve-gh-sandbox.ts";
 
-export interface ManagedGitSettings {
+export interface EveGhSettings {
   readonly repository: string;
   readonly revision?: string;
   readonly teamId: string;
@@ -23,8 +23,8 @@ interface Owner {
   readonly vercelUserId: string;
 }
 
-const owner = defineState<Owner | null>("eve-code.managed-git-owner", () => null);
-const creationAuth = new AsyncLocalStorage<ManagedGitSandboxOptions>();
+const owner = defineState<Owner | null>("eve-code.eve-gh-owner", () => null);
+const creationAuth = new AsyncLocalStorage<EveGhSandboxOptions>();
 const userSchema = z.object({
   sub: z.string().min(1),
   name: z.string().trim().min(1).optional(),
@@ -32,10 +32,10 @@ const userSchema = z.object({
   email: z.email(),
 });
 
-export function currentManagedGitAuth(): ManagedGitSandboxOptions {
+export function currentEveGhAuth(): EveGhSandboxOptions {
   const options = creationAuth.getStore();
   if (!options)
-    throw new Error("Authorize Vercel through a managed coding tool before opening the sandbox.");
+    throw new Error("Authorize Vercel through an eve-gh tool before opening the sandbox.");
   return options;
 }
 
@@ -44,23 +44,23 @@ export function currentManagedGitAuth(): ManagedGitSandboxOptions {
  * consumer (for example `connect()` from `@vercel/connect/eve`): eve compiles this
  * extension and cannot import that adapter itself.
  */
-export interface ManagedGitAccess extends ManagedGitSettings {
+export interface EveGhAccess extends EveGhSettings {
   readonly auth: ToolAuthProvider;
 }
 
-export async function getManagedGitSandbox(
+export async function getEveGhSandbox(
   ctx: ToolContext,
-  access: ManagedGitAccess,
+  access: EveGhAccess,
   ownership: StateHandle<Owner | null> = owner,
   send: typeof fetch = globalThis.fetch,
 ) {
   const principal = ctx.session.auth.current;
   if (principal?.principalType !== "user") {
-    throw new Error("Managed Git requires an authenticated user.");
+    throw new Error("eve-gh requires an authenticated user.");
   }
   const caller = JSON.stringify([principal.issuer ?? null, principal.principalId]);
   if (ownership.get() !== null && ownership.get()?.caller !== caller) {
-    throw new Error("This managed sandbox belongs to another user. Start a new coding session.");
+    throw new Error("This eve-gh sandbox belongs to another user. Start a new coding session.");
   }
   const { auth: provider, ...settings } = access;
   const { token } = await ctx.getToken(provider);
@@ -74,7 +74,7 @@ export async function getManagedGitSandbox(
   ownership.update((previous) => {
     if (previous && (previous.caller !== caller || previous.vercelUserId !== user.sub)) {
       throw new Error(
-        "This managed sandbox belongs to another Vercel account. Start a new coding session.",
+        "This eve-gh sandbox belongs to another Vercel account. Start a new coding session.",
       );
     }
     return { caller, vercelUserId: user.sub };
@@ -93,16 +93,16 @@ export async function getManagedGitSandbox(
   );
 }
 
-export function withManagedGitAuth<I, O>(tool: ToolDefinition<I, O>): ToolDefinition<I, O> {
+export function withEveGhAuth<I, O>(tool: ToolDefinition<I, O>): ToolDefinition<I, O> {
   return defineTool({
     ...tool,
     execute(input, ctx) {
       return tool.execute(input, {
         ...ctx,
         async getSandbox() {
-          const config = extension.config.managedGit;
-          if (config?.enabled !== true) throw new Error("Managed Git sandbox is disabled.");
-          return getManagedGitSandbox(ctx, {
+          const config = extension.config.eveGh;
+          if (config?.enabled !== true) throw new Error("eve-gh sandbox is disabled.");
+          return getEveGhSandbox(ctx, {
             ...(await config.resolveOptions()),
             auth: config.auth,
           });

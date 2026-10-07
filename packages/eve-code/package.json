@@ -13,7 +13,7 @@
     "test:integration": "node --test \"test/integration/*.test.ts\"",
     "test:scenario": "node --test \"test/scenario/*.test.ts\"",
     "typecheck": "tsc",
-    "verify:managed-git": "node scripts/verify-managed-git.ts"
+    "verify:eve-gh": "node scripts/verify-eve-gh.ts"
   },
   "dependencies": {
     "@vercel/connect": "catalog:",
