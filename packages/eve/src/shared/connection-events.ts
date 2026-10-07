@@ -45,7 +45,7 @@ export type ConnectionEventDelivery = {
   version: 1;
   deliveryId: string;
   subscriptionId: string;
-  source: { type: "mcp"; connectorId: string; sourceId: string };
+  source: { type: "mcp"; connectorId: string };
   context: Record<string, unknown>;
 } & (
   | { event: Experimental_ConnectionEvent }
