@@ -125,9 +125,10 @@
  *             so telemetry ownership survives renamed and namespaced tools.
  *   rule 50 — The human-in-the-loop lifecycle in `harness/hitl/` is
  *             reached only through its `index.ts`, its request vocabulary
- *             (`approval-prompt`, `budget-request`), and the approvers that
+ *             (`approval-prompt`), and the approvers that
  *             approved calls run as (`approved-call-callers`), so replacing it
- *             changes one seam.
+ *             changes one seam. Migration is the pure hydration seam. Nothing
+ *             outside `harness/hitl/` names the legacy human-input state key.
  *   rule 51 — Only the session machine (`harness/session-machine/`) and the
  *             human-in-the-loop lifecycle it delegates to
  *             (`harness/hitl/`) build lifecycle events and read the
@@ -136,6 +137,9 @@
  *             events, so nothing changes without readers hearing it. The model
  *             step's streamed content (its calls and their inline results) is
  *             built where it streams.
+ *   rule 52 — Human input decides in pure rules and does I/O only in its
+ *             effects and a closed allowlist of live-runtime adapters. Rules
+ *             never import effects or runtime I/O dependencies.
  *
  * Baselines for rules with pre-existing violations live in
  * `guard-invariants-baseline.json`. Counts and allowlists in that file
@@ -257,6 +261,7 @@ function isTsLike(relPath) {
  *   rule48: Violation[];
  *   rule50: Violation[];
  *   rule51: Violation[];
+ *   rule52: Violation[];
  *   symlinks: string[];
  * }} state
  */
@@ -292,6 +297,7 @@ async function scanRepo(state) {
     checkRule48(posix, lines, state.rule48);
     checkRule50(posix, lines, state.rule50);
     checkRule51(posix, lines, state.rule51);
+    checkRule52(posix, lines, state.rule52);
   }
 }
 
@@ -503,7 +509,7 @@ function checkRule47(posix, lines, violations) {
 const HUMAN_INPUT_DIR = "packages/eve/src/harness/hitl/";
 // Migration is the pure hydration seam for step-side checkpoint readers.
 const HUMAN_INPUT_PRIVATE_IMPORT_RE =
-  /["'](?:#harness\/|(?:\.\.?\/)+)hitl\/(?!(?:index|approval-prompt|approved-call-callers|budget-request|migration)\.js["'])/;
+  /["'](?:#harness\/|(?:\.\.?\/)+)hitl\/(?!(?:index|approval-prompt|approved-call-callers|migration)\.js["'])/;
 
 /** @param {string} posix @param {string[]} lines @param {Violation[]} violations */
 function checkRule50(posix, lines, violations) {
@@ -515,6 +521,15 @@ function checkRule50(posix, lines, violations) {
   )
     return;
   lines.forEach((line, idx) => {
+    if (line.includes("eve.harness.humanInput")) {
+      violations.push({
+        rule: 50,
+        file: posix,
+        line: idx + 1,
+        message:
+          "names the legacy human-input state key outside harness/hitl/. Hydrate through the migration seam; the session machine owns current state.",
+      });
+    }
     if (!HUMAN_INPUT_PRIVATE_IMPORT_RE.test(line)) return;
     violations.push({
       rule: 50,
@@ -522,6 +537,41 @@ function checkRule50(posix, lines, violations) {
       line: idx + 1,
       message:
         "imports the human-in-the-loop lifecycle's internals. Reach it through `#harness/hitl/index.js`, the one seam the rest of eve meets it at.",
+    });
+  });
+}
+
+// ---------- Rule 52: human input rules are pure ----------
+
+const HUMAN_INPUT_RUNTIME_MODULES = new Set([
+  "effects.ts", // Applies decisions by forwarding answers and resuming workflow targets.
+  "policy-effect.ts", // Runs approval policies with callback and authorization context.
+  "index.ts", // Adapts live model steps to decisions and applies their effects.
+  "intake.ts", // Admits input and executes approved calls in the live step.
+  "approved-call-callers.ts", // Restores approver ALS scope while running approved calls.
+  "held-step.ts", // Reads pending task calls through the execution vocabulary adapter.
+]);
+const HUMAN_INPUT_IO_RE =
+  /["'](?:#execution\/|#internal\/workflow\/|node:|#context\/(?:container|caller-scope|build-dynamic-tools|build-callback-context)\.js)|\bimport\s*\(/;
+const HUMAN_INPUT_EFFECT_IMPORT_RE =
+  /["'](?:\.\/|#harness\/hitl\/|(?:\.\.\/)+hitl\/)(?:effects|policy-effect)\.js["']/;
+
+/** @param {string} posix @param {string[]} lines @param {Violation[]} violations */
+function checkRule52(posix, lines, violations) {
+  if (
+    !posix.startsWith(HUMAN_INPUT_DIR) ||
+    /\.(?:test|integration\.test|scenario\.test)\.ts$/.test(posix) ||
+    HUMAN_INPUT_RUNTIME_MODULES.has(posix.slice(HUMAN_INPUT_DIR.length))
+  )
+    return;
+  lines.forEach((line, idx) => {
+    if (!HUMAN_INPUT_IO_RE.test(line) && !HUMAN_INPUT_EFFECT_IMPORT_RE.test(line)) return;
+    violations.push({
+      rule: 52,
+      file: posix,
+      line: idx + 1,
+      message:
+        "imports runtime I/O or effects from a human-input rules module. Decide in pure rules; apply I/O in the explicitly allowlisted live-runtime adapters.",
     });
   });
 }
@@ -1703,6 +1753,7 @@ async function main() {
     rule48: /** @type {Violation[]} */ ([]),
     rule50: /** @type {Violation[]} */ ([]),
     rule51: /** @type {Violation[]} */ ([]),
+    rule52: /** @type {Violation[]} */ ([]),
     symlinks: /** @type {string[]} */ ([]),
   };
 
@@ -1820,6 +1871,7 @@ async function main() {
   violations.push(...(await checkFrameworkActionIdentity()));
   violations.push(...state.rule50);
   violations.push(...state.rule51);
+  violations.push(...state.rule52);
 
   if (violations.length === 0) {
     process.stdout.write("[eve:guard:invariants] ok — all mechanical lints passed.\n");
