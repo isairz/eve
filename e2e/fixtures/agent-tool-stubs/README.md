@@ -14,25 +14,16 @@ A passing scripted world run is transport/durability evidence, not live-model ev
 | Overlapping rules select the first match                                                         | `evals/matching.eval.ts`: a specific rule precedes a broader matching fallback                                                                                  |
 | Several calls to one tool within a turn, then continuation on a later turn                       | `evals/matching.eval.ts`: pending → first result → next result                                                                                                  |
 | An unmatched call invokes the real executor                                                      | `evals/matching.eval.ts`: distinct live marker                                                                                                                  |
-| Every admitted JSON Schema keyword and setup rejection                                           | `packages/eve/src/tool-stubs/schema.test.ts`: positive/negative values, malformed schemas, no coercion/default mutation                                         |
+| Supported matcher shapes and setup rejection                                                     | `packages/eve/src/tool-stubs/schema.test.ts`: representative matching, rejected keywords and values, no coercion/default mutation                               |
 | Independent rule sequences, first-match precedence, replay, persistent-tool restrictions, bounds | `packages/eve/src/tool-stubs/rules.test.ts` and existing runtime integration tests                                                                              |
 | Root, child, and nested child paths stay distinct                                                | `execution/tool-stubs/execution.integration.test.ts` and `test/scenarios/nested-tool-stubs.scenario.test.ts`: ordinary and workflow tools through compiled HTTP |
 | Concurrent admission, separate session state, multi-turn continuation                            | `agent-workflow-stress/evals/tool-stubs.eval.ts` with its deliberately scripted model                                                                           |
 
-The matcher accepts 38 keywords: type, const, enum; five numeric constraints;
-three string constraints; eight array constraints; nine object constraints;
-seven composition/conditional keywords; and three annotations. `schema.test.ts` names the individual contracts rather than inferring expected
-answers from the validator.
+Matcher tests cover eve's supported subset and reject features affected by known
+validator defects. They do not duplicate the dependency's conformance suite.
+The runtime and compiled HTTP tests cover early rejection of invalid tool paths,
+permission to inspect stub results, and recording which rules matched. The eval
+runner warns about unused rules without turning them into call expectations.
 
-Tests use draft 2020-12 semantics, including [contains bounds](https://json-schema.org/draft/2020-12/json-schema-validation#section-6.4.4),
-[decimal multiples](https://json-schema.org/draft/2020-12/json-schema-validation#section-6.2.1),
-and [required properties](https://json-schema.org/draft/2020-12/json-schema-validation#section-6.5.3).
-Regression tests reproduced defects in the vendored validator's default
-`minContains`, negative/tiny `multipleOf`, inherited property handling,
-object/array equality, and dependency-map traversal before repair. Configuration-size rejection also has a reproduced regression.
-
-This covers every admitted keyword, not every combination of schemas or every
-possible model response. Live-model evals verify the model/runtime boundary;
-they do not replace deterministic schema conformance tests. Schemas and inputs
-are JSON values represented by JavaScript numbers; precision already lost while
-parsing a number cannot be recovered by the matcher.
+Live-model evals verify the model/runtime boundary. They do not prove every
+schema combination or every possible model response.

@@ -1,4 +1,5 @@
-import { readStubFailure } from "#execution/tool-stubs/steps.js";
+import { InvalidToolStubTargetError } from "#tool-stubs/validate-targets.js";
+import { readStubFailure, readMatchedStubRules } from "#execution/tool-stubs/steps.js";
 import { getRun } from "#internal/workflow/runtime.js";
 import { handleExpiredLegacyAuthorization } from "#execution/legacy-session/authorization.js";
 import { EVE_ROUTE_PREFIX } from "#protocol/routes.js";
@@ -37,6 +38,7 @@ import {
   EVE_SESSION_ROUTE_PATTERN,
   EVE_SESSION_RESET_ROUTE_PATTERN,
   EVE_SESSION_STREAM_ROUTE_PATTERN,
+  EVE_SESSION_STUBS_ROUTE_PATTERN,
   EVE_SUBAGENT_STREAM_ROUTE_PATTERN,
   createEveSessionStreamRoutePath,
   createEveSubagentStreamRoutePath,
@@ -368,6 +370,9 @@ export function eveChannel(input: EveChannelInput): EveChannel {
             title: messageResult.title,
           });
         } catch (error) {
+          if (error instanceof InvalidToolStubTargetError) {
+            return Response.json({ error: error.message, ok: false }, { status: 400 });
+          }
           const errorId = logError(log, "session-create request failed", error);
           return Response.json(
             { error: "Failed to create the session.", errorId, ok: false },
@@ -602,9 +607,15 @@ export function eveChannel(input: EveChannelInput): EveChannel {
         );
       }),
 
-      GET(EVE_SESSION_ROUTE_PATTERN + "/stubs", async (req, { params }) => {
+      GET(EVE_SESSION_STUBS_ROUTE_PATTERN, async (req, { params }) => {
         const authResult = await routeAuth(req, input.auth);
         if (authResult instanceof Response) return authResult;
+        if (authResult.allowToolStubs !== true) {
+          return Response.json(
+            { error: "Tool stubbing is not permitted for this caller.", ok: false },
+            { status: 403 },
+          );
+        }
         const sessionId = requireSessionId(params);
         if (sessionId instanceof Response) return sessionId;
         try {
@@ -612,7 +623,10 @@ export function eveChannel(input: EveChannelInput): EveChannel {
             return Response.json({ error: "Session not found.", ok: false }, { status: 404 });
           }
           return Response.json(
-            { error: (await readStubFailure(sessionId)) ?? null },
+            {
+              error: (await readStubFailure(sessionId)) ?? null,
+              matchedRuleIds: await readMatchedStubRules(sessionId),
+            },
             { headers: { "cache-control": "no-store" } },
           );
         } catch (error) {
