@@ -29,7 +29,7 @@ export function parseToolStubs(value: unknown): readonly ToolStub[] {
     ids.add(rule.id);
     if (["connection_execute", "connection_search"].includes(rule.tool.split("/").at(-1)!)) {
       throw new Error(
-        "Stub connection operations by their qualified connection__tool name; connection discovery and validation remain live.",
+        "Cannot stub connection_execute or connection_search. Stub a specific connection operation, such as linear__list_issues.",
       );
     }
     for (const [property, schema] of Object.entries(rule.match ?? {}))
