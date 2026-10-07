@@ -11,8 +11,6 @@ Companion docs:
 - [`dynamic-participant-points.md`](./dynamic-participant-points.md) renames the keys that dynamic resolvers and memory providers run on. It's independent of this proposal.
 - [`session-machine-simplification.md`](./session-machine-simplification.md) covers structural cleanup in the session machine. Two of its items help this proposal land.
 
-Everything here comes from reading `main` at `285d4e09b` and the open HumanInput stack (#4342–#4344). Nothing was prototyped, and every size and cost below is an estimate.
-
 ## Introduction
 
 Every eve reader folds the same session stream:
@@ -23,16 +21,16 @@ Every eve reader folds the same session stream:
 - authored hooks;
 - the server's own projection.
 
-Today that stream has 34 event types, added one feature at a time. Most of them say that something happened, but few entities have a recorded beginning and a recorded end. So readers reconstruct lifecycles from timing, text, and events that didn't arrive. Each reader does it slightly differently, and it is sometimes impossible to do this unambiguously.
+Today that stream has 34 event types, added one feature at a time. Most of them say that something happened, but few entities have a recorded beginning and a recorded end. So readers reconstruct lifecycles from timing, text, and events that didn't arrive. Each reader does it slightly differently, and it is often impossible to do this unambiguously.
 
 This proposal replaces the vocabulary at the next stream-version break (v27). The goal is a smaller conceptual framework where every piece of the system has an explicit lifecycle:
 
 - **Nine entities:** `session`, `delivery`, `turn`, `model run`, `content part`, `call`, `task`, `interaction`, and `context change`. Each one is introduced by one fact and closed by exactly one terminal fact, with an outcome from a closed set.
 - **Lifecycles are not inferred** When the machine ends something, it produces an event that records this in the same commit, including events for other things that are ended at the same time.
-- **One commit per stream line.** A line's position is its permanent identity, so events need no IDs and readers resume exactly.
-- **Additive evolution after the break.** New kinds, fields, and families don't need a version bump, and older readers stay correct ([Future proofing](#future-proofing)).
+- **One commit per stream line** Multiple facts that happen atomically share a single stream line, and the session projection retains its own counter for stream position. This means events no longer need to be stamped with ULIDs (instead they get literal stream indicies) and readers resume exactly.
+- **Additive evolution after the break** New kinds, fields, and families don't need a version bump, and older readers stay correct ([Future proofing](#future-proofing)).
 
-The catalog has 28 types (25 facts and 3 progress types), down from 34. Compatibility is cut on purpose: v27 clients read v27 streams only, and sessions don't cross the break.
+The proposed catalog has 28 types (25 facts and 3 progress types), down from 34. Compatibility is cut on purpose: v27 clients read v27 streams only, and sessions don't cross the break.
 
 ### Where the contract lives
 
