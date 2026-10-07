@@ -24,11 +24,38 @@ interface Owner {
 
 const owner = defineState<Owner | null>("eve-code.eve-gh-owner", () => null);
 /**
- * Creation credentials for in-flight `getSandbox()` calls, keyed by session id.
+ * Creation credentials for the in-flight `getSandbox()` call, keyed by session id.
  * Entries live in process memory only for the duration of one call, so the
  * user's token never reaches durable state, config, tool output, or VM files.
+ * Opens are serialized per session (`sessionOpens`), so at most one entry per
+ * session exists and an overlapping call can never overwrite the active one.
  */
-const creationAuth = new Map<string, EveGhSandboxOptions[]>();
+const creationAuth = new Map<string, EveGhSandboxOptions>();
+const sessionOpens = new Map<string, Promise<void>>();
+
+async function openExclusively<T>(
+  sessionId: string,
+  options: EveGhSandboxOptions,
+  open: () => Promise<T>,
+): Promise<T> {
+  const previous = sessionOpens.get(sessionId) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => current);
+  sessionOpens.set(sessionId, tail);
+  await previous;
+  creationAuth.set(sessionId, options);
+  try {
+    return await open();
+  } finally {
+    creationAuth.delete(sessionId);
+    release();
+    if (sessionOpens.get(sessionId) === tail) sessionOpens.delete(sessionId);
+  }
+}
+
 const userSchema = z.object({
   sub: z.string().min(1),
   name: z.string().trim().min(1).optional(),
@@ -37,7 +64,7 @@ const userSchema = z.object({
 });
 
 export function currentEveGhAuth(sessionId: string): EveGhSandboxOptions {
-  const options = creationAuth.get(sessionId)?.at(-1);
+  const options = creationAuth.get(sessionId);
   if (!options)
     throw new Error("Authorize Vercel through an eve-gh tool before opening the sandbox.");
   return options;
@@ -92,16 +119,7 @@ export async function getEveGhSandbox(
     token,
     commitAs: { name: user.name ?? user.preferred_username, email: user.email },
   };
-  const sessionId = ctx.session.id;
-  const pending = creationAuth.get(sessionId) ?? [];
-  pending.push(options);
-  creationAuth.set(sessionId, pending);
-  try {
-    return await ctx.getSandbox();
-  } finally {
-    pending.splice(pending.indexOf(options), 1);
-    if (pending.length === 0) creationAuth.delete(sessionId);
-  }
+  return openExclusively(ctx.session.id, options, () => ctx.getSandbox());
 }
 
 export function withEveGhAuth<I, O>(tool: ToolDefinition<I, O>): ToolDefinition<I, O> {

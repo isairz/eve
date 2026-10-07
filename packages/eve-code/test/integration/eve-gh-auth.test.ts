@@ -188,3 +188,75 @@ test("the caller's OAuth token and verified identity reach the real Sandbox SDK 
   assert.equal(creates, 1);
   assert.throws(() => currentEveGhAuth("session-alice"), /Authorize Vercel/);
 });
+
+test("overlapping opens in one session each see their own credentials and settings", async () => {
+  const shared = fixture("shared");
+  const order: string[] = [];
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  let firstEntered!: () => void;
+  const firstStarted = new Promise<void>((resolve) => {
+    firstEntered = resolve;
+  });
+  function opener(label: string, opts: { gate?: Promise<void>; fail?: boolean } = {}) {
+    const ctx = {
+      ...shared.ctx,
+      async getToken() {
+        return { token: `token-${label}` };
+      },
+      async getSandbox() {
+        order.push(`${label}:enter`);
+        const before = currentEveGhAuth("session-shared");
+        assert.equal(before.token, `token-${label}`);
+        assert.equal(before.projectId, `prj_${label}`);
+        if (label === "first") firstEntered();
+        await opts.gate;
+        await new Promise((resolve) => setImmediate(resolve));
+        const after = currentEveGhAuth("session-shared");
+        assert.equal(after.token, `token-${label}`);
+        assert.equal(after.projectId, `prj_${label}`);
+        assert.equal(after.repository, `https://github.com/vercel/${label}`);
+        order.push(`${label}:exit`);
+        if (opts.fail) throw new Error(`${label} failed`);
+        return { id: `sbx-${label}` };
+      },
+    } as never;
+    const send = (async () =>
+      Response.json({
+        sub: "vercel-shared",
+        preferred_username: "shared",
+        email: "shared@example.com",
+      })) satisfies typeof fetch;
+    return getEveGhSandbox(
+      ctx,
+      { ...settings, projectId: `prj_${label}`, repository: `https://github.com/vercel/${label}` },
+      shared.state,
+      send,
+    );
+  }
+
+  // first opens and blocks; second (and a failing third) start while first is active.
+  const first = opener("first", { gate: firstGate, fail: true });
+  await firstStarted;
+  const second = opener("second");
+  const third = opener("third", { fail: true });
+  // Let second and third reach the lock before first finishes.
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, ["first:enter"]);
+  releaseFirst();
+  const results = await Promise.allSettled([first, second, third]);
+  assert.equal(results[0].status, "rejected");
+  assert.deepEqual(results[1], { status: "fulfilled", value: { id: "sbx-second" } });
+  assert.equal(results[2].status, "rejected");
+  assert.deepEqual(order, [
+    "first:enter",
+    "first:exit",
+    "second:enter",
+    "second:exit",
+    "third:enter",
+    "third:exit",
+  ]);
+  assert.throws(() => currentEveGhAuth("session-shared"), /Authorize Vercel/);
+});
