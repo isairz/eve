@@ -236,7 +236,11 @@ describe("ScheduleDispatcher", () => {
 
   it("isScheduleAuth recognizes the app principal schedules dispatch with, and only it", async () => {
     const runtime = createMockRuntime();
-    const dispatcher = new ScheduleDispatcher({ runtime, channels: [] });
+    const dispatcher = new ScheduleDispatcher({
+      runtime,
+      channels: [],
+      extensionConfigs: new Map(),
+    });
     let appAuth: SessionAuthContext | undefined;
 
     await dispatcher.trigger({ scheduleId: "heartbeat", markdown: "Run heartbeat task." });
