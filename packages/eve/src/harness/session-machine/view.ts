@@ -153,7 +153,7 @@ export type {
   ResponderIdentity,
   Settlement,
   RelayRoute,
-} from "./human-input-types.js";
+} from "#harness/hitl/index.js";
 
 /** The routes owned by the machine, for workflow-side dispatch selectors. */
 export function relayedRoutes(state: SessionStateMap | undefined) {

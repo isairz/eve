@@ -5,7 +5,7 @@ import type { SessionStateMap, StepInput } from "#harness/types.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 import type { InputRequest, InputResponse } from "#shared/input.js";
 
-import type { ApprovalAudit, RelayRoute } from "./human-input-types.js";
+import type { ApprovalAudit, RelayRoute } from "#harness/hitl/index.js";
 
 // Execution state the session machine keeps between steps. Lifecycle facts (whether a turn is
 // open, whether a request is answered, how a call ended) are the projection's; this holds only

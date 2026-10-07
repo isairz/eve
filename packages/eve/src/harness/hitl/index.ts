@@ -222,3 +222,5 @@ export {
   renderPendingApprovalsSnippet,
   renderPendingApprovalsInstruction,
 } from "./approval.js";
+
+export type { ActiveCandidate, ApprovalAudit, CandidateDecision, FinishedCandidate, RelayRoute, ResponderIdentity, Settlement, WorkflowAskRoute, ProxyInputQuestion } from "./record.js";

@@ -4,7 +4,7 @@ export const LEGACY_GRANTS_KEY = "eve.runtime.hitl.approvedTools";
 import type {
   WorkflowAskRoute,
   ProxyInputQuestion,
-} from "#harness/session-machine/human-input-types.js";
+} from "#harness/hitl/index.js";
 import type { StepCoordinates as PendingInputBatchEvent } from "#harness/session-machine/view.js";
 import { inputOptionSchema, type InputOption, type InputRequestKind } from "#shared/input.js";
 import {
@@ -20,7 +20,7 @@ import type { RemoteAgentBinding } from "#eve-channel/support.js";
  * apart from `state.ts` because upgrading uses the rules, and the state's
  * shapes must not depend on them.
  */
-import type { ApprovalAudit } from "#harness/session-machine/human-input-types.js";
+import type { ApprovalAudit } from "#harness/hitl/index.js";
 import type { SessionAuthContext } from "#channel/types.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
 import type { ModelMessage } from "ai";
