@@ -13,6 +13,16 @@ function matches(schema: JsonObject | boolean, value: JsonValue): boolean {
 }
 
 describe("supported tool stub constraints", () => {
+  it("matches model-written text with string patterns", () => {
+    const constraint = { type: "string", pattern: "\\b[Mm]ilk\\b" };
+    for (const title of ["Buy milk", "Buy milk at the store", "Buy whole-fat milk"]) {
+      expect(matches(constraint, title)).toBe(true);
+    }
+    expect(matches(constraint, "Walk the dog")).toBe(false);
+    expect(matches(constraint, "Buy milkshake")).toBe(false);
+    expect(matches(constraint, 42)).toBe(false);
+  });
+
   it("matches scalar values without coercion", () => {
     expect(matches({ enum: ["open", 1, false, null] }, "open")).toBe(true);
     expect(matches({ enum: ["open", 1, false, null] }, "1")).toBe(false);
@@ -70,7 +80,8 @@ const invalid: JsonObject[] = [
   { multipleOf: 0.1 },
   { minLength: -1 },
   { maxLength: 0.5 },
-  { pattern: "milk" },
+  { pattern: 1 },
+  { pattern: "[" },
   { minItems: -1 },
   { maxItems: 0.5 },
   { uniqueItems: true },
@@ -85,7 +96,7 @@ const invalid: JsonObject[] = [
   { properties: [] },
   { properties: { x: { unknown: true } } },
   { patternProperties: { "^s_": true } },
-  { propertyNames: { pattern: "^[a-z]+$" } },
+  { propertyNames: { pattern: "[" } },
   { propertyNames: 1 },
   { required: ["a", "a"] },
   { required: [1] },
@@ -107,7 +118,7 @@ const invalid: JsonObject[] = [
   // oxlint-disable-next-line unicorn/no-thenable
   { then: 1 },
   { else: 1 },
-  { allOf: [{ properties: { x: { pattern: "milk" } } }] },
+  { allOf: [{ properties: { x: { pattern: "[" } } }] },
 ];
 
 it.each(invalid)("rejects malformed or unsupported constraints at setup: %j", (schema) => {
