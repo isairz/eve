@@ -6,6 +6,10 @@ import {
 } from "eve/sandbox/provider";
 import { VercelSandbox, type VercelSandboxEnvironmentOptions } from "eve/sandbox/vercel";
 
+import { requireState, type EveGhSessionContext, type EveGhSessionState } from "./eve-gh-state.ts";
+
+export { requireState, type EveGhSessionContext, type EveGhSessionState } from "./eve-gh-state.ts";
+
 export const EVE_GH_PROVIDER = "eve-gh";
 
 export interface EveGhSandboxOptions {
@@ -23,13 +27,6 @@ export interface EveGhSandboxOptions {
   readonly fetch?: typeof globalThis.fetch;
 }
 
-/** Session state of the wrapped Vercel provider, plus adapter fields. */
-export type EveGhSessionState = {
-  readonly sandboxName: string;
-  readonly version: 3;
-  readonly devboxId?: string;
-};
-
 export type EveGhArtifact = { readonly [key: string]: SandboxPreparedArtifact };
 
 export type EveGhImplementation = SandboxProviderImplementation<
@@ -39,7 +36,9 @@ export type EveGhImplementation = SandboxProviderImplementation<
   SandboxSession
 >;
 
-type ResolveOptions = () => EveGhSandboxOptions | Promise<EveGhSandboxOptions>;
+type ResolveOptions = (
+  context: EveGhSessionContext,
+) => EveGhSandboxOptions | Promise<EveGhSandboxOptions>;
 
 /**
  * A template-free Vercel provider. Credentials are resolved only when a session
@@ -47,8 +46,8 @@ type ResolveOptions = () => EveGhSandboxOptions | Promise<EveGhSandboxOptions>;
  * from a Git source with its own managed Git grant.
  */
 export function eveGhImplementation(resolveOptions: ResolveOptions): EveGhImplementation {
-  async function vercel() {
-    const options = await resolveOptions();
+  async function vercel(context: EveGhSessionContext) {
+    const options = await resolveOptions(context);
     if (options.enabled !== true) throw new Error("eve-gh sandbox is disabled.");
     return vercelImplementation(eveGhCreateOptions(options));
   }
@@ -63,12 +62,12 @@ export function eveGhImplementation(resolveOptions: ResolveOptions): EveGhImplem
       return {};
     },
     async start(context) {
-      const { handle, state } = await (await vercel()).start(context, undefined, {});
+      const { handle, state } = await (await vercel(context)).start(context, undefined, {});
       return { handle, state: requireState(state) };
     },
     async resume(context, _artifact, state) {
       // Resume reconnects the named sandbox; it never recreates a Git grant.
-      return await (await vercel()).resume(context, {}, requireState(state));
+      return await (await vercel(context)).resume(context, {}, requireState(state));
     },
   };
 }
@@ -84,20 +83,6 @@ export function eveGhEnvironment(
     EveGhSessionState,
     SandboxSession
   >({ name: EVE_GH_PROVIDER, environment: implementation }).environment();
-}
-
-export function requireState(state: unknown): EveGhSessionState {
-  if (typeof state !== "object" || state === null) {
-    throw new Error("Invalid eve-gh sandbox state.");
-  }
-  const { sandboxName, version, devboxId } = state as Record<string, unknown>;
-  if (typeof sandboxName !== "string" || version !== 3) {
-    throw new Error("Invalid eve-gh sandbox state.");
-  }
-  if (devboxId !== undefined && typeof devboxId !== "string") {
-    throw new Error("Invalid persisted Devbox identity.");
-  }
-  return devboxId === undefined ? { sandboxName, version } : { sandboxName, version, devboxId };
 }
 
 type VercelImplementation = SandboxProviderImplementation<

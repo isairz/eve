@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { defineState, type StateHandle } from "eve/context";
 import {
   defineTool,
@@ -24,7 +23,12 @@ interface Owner {
 }
 
 const owner = defineState<Owner | null>("eve-code.eve-gh-owner", () => null);
-const creationAuth = new AsyncLocalStorage<EveGhSandboxOptions>();
+/**
+ * Creation credentials for in-flight `getSandbox()` calls, keyed by session id.
+ * Entries live in process memory only for the duration of one call, so the
+ * user's token never reaches durable state, config, tool output, or VM files.
+ */
+const creationAuth = new Map<string, EveGhSandboxOptions[]>();
 const userSchema = z.object({
   sub: z.string().min(1),
   name: z.string().trim().min(1).optional(),
@@ -32,8 +36,8 @@ const userSchema = z.object({
   email: z.email(),
 });
 
-export function currentEveGhAuth(): EveGhSandboxOptions {
-  const options = creationAuth.getStore();
+export function currentEveGhAuth(sessionId: string): EveGhSandboxOptions {
+  const options = creationAuth.get(sessionId)?.at(-1);
   if (!options)
     throw new Error("Authorize Vercel through an eve-gh tool before opening the sandbox.");
   return options;
@@ -80,17 +84,24 @@ export async function getEveGhSandbox(
     return { caller, vercelUserId: user.sub };
   });
 
-  // Only nonsecret ownership is authored state. Pass the current user's token
-  // to Eve's backend in this async scope, never in config, tool output, or VM files.
-  return creationAuth.run(
-    {
-      ...settings,
-      enabled: true,
-      token,
-      commitAs: { name: user.name ?? user.preferred_username, email: user.email },
-    },
-    () => ctx.getSandbox(),
-  );
+  // Only nonsecret ownership is authored state. The provider reads the current
+  // user's token for this session only while this call is opening the sandbox.
+  const options: EveGhSandboxOptions = {
+    ...settings,
+    enabled: true,
+    token,
+    commitAs: { name: user.name ?? user.preferred_username, email: user.email },
+  };
+  const sessionId = ctx.session.id;
+  const pending = creationAuth.get(sessionId) ?? [];
+  pending.push(options);
+  creationAuth.set(sessionId, pending);
+  try {
+    return await ctx.getSandbox();
+  } finally {
+    pending.splice(pending.indexOf(options), 1);
+    if (pending.length === 0) creationAuth.delete(sessionId);
+  }
 }
 
 export function withEveGhAuth<I, O>(tool: ToolDefinition<I, O>): ToolDefinition<I, O> {

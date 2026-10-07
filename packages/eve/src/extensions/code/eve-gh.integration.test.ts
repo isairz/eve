@@ -93,7 +93,7 @@ async function inSession<T>(
       state,
     });
     const ctx = {
-      session: { auth: { current: user, initiator: user } },
+      session: { id: sessionId, auth: { current: user, initiator: user } },
       abortSignal: new AbortController().signal,
       getToken: async () => ({ token: "user-token" }),
       requireAuth: () => {

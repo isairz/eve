@@ -1,7 +1,11 @@
 import { defineSandbox } from "eve/sandbox";
 
 import extension from "../../extension.ts";
-import { eveGhEnvironment, eveGhImplementation } from "../../lib/eve-gh-sandbox.ts";
+import {
+  eveGhEnvironment,
+  eveGhImplementation,
+  type EveGhSessionContext,
+} from "../../lib/eve-gh-sandbox.ts";
 import { currentEveGhAuth } from "../../lib/eve-gh-auth.ts";
 import { withDevboxCredentials } from "../../lib/devbox-credentials.ts";
 
@@ -12,8 +16,8 @@ export const environment = eveGhEnvironment(() =>
 
 export default defineSandbox(() => environment.open());
 
-function resolveAuth() {
+function resolveAuth(context: EveGhSessionContext) {
   const config = extension.config.eveGh;
   if (config?.enabled !== true) throw new Error("eve-gh sandbox is disabled.");
-  return currentEveGhAuth();
+  return currentEveGhAuth(context.session.id);
 }

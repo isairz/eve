@@ -1,6 +1,6 @@
 import { defineExtension } from "eve/extension";
 import type { SandboxSession } from "eve/sandbox";
-import type { ToolAuthProvider } from "eve/tools";
+import type { ConnectionAuthProvider } from "eve/connections";
 import { z } from "zod";
 
 import type { GitHubConfig } from "eve/extensions/git/sandbox";
@@ -27,7 +27,9 @@ export default defineExtension({
       .object({
         enabled: z.boolean().default(false),
         /** User-scoped Vercel authorization, e.g. `connect()` from `@vercel/connect/eve`. */
-        auth: z.custom<ToolAuthProvider>((value) => typeof value === "object" && value !== null),
+        auth: z.custom<ConnectionAuthProvider>(
+          (value) => typeof value === "object" && value !== null,
+        ),
         resolveOptions: fn<() => EveGhSettings | Promise<EveGhSettings>>(),
       })
       .optional(),

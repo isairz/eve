@@ -1,11 +1,8 @@
 import type { SandboxSession } from "eve/sandbox";
 import type { SandboxProviderHandle } from "eve/sandbox/provider";
 
-import {
-  requireState,
-  type EveGhImplementation,
-  type EveGhSessionState,
-} from "./eve-gh-sandbox.ts";
+import type { EveGhImplementation } from "./eve-gh-sandbox.ts";
+import { requireState, type EveGhSessionContext, type EveGhSessionState } from "./eve-gh-state.ts";
 
 interface DevboxAuth {
   readonly token: string;
@@ -16,7 +13,7 @@ interface DevboxAuth {
 /** Use Devbox's owner credential exchange without installing its agent daemon. */
 export function withDevboxCredentials(
   provider: EveGhImplementation,
-  resolveAuth: () => DevboxAuth,
+  resolveAuth: (context: EveGhSessionContext) => DevboxAuth,
   send: typeof fetch = globalThis.fetch,
 ): EveGhImplementation {
   async function attach(
@@ -51,12 +48,16 @@ export function withDevboxCredentials(
     };
     const remove = () => request(`/v1/devbox/${encodeURIComponent(devboxId!)}`);
     try {
-      const setup = await request(`/v1/devbox/setup?teamId=${encodeURIComponent(auth.teamId)}`, {
+      const setupBody: Record<string, unknown> = {
         sandboxId: state.sandboxName,
         projectId: auth.projectId,
-        ...(devboxId ? { devboxId } : {}),
-        skipDevboxdInstall: true,
-      });
+      };
+      if (devboxId) setupBody.devboxId = devboxId;
+      setupBody.skipDevboxdInstall = true;
+      const setup = await request(
+        `/v1/devbox/setup?teamId=${encodeURIComponent(auth.teamId)}`,
+        setupBody,
+      );
       devboxId = requiredString(setup, "id");
       const registrationToken = requiredString(setup, "registrationToken");
       if (previousId && devboxId !== previousId) throw new Error("Devbox identity changed.");
@@ -119,7 +120,7 @@ export function withDevboxCredentials(
   return {
     prepare: (context) => provider.prepare(context),
     async start(context, options, artifact) {
-      const auth = resolveAuth();
+      const auth = resolveAuth(context);
       const started = await provider.start(context, options, artifact);
       let state: EveGhSessionState;
       try {
@@ -132,7 +133,7 @@ export function withDevboxCredentials(
       return await attach(started.handle, { sandboxName: state.sandboxName, version: 3 }, auth);
     },
     async resume(context, artifact, value) {
-      const auth = resolveAuth();
+      const auth = resolveAuth(context);
       const state = requireState(value);
       const { devboxId: _devboxId, ...sandboxState } = state;
       const handle = await provider.resume(context, artifact, sandboxState);

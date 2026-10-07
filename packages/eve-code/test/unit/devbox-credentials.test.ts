@@ -33,7 +33,7 @@ function fixture() {
   };
   let failure: { path: string; status: number } | undefined;
   let deleteFailure: Error | undefined;
-  const sandbox = {
+  const sandbox: SandboxSession = {
     async run(options: Parameters<SandboxSession["run"]>[0]) {
       commands.push(options);
       const result = spawnSync(process.execPath, ["-e", options.command], {
@@ -46,7 +46,7 @@ function fixture() {
       commands.push(options);
       return { pid: "process" } as never;
     },
-  } as unknown as SandboxSession;
+  } as never;
   const handle: SandboxProviderHandle = {
     sandbox,
     async onSessionDelete() {
@@ -189,7 +189,7 @@ test("a failed reconnect stops but preserves the registration and workspace and 
 test("an invalid persisted Devbox identity is rejected before reconnecting", async () => {
   const f = fixture();
   await assert.rejects(
-    f.resume({ ...started, devboxId: 42 } as unknown as EveGhSessionState),
+    f.resume({ ...started, devboxId: 42 } as never),
     /Invalid persisted Devbox identity/,
   );
   assert.deepEqual(f.resumedWith, []);

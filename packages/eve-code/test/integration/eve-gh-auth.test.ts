@@ -5,12 +5,12 @@ import type { ToolAuthProvider, ToolContext } from "eve/tools";
 import { currentEveGhAuth, getEveGhSandbox } from "../../extension/lib/eve-gh-auth.ts";
 import { eveGhImplementation } from "../../extension/lib/eve-gh-sandbox.ts";
 
-const vercelAuth = {
+const vercelAuth: ToolAuthProvider = {
   principalType: "user",
   async getToken() {
     return { token: "unused" };
   },
-} as unknown as ToolAuthProvider;
+} as never;
 
 const settings = {
   auth: vercelAuth,
@@ -28,8 +28,11 @@ function fixture(id = "alice") {
     },
   };
   const calls: string[] = [];
-  const ctx = {
-    session: { auth: { current: { principalId: id, principalType: "user", issuer: "slack:T" } } },
+  const ctx: ToolContext = {
+    session: {
+      id: `session-${id}`,
+      auth: { current: { principalId: id, principalType: "user", issuer: "slack:T" } },
+    },
     abortSignal: new AbortController().signal,
     async getToken(provider: unknown) {
       assert.equal(provider, vercelAuth);
@@ -41,15 +44,15 @@ function fixture(id = "alice") {
     },
     async getSandbox() {
       calls.push("sandbox");
-      const auth = currentEveGhAuth();
+      const auth = currentEveGhAuth(`session-${id}`);
       assert.equal(auth.token, `token-${id}`);
       assert.deepEqual(auth.commitAs, { name: id, email: `${id}@example.com` });
       assert.equal(auth.projectId, settings.projectId);
       await Promise.resolve();
-      assert.equal(currentEveGhAuth().token, `token-${id}`);
+      assert.equal(currentEveGhAuth(`session-${id}`).token, `token-${id}`);
       return { id: `sbx-${id}` };
     },
-  } as unknown as ToolContext;
+  } as never;
   const send = (async (input, init) => {
     assert.equal(input, "https://api.vercel.com/login/oauth/userinfo");
     assert.equal(new Headers(init?.headers).get("authorization"), `Bearer token-${id}`);
@@ -69,7 +72,7 @@ test("user authorization and verified identity precede sandbox creation; only ow
   await getEveGhSandbox(f.ctx, settings, f.state, f.send);
   assert.deepEqual(f.calls, ["authorize", "identity", "sandbox"]);
   assert.deepEqual(f.state.get(), { caller: '["slack:T","alice"]', vercelUserId: "vercel-alice" });
-  assert.throws(currentEveGhAuth, /Authorize Vercel/);
+  assert.throws(() => currentEveGhAuth("session-alice"), /Authorize Vercel/);
   f.calls.length = 0;
   await getEveGhSandbox(f.ctx, settings, f.state, f.send);
   assert.deepEqual(f.calls, ["authorize", "identity", "sandbox"]);
@@ -128,7 +131,8 @@ test("concurrent users have isolated creation credentials", async () => {
     getEveGhSandbox(bob.ctx, settings, bob.state, bob.send),
   ]);
   assert.notDeepEqual(alice.state.get(), bob.state.get());
-  assert.throws(currentEveGhAuth, /Authorize Vercel/);
+  assert.throws(() => currentEveGhAuth("session-alice"), /Authorize Vercel/);
+  assert.throws(() => currentEveGhAuth("session-bob"), /Authorize Vercel/);
 });
 
 test("identity lookup errors never reach the sandbox or expose the response body", async () => {
@@ -148,8 +152,8 @@ test("identity lookup errors never reach the sandbox or expose the response body
 test("the caller's OAuth token and verified identity reach the real Sandbox SDK request", async () => {
   const f = fixture();
   let creates = 0;
-  const provider = eveGhImplementation(() => ({
-    ...currentEveGhAuth(),
+  const provider = eveGhImplementation((context) => ({
+    ...currentEveGhAuth(context.session.id),
     fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init);
       assert.equal(request.headers.get("authorization"), "Bearer token-alice");
@@ -170,7 +174,7 @@ test("the caller's OAuth token and verified identity reach the real Sandbox SDK 
         host: {} as never,
         session: {
           auth: { current: null, initiator: null },
-          id: "oauth-managed-check",
+          id: "session-alice",
           turn: { id: "turn", sequence: 0 },
         },
         storagePath: "/unused",
@@ -182,5 +186,5 @@ test("the caller's OAuth token and verified identity reach the real Sandbox SDK 
   };
   await assert.rejects(getEveGhSandbox(f.ctx, settings, f.state, f.send), /Preview disabled/);
   assert.equal(creates, 1);
-  assert.throws(currentEveGhAuth, /Authorize Vercel/);
+  assert.throws(() => currentEveGhAuth("session-alice"), /Authorize Vercel/);
 });
