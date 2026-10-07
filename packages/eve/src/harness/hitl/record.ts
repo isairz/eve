@@ -108,7 +108,7 @@ export interface HitlRecord {
     Record<
       string,
       {
-        readonly at: import("#harness/session-machine/view.js").StepCoordinates;
+        readonly at: StepCoordinates;
         readonly name: string;
         readonly runId: string;
       }
