@@ -50,7 +50,16 @@ export async function reportStubFailureStep(
   error: string,
 ): Promise<void> {
   "use step";
-  await requestStub(scope, { kind: "failure", callId, error });
+  try {
+    await requestStub(scope, { kind: "failure", callId, error });
+  } catch (cause) {
+    // Without an acknowledgement, verification cannot safely declare this eval successful.
+    // Cancel the stub-owning run so the caller can keep its original output error or fallback.
+    if (scope.rootSessionId === undefined) throw cause;
+    await getRun(scope.rootSessionId).cancel({
+      cancelReason: "Could not record a tool stub output-processing failure.",
+    });
+  }
 }
 
 async function requestStub(scope: StubScope, request: StubRequest): Promise<StubResult> {
@@ -73,10 +82,14 @@ async function requestStub(scope: StubScope, request: StubRequest): Promise<Stub
 }
 
 export async function readStubFailure(sessionId: string): Promise<string | undefined> {
-  const stream = getRun(sessionId).getReadable<string>({ namespace: STUB_FAILURE_NAMESPACE });
+  const run = getRun(sessionId);
+  const stream = run.getReadable<string>({ namespace: STUB_FAILURE_NAMESPACE });
   if ((await stream.getTailIndex()) < 0) {
     await stream.cancel();
-    return undefined;
+    const status = await run.status;
+    return status === "failed" || status === "cancelled"
+      ? "Tool stub session failed before verification."
+      : undefined;
   }
   const reader = stream.getReader();
   try {
