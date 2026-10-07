@@ -17,7 +17,11 @@ import { createTestRuntime } from "#internal/testing/app-harness.js";
 import { buildSerializedContext } from "#internal/testing/entry-test-helpers.js";
 import { waitForHook } from "#internal/testing/workflow-test-helpers.js";
 import { workflowEntry } from "#execution/session/entry.js";
-import { callToolStubStep, readStubFailure } from "#execution/tool-stubs/steps.js";
+import {
+  callToolStubStep,
+  readStubFailure,
+  readMatchedStubRules,
+} from "#execution/tool-stubs/steps.js";
 import { STUB_CONTEXT_KEY } from "#tool-stubs/types.js";
 
 describe("durable tool stub playback", () => {
@@ -48,6 +52,7 @@ describe("durable tool stub playback", () => {
         rootSessionId: run.runId,
         rules,
       };
+      expect(await readMatchedStubRules(run.runId)).toEqual([]);
       const call = { tool: "list_tasks", input: {} };
       const outputs = await Promise.all([
         callToolStubStep(scope, { ...call, callId: "root:first" }),
@@ -64,6 +69,7 @@ describe("durable tool stub playback", () => {
         outcome: { response: ["dog"] },
       });
       expect(await readStubFailure(run.runId)).toBeUndefined();
+      expect(await readMatchedStubRules(run.runId)).toEqual(["list"]);
     });
   });
   it.each([

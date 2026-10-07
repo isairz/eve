@@ -27,6 +27,8 @@ export default ${kind === "workflow" ? "defineWorkflowTool" : "defineTool"}({
           "Look up Alice's tasks.\n",
         "agent/agent.ts": delegatingAgent("researcher"),
         "agent/tools/lookup.ts": lookup,
+        "agent/subagents/remote.ts": `import { defineRemoteAgent } from "eve";
+export default defineRemoteAgent({ url: "https://remote.invalid", description: "Remote tasks." });`,
         "agent/subagents/researcher/agent.ts": delegatingAgent("assistant"),
         "agent/subagents/researcher/tools/lookup.ts": lookup,
         "agent/subagents/researcher/subagents/assistant/agent.ts": delegatingAgent("lookup"),
@@ -50,11 +52,18 @@ export default eveChannel({
         host: server.url,
         auth: { basic: { username: "alice", password: "fixture" } },
       });
+      for (const tool of ["assistant/lookup", "researcher/lookpu", "remote/lookup"]) {
+        await expect(
+          client.sessions.create({
+            stubs: [{ id: "invalid", tool, outcome: { response: "INVALID" } }],
+          }),
+        ).rejects.toThrow(tool);
+      }
       const { session } = await client.sessions.create({
         stubs: [
           { id: "root", tool: "lookup", outcome: { response: "ROOT" } },
+          { id: "remote", tool: "remote", outcome: { response: "REMOTE" } },
           { id: "child", tool: "researcher/lookup", outcome: { response: "CHILD" } },
-          { id: "wrong-branch", tool: "assistant/lookup", outcome: { response: "WRONG-BRANCH" } },
           {
             id: "grandchild",
             tool: "researcher/assistant/lookup",

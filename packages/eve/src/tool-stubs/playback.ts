@@ -29,6 +29,10 @@ export class StubPlayback {
     }));
   }
 
+  get matchedRuleCount(): number {
+    return this.positions.size;
+  }
+
   call(call: StubCall): StubResult {
     const recorded = this.results.get(call.callId);
     if (recorded !== undefined) return recorded;

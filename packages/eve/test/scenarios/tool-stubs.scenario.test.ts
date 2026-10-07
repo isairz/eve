@@ -60,6 +60,14 @@ export default eveChannel({
         outcomes: [{ response: "pending" }, { response: "completed" }] as const,
       },
     ];
+    for (const tool of ["deply", "unknown/deploy", "deploy/child"]) {
+      const invalid = await alice.fetch("/eve/v1/session", {
+        method: "POST",
+        body: JSON.stringify({ stubs: [{ id: "typo", tool, outcome: { response: "fake" } }] }),
+      });
+      expect(invalid.status).toBe(400);
+      expect(await invalid.json()).toMatchObject({ error: expect.stringContaining(tool) });
+    }
     const { session } = await alice.sessions.create({ stubs });
     const path = `/eve/v1/session/${session.state.sessionId}`;
     const forbidden = await bob.fetch("/eve/v1/session", {
@@ -79,9 +87,10 @@ export default eveChannel({
     expect(results(exhausted.events)).toEqual(["completed"]);
     const live = await (await shared.send("Bob asks to deploy web.")).result();
     expect(results(live.events)).toEqual(["live"]);
-    const status = await bob.fetch(path + "/stubs");
+    expect((await bob.fetch(path + "/stubs")).status).toBe(403);
+    const status = await alice.fetch(path + "/stubs");
     expect(status.status).toBe(200);
-    expect(await status.json()).toEqual({ error: null });
+    expect(await status.json()).toEqual({ error: null, matchedRuleIds: ["deploy"] });
     const replacement = await bob.fetch(path, {
       method: "POST",
       body: JSON.stringify({ message: "Next", stubs }),
@@ -110,9 +119,9 @@ export default eveChannel({
     });
     const selected = await (await overlapping.send("Alice asks to deploy api.")).result();
     expect(results(selected.events)).toEqual(["a"]);
-    const failure = await bob.fetch(`/eve/v1/session/${overlapping.state.sessionId}/stubs`);
+    const failure = await alice.fetch(`/eve/v1/session/${overlapping.state.sessionId}/stubs`);
     expect(failure.status).toBe(200);
-    expect(await failure.json()).toEqual({ error: null });
+    expect(await failure.json()).toEqual({ error: null, matchedRuleIds: ["a"] });
   } finally {
     await server.stop();
   }

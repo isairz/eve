@@ -71,6 +71,8 @@ export async function recordToolStubFailure(
   const context = contextStorage.getStore();
   const scope = context?.get(ToolStubsKey);
   if (scope === undefined || callId === undefined) return;
+  // Connection output conversion runs on the wrapper, after a qualified operation was stubbed.
+  if (tool !== "connection_execute" && findStubTarget(scope, tool) === undefined) return;
   const session = context!.require(SessionKey);
   await context!
     .require(ToolStubPlaybackKey)

@@ -5,7 +5,7 @@ description: "Define tool outcomes and outcome sequences in your evals."
 
 Pass `stubs` when creating an eval session to replace selected tool executions with JSON responses. The same rules work against local and deployed agents, without deploying mock functions or keeping the runner connected to answer tool calls.
 
-Stubs specify what tools return. [Assertions](./assertions) check what the agent does and tells the user. An unused stub does not fail an eval.
+Stubs specify what tools return. [Assertions](./assertions) check what the agent does and tells the user. Unused stubs produce a warning without failing the eval.
 
 ## Author an eval
 
@@ -125,7 +125,7 @@ Every property listed in `match` must exist and satisfy its constraint. Extra to
       "properties": { "status": { "const": "open" } },
       "required": ["status"]
     },
-    "query": { "type": "string", "enum": ["milk", "buy milk"] },
+    "query": { "type": "string", "pattern": "\\b[Mm]ilk\\b" },
     "tags": { "type": "array", "contains": { "const": "urgent" } }
   },
   "outcome": { "response": { "tasks": ["Buy milk"] } }
@@ -134,7 +134,11 @@ Every property listed in `match` must exist and satisfy its constraint. Extra to
 
 Nested properties are optional unless listed in `required`. Matching does not coerce values, apply defaults, or change arguments. The real tool schema validates input before replacement; normal approvals and output processing still apply.
 
-Constraints use a reference-free subset of JSON Schema 2020-12: types, `const`, `enum`, string and numeric bounds, array items/contains, object properties/required/additionalProperties, dependencies, and logical/conditional schemas. Regex matchers (`pattern` and `patternProperties`), `$ref`, `format`, unknown keywords, and malformed constraints are rejected at setup. Use `const` or `enum` for string matching. Eval assertions can still use regular expressions to check tool arguments and agent responses.
+Constraints use a reference-free subset of JSON Schema 2020-12: types, scalar `const` and `enum`, string patterns and bounds, numeric bounds, array items/contains, object properties/required/additionalProperties, and logical/conditional schemas. `pattern` uses JavaScript regular expressions. Schema validation, regex syntax checks, and validator initialization run before session creation.
+
+Unsupported constraints fail setup: `patternProperties`, references, formats, `multipleOf`, `minContains`, `maxContains`, `uniqueItems`, dependencies, and object/array values in `const` or `enum`. Nested `properties` and `required` cannot use inherited property names such as `constructor` or `toString`. Use nested properties or array items to match structured values.
+
+Unknown static tool names, invalid local-agent paths, and paths into remote agents fail session creation. Dynamic names and connection operations are checked where possible; unresolved names are allowed. After the eval, unused rule IDs are reported as warnings. Use tool assertions when a call must happen.
 
 Configuration is limited to 100 rules, 20,000 JSON nodes, nesting depth 32, and approximately one million characters. The `__proto__` property name is reserved.
 
@@ -178,6 +182,8 @@ Both projects can authenticate; only the eval runner receives replacement permis
 Custom authenticators can return the same `allowToolStubs: true` after verifying the caller. See [authentication and route protection](../guides/auth-and-route-protection#tool-replacement-permission) for the grant rules and a local development example.
 
 Permission is checked at session creation before identity projection. Later messages and result reads use normal channel authentication. Anyone your channel admits to an existing session can use its stubs. Your application's session-access policy must provide the required isolation; an isolated eval deployment can use the same agent code.
+
+The stub verification endpoint also requires `allowToolStubs`, checked before reading workflow status.
 
 ## Supported tools and subagents
 
@@ -230,15 +236,3 @@ const stubs = [
 ```
 
 Each outcome will contain exactly one of `response` or `throw`. Exceptions will be injected immediately, without artificial delays or hanging calls. Expected tool failures will remain distinct from broken stub infrastructure: an eval can pass when the agent handles an injected failure correctly, but an infrastructure failure must fail verification. Returning `{ response: { error: "timeout" } }` today is ordinary JSON, not a thrown error.
-
-## Known matcher limitations
-
-eve reuses its existing bundled `@cfworker/json-schema` validator without local patches. Validation runs locally, without calling a Cloudflare service. Version 4.1.1 has these [upstream defects](https://github.com/cfworker/cfworker/issues/338):
-
-- Fractional `multipleOf` can reject valid negative values or accept invalid small values. The negative-value bug is also tracked in [#337](https://github.com/cfworker/cfworker/issues/337).
-- `contains` with `maxContains` can accept zero matches unless you explicitly set `minContains: 1`.
-- `const`, `enum`, and `uniqueItems` can confuse arrays with objects that have the same enumerable keys. Use explicit type constraints where possible; avoid mixed array/object uniqueness checks.
-- Nested `required` and dependency checks can treat inherited names such as `constructor` as present. Avoid those property names in these constraints.
-- Some `dependentRequired` maps with keys named `id` or `$id` fail validator initialization, including `{ id: [] }` and `{ $id: ["#"] }`. The session fails before tools execute.
-
-Avoid affected constraints until the dependency is fixed. A false match can select the wrong stub; a missed match can execute the real tool. Ordinary string ID and status matching are unaffected. Regression tests retain the known failures and flag fixes when the validator is upgraded.

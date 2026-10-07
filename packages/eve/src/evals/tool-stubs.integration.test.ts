@@ -45,6 +45,7 @@ it.each(["output processing", "failure reporting"])(
     });
     const statusRoute = eveChannel({
       auth: () => ({
+        allowToolStubs: true,
         principalId: "eval-runner",
         principalType: "service",
         authenticator: "test",
