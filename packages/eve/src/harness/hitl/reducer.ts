@@ -110,7 +110,7 @@ export function reduce(
       const budget = answerBudget(state, typed);
       return then(
         { events: [{ type: "consumeMessage" }, ...budget.events], state: budget.state },
-        (next) => answerApprovals(next, budget.unclaimed),
+        (next) => answerApprovals(next, budget.unclaimed, input.sender),
       );
     }
     case "cancel.requested":

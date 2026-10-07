@@ -6,6 +6,7 @@ import {
   createApprovalSettledEvent,
   createInputRequestedEvent,
   createInputResolvedEvent,
+  createMessageCompletedEvent,
   type InputResolution,
 } from "#protocol/message.js";
 import type { HarnessToolMap } from "#harness/types.js";
@@ -166,15 +167,41 @@ export function answerApprovals<S extends ApprovalState>(
   responses: readonly InputResponse[],
   responder: SessionAuthContext | null = null,
 ): Reduced<S> {
+  const feedback: Command[] = [];
+  const accepted = responses.filter((response) => {
+    const approval = state.requests[response.requestId];
+    const outcome = outcomeOf(response);
+    if (
+      isOpenApproval(approval) &&
+      approval.responsePolicy !== true &&
+      responder !== null &&
+      (outcome === "approved" || outcome === "denied") &&
+      approval.requester !== null &&
+      !sameResponder(approval.requester, responder)
+    ) {
+      // Consume the response, but leave the request open. Only a response policy
+      // opts an authenticated requester's approval into other responders.
+      feedback.push(
+        publish(
+          createMessageCompletedEvent({
+            ...approval.at,
+            message: "Only the person who requested this action can respond to this approval.",
+          }),
+        ),
+      );
+      return false;
+    }
+    return true;
+  });
   const settled =
-    responder === null ? { events: [], state } : settledBy(state, responses, responder);
-  const recorded = recordAnswers(settled.state, responses);
+    responder === null ? { events: [], state } : settledBy(state, accepted, responder);
+  const recorded = recordAnswers(settled.state, accepted);
   const open = openApprovalsOf(recorded);
   if (open.length === 0 || open.some((approval) => approval.answer === undefined)) {
-    return { events: settled.events, state: recorded };
+    return { events: [...feedback, ...settled.events], state: recorded };
   }
   const resolved = resolveApprovals(recorded);
-  return { events: [...settled.events, ...resolved.events], state: resolved.state };
+  return { events: [...feedback, ...settled.events, ...resolved.events], state: resolved.state };
 }
 
 /**
@@ -441,4 +468,14 @@ function notRunMessage(parts: readonly ToolResultPart[]): ModelMessage {
 
 function publish(event: Extract<Command, { type: "publish" }>["event"]): Command {
   return { event, type: "publish" };
+}
+
+/** Match the complete principal identity, not only its provider-local id. */
+function sameResponder(left: SessionAuthContext, right: SessionAuthContext): boolean {
+  return (
+    left.authenticator === right.authenticator &&
+    left.issuer === right.issuer &&
+    left.principalId === right.principalId &&
+    left.principalType === right.principalType
+  );
 }

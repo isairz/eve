@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ALICE,
+  BOB,
   AT,
   Turn,
   answer,
@@ -445,5 +446,55 @@ describe("tool approvals", () => {
     expect(cleared.humanInput.grantedApprovalKeys()).toEqual(new Set(["deploy:api"]));
     expect(cleared.humanInput.relayedRequestIds()).toEqual(new Set(["child-publish"]));
     expect(cleared.next()).toEqual({ run: "model" });
+  });
+});
+
+// The requester-only gate from coordinator.test.ts (#4368) must survive deleting
+// the old coordinator: response policies are the only opt-in to other responders.
+describe("direct approval requester boundary", () => {
+  it("lets the requester settle the call", () => {
+    const turn = waitingOnApprovals("deploy").input(answer("approve", "deploy", ALICE));
+    expect(turn.published("approval.settled")).toHaveLength(1);
+  });
+
+  it.each(["approve", "cancel"])("rejects another principal's %s", (optionId) => {
+    const turn = waitingOnApprovals("deploy").input(answer(optionId, "deploy", BOB));
+    expect(turn.published("approval.settled")).toEqual([]);
+    expect(turn.published("input.resolved")).toEqual([]);
+    expect(turn.stored().humanInput.openRequestIds()).toEqual(new Set(["deploy"]));
+    expect(turn.published("message.completed").map(({ data }) => data.message)).toEqual([
+      "Only the person who requested this action can respond to this approval.",
+    ]);
+  });
+
+  it("lets anyone respond when the requester is unauthenticated", () => {
+    const turn = Turn.idle()
+      .input(approvalsRequested([approval("deploy")], { requester: null }))
+      .input(answer("approve", "deploy", BOB));
+    expect(turn.published("approval.settled")).toHaveLength(1);
+  });
+});
+
+describe("direct approval requester boundary exceptions", () => {
+  it("lets anyone respond when the requester is anonymous", () => {
+    const turn = Turn.idle()
+      .input(
+        approvalsRequested([approval("deploy")], {
+          requester: { ...ALICE, principalType: "anonymous" },
+        }),
+      )
+      .input(answer("approve", "deploy", BOB));
+    expect(turn.published("approval.settled")).toHaveLength(1);
+  });
+
+  it("lets a response policy authorize another responder", () => {
+    const turn = Turn.idle()
+      .input(approvalsRequested([approval("deploy")], { responsePolicyRequestIds: ["deploy"] }))
+      .checked(answer("approve", "deploy", BOB), {
+        kind: "returned",
+        value: { status: "allowed" },
+      });
+    expect(turn.published("approval.settled")).toHaveLength(1);
+    expect(turn.published("message.completed")).toEqual([]);
   });
 });
