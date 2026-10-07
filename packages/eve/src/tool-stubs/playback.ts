@@ -3,7 +3,7 @@ import { createStubValidator } from "#tool-stubs/schema.js";
 import type { StubCall, StubResult, ToolStub } from "#tool-stubs/types.js";
 
 /**
- * Selects stub responses and advances their sequences.
+ * Selects stub outcomes and advances their sequences.
  * The surrounding workflow orders calls and restores progress on replay.
  */
 export class StubPlayback {
@@ -53,14 +53,14 @@ export class StubPlayback {
       ),
     );
     if (rule === undefined) return this.record(call, { kind: "real" });
-    const responses = rule.responses ?? [rule.response!];
-    const position = Math.min(this.positions.get(rule.id) ?? 0, responses.length - 1);
+    const outcomes = rule.outcomes ?? [rule.outcome!];
+    const position = Math.min(this.positions.get(rule.id) ?? 0, outcomes.length - 1);
     this.positions.set(rule.id, position + 1);
     return this.record(call, {
       kind: "stub",
       ruleId: rule.id,
       position,
-      response: responses[position]!,
+      outcome: outcomes[position]!,
     });
   }
 

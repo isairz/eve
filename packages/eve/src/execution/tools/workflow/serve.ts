@@ -458,6 +458,6 @@ async function serveStub(
       throw new Error(
         result.kind === "error" ? result.error : "Persistent stub configuration changed.",
       );
-    ctx.reply(result.response);
+    ctx.reply(result.outcome.response);
   }
 }

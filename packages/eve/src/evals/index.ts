@@ -78,4 +78,4 @@ export type {
   MockModelToolResult,
   MockModelUsage,
 } from "#evals/mock-model.js";
-export type { ToolStub } from "#tool-stubs/types.js";
+export type { ToolStub, ToolStubOutcome } from "#tool-stubs/types.js";

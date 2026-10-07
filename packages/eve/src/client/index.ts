@@ -166,4 +166,4 @@ export {
 } from "#shared/input.js";
 
 export { resolveTextToResponse, resolveTextToResponses } from "#channel/resolve-text.js";
-export type { ToolStub } from "#tool-stubs/types.js";
+export type { ToolStub, ToolStubOutcome } from "#tool-stubs/types.js";

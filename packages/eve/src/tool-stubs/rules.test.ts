@@ -8,7 +8,7 @@ describe("tool stubs", () => {
     expect(() =>
       parseToolStubs(
         JSON.parse(
-          '[{"id":"a","tool":"list","match":{"__proto__":{"const":"x"}},"response":null}]',
+          '[{"id":"a","tool":"list","match":{"__proto__":{"const":"x"}},"outcome":{"response":null}}]',
         ),
       ),
     ).toThrow(/prototype/i);
@@ -21,7 +21,7 @@ describe("tool stubs", () => {
           id: "milk",
           tool: "complete_task",
           match: { task_id: { const: "milk" } },
-          response: { success: true },
+          outcome: { response: { success: true } },
         },
       ]),
     );
@@ -31,39 +31,45 @@ describe("tool stubs", () => {
       kind: "stub",
       ruleId: "milk",
       position: 0,
-      response: { success: true },
+      outcome: { response: { success: true } },
     });
     expect(input).toEqual({ task_id: "milk", reason: "Done" });
   });
 
   it("advances per call, repeats the last response, and reuses retried calls", () => {
     const playback = new StubPlayback(
-      parseToolStubs([{ id: "tasks", tool: "list_tasks", responses: [["milk", "dog"], ["dog"]] }]),
+      parseToolStubs([
+        {
+          id: "tasks",
+          tool: "list_tasks",
+          outcomes: [{ response: ["milk", "dog"] }, { response: ["dog"] }],
+        },
+      ]),
     );
     const call = { tool: "list_tasks", input: {} };
     expect(playback.call({ ...call, callId: "first" })).toEqual({
       kind: "stub",
       ruleId: "tasks",
       position: 0,
-      response: ["milk", "dog"],
+      outcome: { response: ["milk", "dog"] },
     });
     expect(playback.call({ ...call, callId: "second" })).toEqual({
       kind: "stub",
       ruleId: "tasks",
       position: 1,
-      response: ["dog"],
+      outcome: { response: ["dog"] },
     });
     expect(playback.call({ ...call, callId: "first" })).toEqual({
       kind: "stub",
       ruleId: "tasks",
       position: 0,
-      response: ["milk", "dog"],
+      outcome: { response: ["milk", "dog"] },
     });
     expect(playback.call({ ...call, callId: "third" })).toEqual({
       kind: "stub",
       ruleId: "tasks",
       position: 1,
-      response: ["dog"],
+      outcome: { response: ["dog"] },
     });
   });
 
@@ -79,10 +85,10 @@ describe("tool stubs", () => {
               properties: { status: { const: "open", default: "open" } },
               required: ["status"],
             },
-            query: { type: "string", pattern: "milk" },
+            query: { type: "string", enum: ["milk", "buy milk"] },
             tags: { type: "array", contains: { const: "urgent" } },
           },
-          response: ["milk"],
+          outcome: { response: ["milk"] },
         },
       ]),
     );
@@ -107,7 +113,7 @@ describe("tool stubs", () => {
           limit: 10,
         },
       }),
-    ).toEqual({ kind: "stub", ruleId: "search", position: 0, response: ["milk"] });
+    ).toEqual({ kind: "stub", ruleId: "search", position: 0, outcome: { response: ["milk"] } });
   });
 
   it("uses the first match, advances only its sequence, and never falls through after exhaustion", () => {
@@ -117,20 +123,40 @@ describe("tool stubs", () => {
           id: "specific",
           tool: "list",
           match: { status: { const: "open" } },
-          responses: ["one", "two"],
+          outcomes: [{ response: "one" }, { response: "two" }],
         },
-        { id: "fallback", tool: "list", responses: ["fallback-one", "fallback-two"] },
+        {
+          id: "fallback",
+          tool: "list",
+          outcomes: [{ response: "fallback-one" }, { response: "fallback-two" }],
+        },
       ]),
     );
     const call = (callId: string, status: string) =>
       playback.call({ callId, tool: "list", input: { status } });
-    expect(call("a", "open")).toMatchObject({ ruleId: "specific", response: "one", position: 0 });
-    expect(call("b", "open")).toMatchObject({ ruleId: "specific", response: "two", position: 1 });
-    expect(call("c", "open")).toMatchObject({ ruleId: "specific", response: "two", position: 1 });
-    expect(call("a", "open")).toMatchObject({ ruleId: "specific", response: "one", position: 0 });
+    expect(call("a", "open")).toMatchObject({
+      ruleId: "specific",
+      outcome: { response: "one" },
+      position: 0,
+    });
+    expect(call("b", "open")).toMatchObject({
+      ruleId: "specific",
+      outcome: { response: "two" },
+      position: 1,
+    });
+    expect(call("c", "open")).toMatchObject({
+      ruleId: "specific",
+      outcome: { response: "two" },
+      position: 1,
+    });
+    expect(call("a", "open")).toMatchObject({
+      ruleId: "specific",
+      outcome: { response: "one" },
+      position: 0,
+    });
     expect(call("d", "closed")).toMatchObject({
       ruleId: "fallback",
-      response: "fallback-one",
+      outcome: { response: "fallback-one" },
       position: 0,
     });
   });
@@ -142,7 +168,7 @@ describe("tool stubs", () => {
           id: "agent",
           tool: "tasks_agent",
           match: { message: { const: "hello" } },
-          response: "hi",
+          outcome: { response: "hi" },
         },
       ]),
     );
@@ -160,28 +186,39 @@ describe("tool stubs", () => {
   });
 
   it.each([
-    [{ tool: "list", response: null }],
-    [{ id: "a", tool: "", response: null }],
+    [{ tool: "list", outcome: { response: null } }],
+    [{ id: "a", tool: "", outcome: { response: null } }],
     [{ id: "a", tool: "list" }],
-    [{ id: "a", tool: "list", responses: [] }],
-    [{ id: "a", tool: "list", response: null, responses: [null] }],
-    [{ id: "a", tool: "list", response: null, typo: true }],
-    [{ id: "a", tool: "list", match: [], response: null }],
-    [{ id: "a", tool: "list", match: { x: 1 }, response: null }],
-    [{ id: "a", tool: "list", response: { value: Number.NaN } }],
+    [{ id: "a", tool: "list", response: null }],
+    [{ id: "a", tool: "list", responses: [null] }],
+    [{ id: "a", tool: "list", outcome: { response: null }, response: null }],
+    [{ id: "a", tool: "list", outcome: null }],
+    [{ id: "a", tool: "list", outcome: {} }],
+    [{ id: "a", tool: "list", outcome: { response: undefined } }],
+    [{ id: "a", tool: "list", outcome: { response: null, extra: true } }],
+    [{ id: "a", tool: "list", outcome: { throw: { name: "Error", message: "Not yet" } } }],
+    [{ id: "a", tool: "list", outcome: { response: null, throw: { message: "Not yet" } } }],
+    [{ id: "a", tool: "list", outcomes: [] }],
+    [{ id: "a", tool: "list", outcomes: [{ response: null }, {}] }],
+    [{ id: "a", tool: "list", outcomes: [{ response: null }, { throw: { message: "Not yet" } }] }],
+    [{ id: "a", tool: "list", outcome: { response: null }, outcomes: [{ response: null }] }],
+    [{ id: "a", tool: "list", outcome: { response: null }, typo: true }],
+    [{ id: "a", tool: "list", match: [], outcome: { response: null } }],
+    [{ id: "a", tool: "list", match: { x: 1 }, outcome: { response: null } }],
+    [{ id: "a", tool: "list", outcome: { response: { value: Number.NaN } } }],
     [
-      { id: "a", tool: "list", response: null },
-      { id: "a", tool: "list", response: null },
+      { id: "a", tool: "list", outcome: { response: null } },
+      { id: "a", tool: "list", outcome: { response: null } },
     ],
-    [{ id: "a", tool: "list", match: { x: { type: "strng" } }, response: null }],
-    [{ id: "a", tool: "list", match: { x: { pattern: "[" } }, response: null }],
-    [{ id: "a", tool: "list", match: { x: { minimum: "1" } }, response: null }],
+    [{ id: "a", tool: "list", match: { x: { type: "strng" } }, outcome: { response: null } }],
+    [{ id: "a", tool: "list", match: { x: { pattern: "[" } }, outcome: { response: null } }],
+    [{ id: "a", tool: "list", match: { x: { minimum: "1" } }, outcome: { response: null } }],
     [
       {
         id: "a",
         tool: "list",
         match: { x: { $ref: "https://example.com/schema" } },
-        response: null,
+        outcome: { response: null },
       },
     ],
   ])("rejects invalid rules and unsupported schemas before execution: %j", (...rules) => {
@@ -191,24 +228,64 @@ describe("tool stubs", () => {
   it("normalizes absent options and preserves falsy JSON responses", () => {
     expect(
       parseToolStubs([
-        { id: "constant", tool: "list", match: undefined, response: null, responses: undefined },
-        { id: "sequence", tool: "list", response: undefined, responses: [false, 0, "", null] },
+        {
+          id: "constant",
+          tool: "list",
+          match: undefined,
+          outcome: { response: null },
+          outcomes: undefined,
+        },
+        {
+          id: "sequence",
+          tool: "list",
+          outcome: undefined,
+          outcomes: [{ response: false }, { response: 0 }, { response: "" }, { response: null }],
+        },
       ]),
     ).toEqual([
-      { id: "constant", tool: "list", response: null },
-      { id: "sequence", tool: "list", responses: [false, 0, "", null] },
+      { id: "constant", tool: "list", outcome: { response: null } },
+      {
+        id: "sequence",
+        tool: "list",
+        outcomes: [{ response: false }, { response: 0 }, { response: "" }, { response: null }],
+      },
     ]);
+  });
+
+  it("returns the response payload on every call, including keys named response or throw", () => {
+    const playback = new StubPlayback(
+      parseToolStubs([
+        {
+          id: "data",
+          tool: "lookup",
+          outcome: { response: { response: false, throw: "ordinary data" } },
+        },
+      ]),
+    );
+    for (const callId of ["first", "second"]) {
+      expect(playback.call({ callId, tool: "lookup", input: {} })).toEqual({
+        kind: "stub",
+        ruleId: "data",
+        position: 0,
+        outcome: { response: { response: false, throw: "ordinary data" } },
+      });
+    }
   });
 
   it.each([
     [{ minimum: "1" }, "#/minimum", "number"],
     [{ properties: { count: { minimun: 1 } } }, "#/properties/count/minimun", "Unsupported"],
-    [{ pattern: "[" }, "#/pattern", "regex"],
+    [{ pattern: "milk" }, "#/pattern", "Unsupported"],
   ])("identifies the rule, property, and invalid schema keyword: %j", (schema, path, detail) => {
     expect(() =>
       parseToolStubs([
-        { id: "valid", tool: "lookup", response: null },
-        { id: "broken-filter", tool: "lookup", match: { filter: schema }, response: null },
+        { id: "valid", tool: "lookup", outcome: { response: null } },
+        {
+          id: "broken-filter",
+          tool: "lookup",
+          match: { filter: schema },
+          outcome: { response: null },
+        },
       ]),
     ).toThrow(
       new RegExp(`Invalid matcher "filter" in tool stub "broken-filter" at ${path}: .*${detail}`),
@@ -223,43 +300,48 @@ it("does not consume another rule's sequence or advance on unmatched calls", () 
         id: "open",
         tool: "lookup",
         match: { status: { const: "open" } },
-        responses: ["open-1", "open-2"],
+        outcomes: [{ response: "open-1" }, { response: "open-2" }],
       },
       {
         id: "closed",
         tool: "lookup",
         match: { status: { const: "closed" } },
-        responses: ["closed-1", "closed-2"],
+        outcomes: [{ response: "closed-1" }, { response: "closed-2" }],
       },
     ]),
   );
   const call = (callId: string, status: string) =>
     playback.call({ callId, tool: "lookup", input: { status } });
-  expect(call("a", "open")).toMatchObject({ response: "open-1" });
+  expect(call("a", "open")).toMatchObject({ outcome: { response: "open-1" } });
   expect(call("b", "absent")).toEqual({ kind: "real" });
-  expect(call("c", "closed")).toMatchObject({ response: "closed-1" });
-  expect(call("d", "open")).toMatchObject({ response: "open-2" });
-  expect(call("e", "closed")).toMatchObject({ response: "closed-2" });
+  expect(call("c", "closed")).toMatchObject({ outcome: { response: "closed-1" } });
+  expect(call("d", "open")).toMatchObject({ outcome: { response: "open-2" } });
+  expect(call("e", "closed")).toMatchObject({ outcome: { response: "closed-2" } });
 });
 
 it("requires the field even for a true constraint and lets an earlier broad match win", () => {
   const playback = new StubPlayback(
     parseToolStubs([
-      { id: "present", tool: "lookup", match: { status: true }, response: "any" },
-      { id: "open", tool: "lookup", match: { status: { const: "open" } }, response: "open" },
+      { id: "present", tool: "lookup", match: { status: true }, outcome: { response: "any" } },
+      {
+        id: "open",
+        tool: "lookup",
+        match: { status: { const: "open" } },
+        outcome: { response: "open" },
+      },
     ]),
   );
   expect(playback.call({ callId: "missing", tool: "lookup", input: {} })).toEqual({ kind: "real" });
   expect(playback.call({ callId: "null", tool: "lookup", input: { status: null } })).toMatchObject({
-    response: "any",
+    outcome: { response: "any" },
   });
   expect(
     playback.call({ callId: "overlap", tool: "lookup", input: { status: "open" } }),
-  ).toMatchObject({ kind: "stub", ruleId: "present", response: "any" });
+  ).toMatchObject({ kind: "stub", ruleId: "present", outcome: { response: "any" } });
 });
 
 it("includes the final visited string in the configuration size limit", () => {
   expect(() =>
-    parseToolStubs([{ id: "x".repeat(1_000_001), tool: "list", response: null }]),
+    parseToolStubs([{ id: "x".repeat(1_000_001), tool: "list", outcome: { response: null } }]),
   ).toThrow(/size/);
 });

@@ -25,7 +25,11 @@ describe("durable tool stub playback", () => {
     const runtime = await createTestRuntime({ agent: { name: "stub-playback" } });
     await runtime.run(async () => {
       const rules = [
-        { id: "list", tool: "list_tasks", responses: [["milk", "dog"], ["dog"]] },
+        {
+          id: "list",
+          tool: "list_tasks",
+          outcomes: [{ response: ["milk", "dog"] }, { response: ["dog"] }],
+        },
       ] as const;
       const run = await start(workflowEntry, [
         {
@@ -57,7 +61,7 @@ describe("durable tool stub playback", () => {
         kind: "stub",
         ruleId: "list",
         position: 1,
-        response: ["dog"],
+        outcome: { response: ["dog"] },
       });
       expect(await readStubFailure(run.runId)).toBeUndefined();
     });
@@ -73,7 +77,12 @@ describe("durable tool stub playback", () => {
       const runtime = await createTestRuntime();
       await runtime.run(async () => {
         const rules = [
-          { id: "task", tool: "lookup", match: { value: { const: "stubbed" } }, response: "raw" },
+          {
+            id: "task",
+            tool: "lookup",
+            match: { value: { const: "stubbed" } },
+            outcome: { response: "raw" },
+          },
         ];
         const token = "delayed-task-projection";
         const run = await start(workflowEntry, [

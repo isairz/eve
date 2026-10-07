@@ -5,7 +5,9 @@ import { parseToolStubs } from "#tool-stubs/rules.js";
 
 function matches(schema: JsonObject | boolean, value: JsonValue): boolean {
   const playback = new StubPlayback(
-    parseToolStubs([{ id: "rule", tool: "lookup", match: { value: schema }, response: "matched" }]),
+    parseToolStubs([
+      { id: "rule", tool: "lookup", match: { value: schema }, outcome: { response: "matched" } },
+    ]),
   );
   return playback.call({ callId: "call", tool: "lookup", input: { value } }).kind === "stub";
 }
@@ -121,18 +123,6 @@ const constraints: {
     accepted: ["😀"],
     rejected: ["😀a"],
   },
-  {
-    name: "pattern is unanchored",
-    schema: { pattern: "milk" },
-    accepted: ["buy milk"],
-    rejected: ["walk dog"],
-  },
-  {
-    name: "pattern honors anchors",
-    schema: { pattern: "^milk$" },
-    accepted: ["milk"],
-    rejected: ["buy milk"],
-  },
   { name: "minItems", schema: { minItems: 1 }, accepted: [[null]], rejected: [[]] },
   { name: "maxItems", schema: { maxItems: 1 }, accepted: [[], [null]], rejected: [[null, null]] },
   {
@@ -215,17 +205,8 @@ const constraints: {
     rejected: [{ status: "closed" }],
   },
   {
-    name: "patternProperties and properties both apply",
-    schema: {
-      properties: { s_id: { minLength: 2 } },
-      patternProperties: { "^s_": { type: "string" } },
-    },
-    accepted: [{ s_id: "ok", s_name: "Alice", other: 1 }],
-    rejected: [{ s_id: "x" }, { s_name: 1 }],
-  },
-  {
     name: "propertyNames",
-    schema: { propertyNames: { pattern: "^[a-z]+$" } },
+    schema: { propertyNames: { enum: ["milk", "dog"] } },
     accepted: [{ milk: 1 }],
     rejected: [{ "milk-id": 1 }],
   },
@@ -244,8 +225,7 @@ const constraints: {
   {
     name: "additionalProperties schema",
     schema: {
-      properties: { id: true },
-      patternProperties: { "^s_": { type: "string" } },
+      properties: { id: true, s_name: { type: "string" } },
       additionalProperties: { type: "number" },
     },
     accepted: [{ id: false, s_name: "a", count: 1 }],
@@ -394,9 +374,7 @@ const invalid: JsonObject[] = [
   { multipleOf: -1 },
   { minLength: -1 },
   { maxLength: 0.5 },
-  { pattern: 1 },
-  { pattern: "[" },
-  { pattern: "x".repeat(257) },
+  { pattern: "milk" },
   { minItems: -1 },
   { maxItems: 0.5 },
   { uniqueItems: 1 },
@@ -410,7 +388,8 @@ const invalid: JsonObject[] = [
   { maxProperties: 0.5 },
   { properties: [] },
   { properties: { x: { unknown: true } } },
-  { patternProperties: { "[": true } },
+  { patternProperties: { "^s_": true } },
+  { propertyNames: { pattern: "^[a-z]+$" } },
   { propertyNames: 1 },
   { required: ["a", "a"] },
   { required: [1] },
@@ -426,11 +405,13 @@ const invalid: JsonObject[] = [
   // oxlint-disable-next-line unicorn/no-thenable
   { then: 1 },
   { else: 1 },
-  { allOf: [{ properties: { x: { pattern: "[" } } }] },
+  { allOf: [{ properties: { x: { pattern: "milk" } } }] },
 ];
 
 it.each(invalid)("rejects malformed or unsupported constraints at setup: %j", (schema) => {
   expect(() =>
-    parseToolStubs([{ id: "bad", tool: "lookup", match: { value: schema }, response: null }]),
+    parseToolStubs([
+      { id: "bad", tool: "lookup", match: { value: schema }, outcome: { response: null } },
+    ]),
   ).toThrow();
 });

@@ -57,7 +57,7 @@ export default eveChannel({
         id: "deploy",
         tool: "deploy",
         match: { service: { const: "api" } },
-        responses: ["pending", "completed"] as const,
+        outcomes: [{ response: "pending" }, { response: "completed" }] as const,
       },
     ];
     const { session } = await alice.sessions.create({ stubs });
@@ -92,15 +92,20 @@ export default eveChannel({
       method: "POST",
       body: JSON.stringify({
         stubs: [
-          { id: "bad", tool: "deploy", match: { service: { type: "strng" } }, response: null },
+          {
+            id: "bad",
+            tool: "deploy",
+            match: { service: { type: "strng" } },
+            outcome: { response: null },
+          },
         ],
       }),
     });
     expect(invalid.status).toBe(400);
     const { session: overlapping } = await alice.sessions.create({
       stubs: [
-        { id: "a", tool: "deploy", response: "a" },
-        { id: "b", tool: "deploy", response: "b" },
+        { id: "a", tool: "deploy", outcome: { response: "a" } },
+        { id: "b", tool: "deploy", outcome: { response: "b" } },
       ],
     });
     const selected = await (await overlapping.send("Alice asks to deploy api.")).result();

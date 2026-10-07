@@ -372,8 +372,8 @@ async function executeConnectionTool(
   const stub = await connectionToolStub(toolName, input, ctx.callId);
   if (stub.kind === "error") throw new Error(stub.error);
   if (stub.kind === "stub") {
-    reportNestedToolAction(ctx.callId, { input, output: stub.response, toolName });
-    return stub.response;
+    reportNestedToolAction(ctx.callId, { input, output: stub.outcome.response, toolName });
+    return stub.outcome.response;
   }
   let raw: unknown;
   try {

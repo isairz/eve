@@ -52,10 +52,14 @@ export default eveChannel({
       });
       const { session } = await client.sessions.create({
         stubs: [
-          { id: "root", tool: "lookup", response: "ROOT" },
-          { id: "child", tool: "researcher/lookup", response: "CHILD" },
-          { id: "wrong-branch", tool: "assistant/lookup", response: "WRONG-BRANCH" },
-          { id: "grandchild", tool: "researcher/assistant/lookup", response: "GRANDCHILD" },
+          { id: "root", tool: "lookup", outcome: { response: "ROOT" } },
+          { id: "child", tool: "researcher/lookup", outcome: { response: "CHILD" } },
+          { id: "wrong-branch", tool: "assistant/lookup", outcome: { response: "WRONG-BRANCH" } },
+          {
+            id: "grandchild",
+            tool: "researcher/assistant/lookup",
+            outcome: { response: "GRANDCHILD" },
+          },
         ],
       });
       const result = await (await session.send("Look up Alice's assigned tasks.")).result();

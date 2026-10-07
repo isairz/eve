@@ -44,7 +44,7 @@ describe("tool stub authorization", () => {
       "POST",
       "/eve/v1/session",
       {},
-      { stubs: [{ id: "auth", tool: "authenticate", response: true }] },
+      { stubs: [{ id: "auth", tool: "authenticate", outcome: { response: true } }] },
     );
     expect(response.status).toBe(403);
   });
@@ -62,7 +62,10 @@ describe("tool stub authorization", () => {
       "POST",
       "/eve/v1/session",
       {},
-      { message: "Hello", stubs: [{ id: "auth", tool: "authenticate", response: true }] },
+      {
+        message: "Hello",
+        stubs: [{ id: "auth", tool: "authenticate", outcome: { response: true } }],
+      },
       (input) => {
         expect(input.audienceAuth).not.toHaveProperty("allowToolStubs");
         scope = input.toolStubs;
@@ -71,7 +74,7 @@ describe("tool stub authorization", () => {
     );
     expect(response.status).toBe(202);
     expect(scope).toMatchObject({
-      rules: [{ id: "auth", tool: "authenticate", response: true }],
+      rules: [{ id: "auth", tool: "authenticate", outcome: { response: true } }],
     });
     expect(scope).toHaveProperty("token", expect.any(String));
   });
@@ -82,7 +85,10 @@ describe("tool stub authorization", () => {
       "POST",
       "/eve/v1/session",
       {},
-      { allowToolStubs: true, stubs: [{ id: "auth", tool: "authenticate", response: true }] },
+      {
+        allowToolStubs: true,
+        stubs: [{ id: "auth", tool: "authenticate", outcome: { response: true } }],
+      },
     );
     expect(response.status).toBe(403);
   });

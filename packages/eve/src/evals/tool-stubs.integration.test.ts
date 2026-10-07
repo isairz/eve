@@ -124,7 +124,7 @@ it.each(["output processing", "failure reporting"])(
             id: "bad-task-output",
             async test(t) {
               const session = await t.session({
-                stubs: [{ id: "deploy", tool: "deploy_service", response: "stubbed" }],
+                stubs: [{ id: "deploy", tool: "deploy_service", outcome: { response: "stubbed" } }],
               });
               const turn = await session.send('Run deploy_service with service "api"');
               turn.expectOk();

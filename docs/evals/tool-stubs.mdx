@@ -1,6 +1,6 @@
 ---
 title: "Tool Stubs"
-description: "Define tool responses and response sequences in your evals."
+description: "Define tool outcomes and outcome sequences in your evals."
 ---
 
 Pass `stubs` when creating an eval session to replace selected tool executions with JSON responses. The same rules work against local and deployed agents, without deploying mock functions or keeping the runner connected to answer tool calls.
@@ -19,21 +19,23 @@ export default defineEval({
         {
           id: "tasks",
           tool: "list_tasks",
-          responses: [
-            // First matching tool call.
+          outcomes: [
             {
-              tasks: [
-                { id: "milk", title: "Buy milk" },
-                { id: "dog", title: "Walk dog" },
-                { id: "rent", title: "Pay rent" },
-              ],
+              response: {
+                tasks: [
+                  { id: "milk", title: "Buy milk" },
+                  { id: "dog", title: "Walk dog" },
+                  { id: "rent", title: "Pay rent" },
+                ],
+              },
             },
-            // Second and subsequent matching tool calls.
             {
-              tasks: [
-                { id: "dog", title: "Walk dog" },
-                { id: "rent", title: "Pay rent" },
-              ],
+              response: {
+                tasks: [
+                  { id: "dog", title: "Walk dog" },
+                  { id: "rent", title: "Pay rent" },
+                ],
+              },
             },
           ],
         },
@@ -41,7 +43,7 @@ export default defineEval({
           id: "complete-milk",
           tool: "complete_task",
           match: { task_id: { const: "milk" } },
-          response: { success: true },
+          outcome: { response: { success: true } },
         },
       ],
     });
@@ -67,13 +69,15 @@ These responses describe a sequence, not a simulated task database. The second `
 
 ## Stub fields
 
-| Field       | Meaning                                                                                                                                |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`        | Your session-unique rule identifier. eve uses it to track this rule's response sequence. It is neither a tool name nor a tool-call ID. |
-| `tool`      | The existing tool's name, optionally qualified by its local subagent path.                                                             |
-| `match`     | Optional input-property constraints, expressed as JSON Schema. Omit it or use `{}` to match any valid input.                           |
-| `response`  | A JSON value returned on every matching call.                                                                                          |
-| `responses` | A nonempty array of JSON values returned in sequence. Use exactly one of `response` or `responses`.                                    |
+| Field      | Meaning                                                                                                                                |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`       | Your session-unique rule identifier. eve uses it to track this rule's response sequence. It is neither a tool name nor a tool-call ID. |
+| `tool`     | The existing tool's name, optionally qualified by its local subagent path.                                                             |
+| `match`    | Optional input-property constraints, expressed as JSON Schema. Omit it or use `{}` to match any valid input.                           |
+| `outcome`  | One outcome repeated on every matching call, such as `{ response: { tasks: [] } }`.                                                    |
+| `outcomes` | A nonempty array of outcomes returned in sequence. Use exactly one of `outcome` or `outcomes`.                                         |
+
+Each outcome currently contains exactly one field: `response`, whose value is the JSON returned by the tool. The enclosing outcome is not part of the tool's response. Top-level `response` and `responses` are not accepted.
 
 Exposing rule IDs and response positions in traces is a follow-up: [AX-5157](https://linear.app/vercel/issue/AX-5157).
 
@@ -83,11 +87,11 @@ Stubs are plain JSON and can be shared between evals:
 import type { ToolStub } from "eve/evals";
 
 export const taskStubs = [
-  { id: "tasks", tool: "list_tasks", response: { tasks: [] } },
+  { id: "tasks", tool: "list_tasks", outcome: { response: { tasks: [] } } },
 ] satisfies readonly ToolStub[];
 ```
 
-Pass the fixture to `t.session({ stubs: taskStubs })`. Each session has its own sequence position. `eve/client` also exports `ToolStub`. This type checks the JSON contract; it does not infer the response type from your tool definition.
+Pass the fixture to `t.session({ stubs: taskStubs })`. Each session has its own sequence position. Both `eve/evals` and `eve/client` export `ToolStub` and `ToolStubOutcome`. These types check the JSON contract; they do not infer the response type from your tool definition.
 
 ## Match tool arguments
 
@@ -99,9 +103,9 @@ const stubs = [
     id: "milk",
     tool: "complete_task",
     match: { task_id: { const: "milk" } },
-    response: { success: true },
+    outcome: { response: { success: true } },
   },
-  { id: "other-tasks", tool: "complete_task", response: { success: false } },
+  { id: "other-tasks", tool: "complete_task", outcome: { response: { success: false } } },
 ];
 ```
 
@@ -121,28 +125,28 @@ Every property listed in `match` must exist and satisfy its constraint. Extra to
       "properties": { "status": { "const": "open" } },
       "required": ["status"]
     },
-    "query": { "type": "string", "pattern": "milk" },
+    "query": { "type": "string", "enum": ["milk", "buy milk"] },
     "tags": { "type": "array", "contains": { "const": "urgent" } }
   },
-  "response": { "tasks": ["Buy milk"] }
+  "outcome": { "response": { "tasks": ["Buy milk"] } }
 }
 ```
 
 Nested properties are optional unless listed in `required`. Matching does not coerce values, apply defaults, or change arguments. The real tool schema validates input before replacement; normal approvals and output processing still apply.
 
-Constraints use a reference-free subset of JSON Schema 2020-12: types, `const`, `enum`, string and numeric bounds, `pattern`, array items/contains, object properties/required/additionalProperties, dependencies, and logical/conditional schemas. `$ref`, `format`, unknown keywords, and malformed constraints are rejected at setup. Use a `pattern` string, not a JavaScript regular-expression object.
+Constraints use a reference-free subset of JSON Schema 2020-12: types, `const`, `enum`, string and numeric bounds, array items/contains, object properties/required/additionalProperties, dependencies, and logical/conditional schemas. Regex matchers (`pattern` and `patternProperties`), `$ref`, `format`, unknown keywords, and malformed constraints are rejected at setup. Use `const` or `enum` for string matching. Eval assertions can still use regular expressions to check tool arguments and agent responses.
 
 Configuration is limited to 100 rules, 20,000 JSON nodes, nesting depth 32, and approximately one million characters. The `__proto__` property name is reserved.
 
 ## Sequences and session scope
 
-`response` always returns the same value. `responses` advances on each new matching call, then repeats its last value. For example, `["pending", "completed"]` returns `"pending"` once and `"completed"` thereafter. Only the selected rule advances; exhaustion never selects a later rule.
+`outcome` repeats on every matching call. `outcomes` advances on each new matching call, then repeats its final entry. For example, `outcomes: [{ response: "pending" }, { response: "completed" }]` returns `"pending"` once and `"completed"` thereafter. Only the selected rule advances; exhaustion never selects a later rule.
 
 Two calls within one agent turn consume two entries. Later turns continue the same sequence. Calls awaiting or denied approval do not consume entries. Each session supports up to 10,000 recorded calls.
 
 Choose the rules at session creation; they stay fixed for that session. Local subagents share playback through explicit tool paths, and deployment handoffs preserve it. An independent session starts at the first response.
 
-eve's transparent internal workflow replay preserves recorded tool results without consuming additional responses. Playback creates and reuses validator objects; the library evaluates schemas on each call rather than generating compiled matcher functions. Replay can reconstruct these objects; executable functions are never persisted or sent over the wire. A validator initialization failure terminates the session and fails stub verification before tools execute.
+eve's transparent internal workflow replay reuses the recorded outcome without consuming another entry.
 
 Parallel calls consume responses in arrival order, which can vary. Use separate argument matchers when particular arguments must receive particular responses.
 
@@ -189,9 +193,9 @@ To let a local subagent run but replace its tools, use `/` to qualify the delega
 
 ```ts
 const stubs = [
-  { id: "root-tasks", tool: "list_tasks", response: ["Root task"] },
-  { id: "research-tasks", tool: "researcher/list_tasks", response: ["Research task"] },
-  { id: "nested-tasks", tool: "researcher/assistant/list_tasks", response: [] },
+  { id: "root-tasks", tool: "list_tasks", outcome: { response: ["Root task"] } },
+  { id: "research-tasks", tool: "researcher/list_tasks", outcome: { response: ["Research task"] } },
+  { id: "nested-tasks", tool: "researcher/assistant/list_tasks", outcome: { response: [] } },
 ];
 ```
 
@@ -201,11 +205,31 @@ Repeated subagent sessions at the same path share that rule's sequence. Differen
 
 ### Connections and provider tools
 
-Use the qualified operation name, such as `linear__list_issues` or `researcher/linear__list_issues`. Put operation arguments in `match` and its JSON result in `response`.
+Use the qualified operation name, such as `linear__list_issues` or `researcher/linear__list_issues`. Put operation arguments in `match` and its JSON result in `outcome.response`, or in each sequence entry's `response`.
 
 Connection authentication and discovery stay live so eve can validate the operation and its arguments. Stubs do not provide an offline connection. The framework's `connection_search` and `connection_execute` tools cannot themselves be replaced.
 
 Tools executed by the model provider, such as provider-hosted web search, have no eve executor to replace. A search tool implemented in your own agent can be stubbed.
+
+## Planned error outcomes
+
+Error injection is a separate follow-up: [AX-5144](https://linear.app/vercel/issue/AX-5144). It will add `throw` as an alternative to `response` inside an outcome:
+
+```ts
+// Planned API; throw outcomes are not accepted yet.
+const stubs = [
+  {
+    id: "tasks",
+    tool: "list_tasks",
+    outcomes: [
+      { throw: { name: "TimeoutError", message: "Task service timed out" } },
+      { response: { tasks: [] } },
+    ],
+  },
+];
+```
+
+Each outcome will contain exactly one of `response` or `throw`. Exceptions will be injected immediately, without artificial delays or hanging calls. Expected tool failures will remain distinct from broken stub infrastructure: an eval can pass when the agent handles an injected failure correctly, but an infrastructure failure must fail verification. Returning `{ response: { error: "timeout" } }` today is ordinary JSON, not a thrown error.
 
 ## Known matcher limitations
 
