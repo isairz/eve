@@ -217,6 +217,13 @@ When the workflow run that opened a remote child finishes, eve sends an authenti
 
 The parent names its eve remote agent protocol version when it creates the child, and the remote answers with the version it serves. A remote also serves parents on protocol 1 (eve 0.66 through 0.68), including their approvals and sign-in requests, so upgrade remote agents before their callers; see [Upgrade remote agents before their callers](../tools/tasks-upgrade#upgrade-remote-agents-before-their-callers). Any other mismatch fails the call at start with an error naming both versions. A failed _start_ fails the call immediately. After a remote starts, a terminal failure callback fails the call with the remote's error. Terminal callback delivery runs as a durable step on the underlying workflow engine (see [Execution model & durability](../concepts/execution-model-and-durability)). A failed callback POST is rethrown rather than completing the call, so the engine retries it.
 
+If a remote accepts the create request but its response has an incompatible
+protocol or an unreadable body, the work may have completed. eve stops workflow
+retries and reports that uncertainty. A protocol mismatch includes the accepted
+remote session ID so you can inspect the outcome before sending another request.
+Upgrading the remote does not undo work that it already performed. A receiver's
+explicit protocol rejection remains a compatibility error.
+
 ## What to read next
 
 - Local delegation and the isolation boundary → [Subagents](../subagents)
