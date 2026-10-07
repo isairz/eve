@@ -1,0 +1,127 @@
+import type { SandboxSession } from "eve/sandbox";
+import type { SandboxProviderHandle } from "eve/sandbox/provider";
+
+import {
+  requireState,
+  type ManagedGitImplementation,
+  type ManagedGitSessionState,
+} from "./managed-git-sandbox.ts";
+
+interface DevboxAuth {
+  readonly token: string;
+  readonly teamId: string;
+  readonly projectId: string;
+}
+
+/** Use Devbox's owner credential exchange without installing its agent daemon. */
+export function withDevboxCredentials(
+  provider: ManagedGitImplementation,
+  resolveAuth: () => DevboxAuth,
+  send: typeof fetch = globalThis.fetch,
+): ManagedGitImplementation {
+  async function attach(
+    handle: SandboxProviderHandle,
+    state: ManagedGitSessionState,
+    auth: DevboxAuth,
+  ): Promise<{ handle: SandboxProviderHandle; state: ManagedGitSessionState }> {
+    const previousId = state.devboxId;
+    let devboxId = previousId;
+    const request = async (path: string, body?: unknown) => {
+      let response: Response;
+      try {
+        response = await send(`https://api.vercel.com${path}`, {
+          method: body === undefined ? "DELETE" : "POST",
+          headers: {
+            authorization: `Bearer ${auth.token}`,
+            "content-type": "application/json",
+          },
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal: AbortSignal.timeout(60_000),
+        });
+      } catch {
+        throw new Error("Devbox credential request failed.");
+      }
+      if (body === undefined && response.status === 404) return {};
+      if (!response.ok) throw new Error(`Devbox credential request failed (${response.status}).`);
+      try {
+        return (await response.json()) as Record<string, unknown>;
+      } catch {
+        throw new Error("Invalid Devbox credential response.");
+      }
+    };
+    const remove = () => request(`/v1/devbox/${encodeURIComponent(devboxId!)}`);
+    try {
+      const setup = await request(`/v1/devbox/setup?teamId=${encodeURIComponent(auth.teamId)}`, {
+        sandboxId: state.sandboxName,
+        projectId: auth.projectId,
+        ...(devboxId ? { devboxId } : {}),
+        skipDevboxdInstall: true,
+      });
+      devboxId = requiredString(setup, "id");
+      const registrationToken = requiredString(setup, "registrationToken");
+      if (previousId && devboxId !== previousId) throw new Error("Devbox identity changed.");
+      const credentials = await request("/v1/devbox/register", { devboxId, registrationToken });
+      const vercelToken = requiredString(credentials, "vercelToken");
+      if (typeof credentials.gitOauthToken !== "string" || !credentials.gitOauthToken) {
+        throw new Error("Connect GitHub in your Vercel account's Login Connections, then retry.");
+      }
+      const env = {
+        VERCEL_TOKEN: vercelToken,
+        VERCEL_API_KEY: vercelToken,
+        GH_TOKEN: credentials.gitOauthToken,
+        GITHUB_TOKEN: credentials.gitOauthToken,
+      };
+      const sandbox: SandboxSession = {
+        ...handle.sandbox,
+        run: (options) => handle.sandbox.run({ ...options, env: { ...options.env, ...env } }),
+        spawn: (options) => handle.sandbox.spawn({ ...options, env: { ...options.env, ...env } }),
+      };
+      return {
+        handle: {
+          sandbox,
+          onRuntimeShutdown: () => handle.onRuntimeShutdown(),
+          onSessionStop: () => handle.onSessionStop(),
+          async onSessionDelete(options) {
+            // Revoke the registration before deleting compute. Keep the sandbox
+            // if revocation fails so the caller can retry both operations.
+            await remove();
+            await handle.onSessionDelete(options);
+          },
+        },
+        state: { sandboxName: state.sandboxName, version: state.version, devboxId },
+      };
+    } catch (error) {
+      // A failed reconnect must preserve the user's existing workspace.
+      // A new registration is disposable and must not survive failed setup.
+      try {
+        if (!previousId && devboxId) await remove();
+      } finally {
+        await handle.onSessionStop();
+      }
+      throw error;
+    }
+  }
+
+  return {
+    prepare: (context) => provider.prepare(context),
+    async start(context, options, artifact) {
+      const auth = resolveAuth();
+      const started = await provider.start(context, options, artifact);
+      return await attach(started.handle, requireState(started.state), auth);
+    },
+    async resume(context, artifact, value) {
+      const auth = resolveAuth();
+      const state = requireState(value);
+      const { devboxId: _devboxId, ...sandboxState } = state;
+      const handle = await provider.resume(context, artifact, sandboxState);
+      // Reconnect re-registers the same Devbox ID; resumed state is immutable.
+      return (await attach(handle, state, auth)).handle;
+    },
+  };
+}
+
+function requiredString(response: Record<string, unknown>, key: string): string {
+  const value = response?.[key];
+  if (typeof value !== "string" || !value) throw new Error("Invalid Devbox credential response.");
+  return value;
+}

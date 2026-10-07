@@ -1,8 +1,11 @@
 import { defineExtension } from "eve/extension";
 import type { SandboxSession } from "eve/sandbox";
+import type { ToolAuthProvider } from "eve/tools";
 import { z } from "zod";
 
 import type { GitHubConfig } from "eve/extensions/git/sandbox";
+
+import type { ManagedGitSettings } from "./lib/managed-git-auth.ts";
 
 export type CredentialPolicyBroker = (
   sandbox: SandboxSession,
@@ -20,6 +23,14 @@ const openaiReasoningEffort = z.enum(["none", "minimal", "low", "medium", "high"
 
 export default defineExtension({
   config: z.object({
+    managedGit: z
+      .object({
+        enabled: z.boolean().default(false),
+        /** User-scoped Vercel authorization, e.g. `connect()` from `@vercel/connect/eve`. */
+        auth: z.custom<ToolAuthProvider>((value) => typeof value === "object" && value !== null),
+        resolveOptions: fn<() => ManagedGitSettings | Promise<ManagedGitSettings>>(),
+      })
+      .optional(),
     /**
      * @deprecated Mount `eve/extensions/git` with this `github` config instead.
      * While set, this extension still contributes the authenticated `gh` tool,
