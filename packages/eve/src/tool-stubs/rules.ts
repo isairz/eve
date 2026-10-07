@@ -9,11 +9,13 @@ const ruleSchema = z.strictObject({
   match: z.record(z.string(), z.union([z.boolean(), z.record(z.string(), z.json())])).optional(),
 });
 
+const outcomeSchema = z.strictObject({ response: z.json() });
+
 const toolStubsSchema = z
   .array(
     z.union([
-      ruleSchema.extend({ response: z.json() }),
-      ruleSchema.extend({ responses: z.tuple([z.json()]).rest(z.json()) }),
+      ruleSchema.extend({ outcome: outcomeSchema }),
+      ruleSchema.extend({ outcomes: z.tuple([outcomeSchema]).rest(outcomeSchema) }),
     ]),
   )
   .max(100);

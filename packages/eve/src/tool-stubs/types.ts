@@ -1,6 +1,11 @@
 import type { JsonObject, JsonValue } from "#shared/json.js";
 
-/** Stub responses selected by tool name and input fields. */
+/** The JSON response returned for a matching tool call. */
+export interface ToolStubOutcome {
+  readonly response: JsonValue;
+}
+
+/** Stub outcomes selected by tool name and input fields. */
 export type ToolStub = {
   readonly id: string;
   /** Use list_tasks for a root tool or researcher/list_tasks for a local subagent's tool. */
@@ -8,8 +13,11 @@ export type ToolStub = {
   /** Each named input property must exist and satisfy its JSON Schema. */
   readonly match?: Readonly<Record<string, JsonObject | boolean>>;
 } & (
-  | { readonly response: JsonValue; readonly responses?: never }
-  | { readonly response?: never; readonly responses: readonly [JsonValue, ...JsonValue[]] }
+  | { readonly outcome: ToolStubOutcome; readonly outcomes?: never }
+  | {
+      readonly outcome?: never;
+      readonly outcomes: readonly [ToolStubOutcome, ...ToolStubOutcome[]];
+    }
 );
 
 export interface StubCall {
@@ -27,7 +35,7 @@ export type StubResult =
       readonly kind: "stub";
       readonly ruleId: string;
       readonly position: number;
-      readonly response: JsonValue;
+      readonly outcome: ToolStubOutcome;
     };
 
 /** Rules and workflow routing set by the server after it authorizes tool stubs. */

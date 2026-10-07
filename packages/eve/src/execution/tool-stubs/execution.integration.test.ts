@@ -70,7 +70,7 @@ describe("tool replacement through the session runtime", () => {
               ...buildSerializedContext({ channelKind: "http" }),
               [STUB_CONTEXT_KEY]: {
                 token: "failed-output-playback",
-                rules: [{ id: "deploy", tool: "deploy_service", response: "stubbed" }],
+                rules: [{ id: "deploy", tool: "deploy_service", outcome: { response: "stubbed" } }],
               },
             },
           },
@@ -103,7 +103,7 @@ describe("tool replacement through the session runtime", () => {
         id: "broken",
         tool: "lookup",
         match: { value: { dependentRequired: { id: [] } } },
-        response: "stub",
+        outcome: { response: "stub" },
       },
     ]);
     const runtime = await createTestRuntime();
@@ -167,7 +167,7 @@ describe("tool replacement through the session runtime", () => {
               ...buildSerializedContext({ channelKind: "http" }),
               [STUB_CONTEXT_KEY]: {
                 token: "failed-playback",
-                rules: [{ id: "deploy", tool: "deploy_service", response: "stubbed" }],
+                rules: [{ id: "deploy", tool: "deploy_service", outcome: { response: "stubbed" } }],
               },
             },
           },
@@ -255,12 +255,12 @@ describe("tool replacement through the session runtime", () => {
                 {
                   id: "deploy",
                   tool: "deploy_service",
-                  response: { state: "root" },
+                  outcome: { response: { state: "root" } },
                 },
                 {
                   id: "child-deploy",
                   tool: "agent/deploy_service",
-                  response: { state: "child" },
+                  outcome: { response: { state: "child" } },
                 },
               ],
             },
@@ -306,7 +306,9 @@ describe("tool replacement through the session runtime", () => {
             ...buildSerializedContext({ channelKind: "http" }),
             [STUB_CONTEXT_KEY]: {
               token: "whole-agent-playback",
-              rules: [{ id: "agent", tool: "agent", response: "Hello from the stub." }],
+              rules: [
+                { id: "agent", tool: "agent", outcome: { response: "Hello from the stub." } },
+              ],
             },
           },
         },
@@ -364,7 +366,7 @@ describe("tool replacement through the session runtime", () => {
                 {
                   id: "deploy",
                   tool: "deploy_service",
-                  responses: [{ first: true }, { first: false }],
+                  outcomes: [{ response: { first: true } }, { response: { first: false } }],
                 },
               ],
             },
@@ -445,7 +447,10 @@ describe("tool replacement through the session runtime", () => {
                   id: "api",
                   tool: "deploy_service",
                   match: { service: { const: "api" } },
-                  responses: [{ state: "pending" }, { state: "completed" }],
+                  outcomes: [
+                    { response: { state: "pending" } },
+                    { response: { state: "completed" } },
+                  ],
                 },
               ],
             },
@@ -504,11 +509,15 @@ describe("tool replacement through the session runtime", () => {
             [STUB_CONTEXT_KEY]: {
               token: "workflow-tool-playback",
               rules: [
-                { id: "deploy", tool: "deploy_service", response: { state: "stubbed" } },
+                {
+                  id: "deploy",
+                  tool: "deploy_service",
+                  outcome: { response: { state: "stubbed" } },
+                },
                 {
                   id: "child-deploy",
                   tool: "agent/deploy_service",
-                  response: { state: "child-workflow" },
+                  outcome: { response: { state: "child-workflow" } },
                 },
               ],
             },

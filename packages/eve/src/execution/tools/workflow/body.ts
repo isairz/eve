@@ -182,7 +182,7 @@ async function executeCallBody(
         input: input.input,
       });
       if (result.kind === "error") throw new Error(result.error);
-      if (result.kind === "stub") return { output: result.response, status: "completed" };
+      if (result.kind === "stub") return { output: result.outcome.response, status: "completed" };
     }
     const entryPoint = resolveWorkflowEntryPoint<WorkflowCallEntryPoint>(input);
     const result = entryPoint(input.executeInput ?? input.input, ctx);
