@@ -79,7 +79,7 @@ describe("tool stubs", () => {
               properties: { status: { const: "open", default: "open" } },
               required: ["status"],
             },
-            query: { type: "string", pattern: "milk" },
+            query: { type: "string", enum: ["milk", "buy milk"] },
             tags: { type: "array", contains: { const: "urgent" } },
           },
           response: ["milk"],
@@ -203,7 +203,7 @@ describe("tool stubs", () => {
   it.each([
     [{ minimum: "1" }, "#/minimum", "number"],
     [{ properties: { count: { minimun: 1 } } }, "#/properties/count/minimun", "Unsupported"],
-    [{ pattern: "[" }, "#/pattern", "regex"],
+    [{ pattern: "milk" }, "#/pattern", "Unsupported"],
   ])("identifies the rule, property, and invalid schema keyword: %j", (schema, path, detail) => {
     expect(() =>
       parseToolStubs([
