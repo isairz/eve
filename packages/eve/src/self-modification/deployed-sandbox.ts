@@ -13,7 +13,7 @@ import { SELF_MODIFICATION_BASELINE_NETWORK_POLICY } from "./network-policy.js";
 import {
   resolveDeployedSelfModificationConfig,
   type DeployedSelfModificationConfig,
-} from "./deployed/config.js";
+} from "./remote/config.js";
 
 type Probes = Pick<DefaultSandboxProbes, "isDeployedOnVercel" | "isMicrosandboxSupported">;
 type DeployedSelfModificationEnvironment =

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { DeployedSelfModificationConfig } from "./deployed/config.js";
+import type { DeployedSelfModificationConfig } from "./remote/config.js";
 import {
   defineDeployedSelfModificationSandbox,
   selectDeployedSelfModificationEnvironment,

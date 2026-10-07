@@ -412,7 +412,7 @@ export function isPathImport(source: string): boolean {
 const SELF_MODIFICATION_MOUNT_SPECIFIERS = new Set([
   "eve/self-modification",
   "eve/self-modification/local",
-  "eve/self-modification/deployed",
+  "eve/self-modification/remote",
 ]);
 
 function isFrameworkRuntimeImport(source: string, importer: string | undefined): boolean {

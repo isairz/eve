@@ -4,7 +4,7 @@ import {
   acceptsNonSecretSetupAnswers,
   assertOfficialRegistryAddress,
   installProductionRegistryItem,
-} from "./deployed/production-registry-add.js";
+} from "./remote/production-registry-add.js";
 
 const SHA = "a".repeat(40);
 const workspace = {

@@ -39,7 +39,7 @@ describe("createGenerationPackageBoundaryPlugin", () => {
     for (const specifier of [
       "eve/self-modification",
       "eve/self-modification/local",
-      "eve/self-modification/deployed",
+      "eve/self-modification/remote",
     ]) {
       await expect(
         resolveId.call(context, specifier, join(PACKAGE_ROOT, "agent/extensions/edit.ts"), {

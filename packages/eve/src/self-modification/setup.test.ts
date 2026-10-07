@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { win32 } from "node:path";
 import { runInNewContext } from "node:vm";
 
-import type { DeployedSelfModificationConfig } from "./deployed/config.js";
+import type { DeployedSelfModificationConfig } from "./remote/config.js";
 
 import { captureVercel, runVercelCaptureStdout } from "#setup/primitives/run-vercel.js";
 
@@ -21,7 +21,7 @@ function evaluateGeneratedConfig(source: string, getToken = vi.fn()) {
   return runInNewContext(
     source
       .replace('import { getToken } from "@vercel/connect";', "")
-      .replace('import selfModification from "eve/self-modification/deployed";', "")
+      .replace('import selfModification from "eve/self-modification/remote";', "")
       .replace("export default ", ""),
     {
       getToken,
@@ -66,7 +66,7 @@ describe("self-modification setup", () => {
     expect(source).toContain('directory: "apps/support"');
     expect(source).toContain('target: { branch: "release/production" }');
     expect(source).toContain('import { getToken } from "@vercel/connect"');
-    expect(source).toContain('import selfModification from "eve/self-modification/deployed"');
+    expect(source).toContain('import selfModification from "eve/self-modification/remote"');
     expect(source).not.toContain("deployed: {");
     expect(source).toContain('return await getToken("github/selfmod-acme-agents"');
     expect(source).toContain("async resolve({ capability, repository })");

@@ -5,7 +5,7 @@ description: "Ask your agent to update its own authored files during local devel
 
 When `eve dev` starts a local server, it mounts the bundled self-modification extension by default. Ask your agent to change its instructions, tools, skills, or other files under `agent/`; eve delegates the source work to the `self-modification__agent` subagent. Connecting to an existing server with `eve remote connect --url <url>` does not add the bundled extension to that server.
 
-The bundled extension is `eve/self-modification/local`. It is for local development and is not included in production builds. To let a deployed agent propose source changes, mount the separate [`eve/self-modification/deployed`](#propose-changes-from-a-deployed-agent) extension.
+The bundled extension is `eve/self-modification/local`. It is for local development and is not included in production builds. To let a deployed agent propose source changes, mount the separate [`eve/self-modification/remote`](#propose-changes-from-a-deployed-agent) extension.
 
 ```bash
 eve dev
@@ -39,17 +39,17 @@ export default selfModification({
 });
 ```
 
-Mounts that import `eve/self-modification` still work; that specifier is an alias for `eve/self-modification/local`. Neither specifier accepts a `deployed` option. If your mount sets `deployed`, eve rejects it and asks you to move that configuration to an `eve/self-modification/deployed` mount.
+Mounts that import `eve/self-modification` still work; that specifier is an alias for `eve/self-modification/local`. Neither specifier accepts a `deployed` option. If your mount sets `deployed`, eve rejects it and asks you to move that configuration to an `eve/self-modification/remote` mount.
 
 ## Propose changes from a deployed agent
 
-`eve/self-modification/deployed` is a separate extension for deployed agents. It adds a subagent that checks out your repository in a sandbox, edits the authored source, and opens a draft pull request against a target branch. It never changes the running deployment. Changes take effect only after you review, merge, and redeploy.
+`eve/self-modification/remote` is a separate extension for deployed agents. It adds a subagent that checks out your repository in a sandbox, edits the authored source, and opens a draft pull request against a target branch. It never changes the running deployment. Changes take effect only after you review, merge, and redeploy.
 
 Mount it under its own namespace so it does not replace the local extension:
 
 ```ts
-// agent/extensions/self-modification-deployed/extension.ts
-import selfModification from "eve/self-modification/deployed";
+// agent/extensions/self-modification-remote/extension.ts
+import selfModification from "eve/self-modification/remote";
 
 export default selfModification({
   source: {

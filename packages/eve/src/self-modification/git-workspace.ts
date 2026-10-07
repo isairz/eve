@@ -8,7 +8,7 @@ type NetworkPolicySandboxSession = SandboxSession & {
 import { gitHubRemoteUrl } from "#shared/git.js";
 import { shellQuote } from "#shared/shell-quote.js";
 
-import type { GitHubRepository } from "./deployed/config.js";
+import type { GitHubRepository } from "./remote/config.js";
 import { gitOutput, runGitCommand, withBrokeredGitHubCredential } from "./git.js";
 import { assertFullSha, assertGitRef } from "./identifiers.js";
 

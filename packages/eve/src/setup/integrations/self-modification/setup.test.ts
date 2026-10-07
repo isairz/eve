@@ -158,7 +158,7 @@ describe("self-modification integration setup", () => {
       expect.objectContaining({ changed: true, projectPath: "/project" }),
     );
     expect(effects.writeConfig).toHaveBeenCalledWith(
-      expect.stringContaining('import selfModification from "eve/self-modification/deployed"'),
+      expect.stringContaining('import selfModification from "eve/self-modification/remote"'),
     );
     expect(effects.writeConfig).toHaveBeenCalledWith(
       expect.stringContaining('repository: "github.com/acme/agents"'),

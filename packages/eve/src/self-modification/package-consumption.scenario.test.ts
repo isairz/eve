@@ -81,7 +81,7 @@ describe("packed package consumption", () => {
     await access(join(packageRoot, "dist/src/self-modification/config.js"));
     await access(join(packageRoot, "dist/src/self-modification/sandbox.js"));
     await access(join(packageRoot, "dist/src/self-modification/setup.js"));
-    await access(join(packageRoot, "dist/src/self-modification/deployed/extension.js"));
+    await access(join(packageRoot, "dist/src/self-modification/remote/extension.js"));
     await Promise.all([
       access(
         join(
@@ -204,7 +204,7 @@ if (compiled.subagents.length !== 1 || subagent === undefined || !subagent.agent
     await run("node", ["verify-development-extension.mjs"], appRoot);
     await writeAppFile(
       appRoot,
-      "verify-deployed-extension.mjs",
+      "verify-remote-extension.mjs",
       `import assert from "node:assert/strict";
 import { discoverAgent } from "./node_modules/eve/dist/src/discover/discover-agent.js";
 import { compileAgentManifest } from "./node_modules/eve/dist/src/compiler/normalize-manifest.js";
@@ -212,12 +212,12 @@ import { compileAgentManifest } from "./node_modules/eve/dist/src/compiler/norma
 const discovered = await discoverAgent({ appRoot: process.cwd(), agentRoot: process.cwd() + "/agent" });
 assert.deepEqual(discovered.diagnostics.filter((entry) => entry.severity === "error"), []);
 const compiled = await compileAgentManifest(discovered.manifest);
-assert.deepEqual(compiled.subagents.map((entry) => entry.name), ["self-modification-deployed__agent"]);
+assert.deepEqual(compiled.subagents.map((entry) => entry.name), ["self-modification-remote__agent"]);
 const slugs = compiled.subagents[0].agent.dynamicTools.map((tool) => tool.slug);
 assert.ok(slugs.includes("publish") && slugs.includes("registry_add"));
 `,
     );
-    await run("node", ["verify-deployed-extension.mjs"], appRoot);
+    await run("node", ["verify-remote-extension.mjs"], appRoot);
     const build = await run("pnpm", ["exec", "eve", "build", "--skip-sandbox-prewarm"], appRoot);
     const output = `${build.stdout}\n${build.stderr}`;
     if (output.includes("Could not resolve '#shared/")) {

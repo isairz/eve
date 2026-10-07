@@ -1,7 +1,7 @@
 import { MockLanguageModelV3 } from "ai/test";
 import { describe, expect, it } from "vitest";
 
-import { deployedSelfModificationConfigSchema } from "../deployed/config-schema.js";
+import { deployedSelfModificationConfigSchema } from "../remote/config-schema.js";
 import { selfModificationConfigSchema } from "./config-schema.js";
 
 class StatefulCredentialProvider {
@@ -37,7 +37,7 @@ describe("self-modification extension config", () => {
 
   it("rejects the former deployed option with migration guidance", () => {
     expect(() => selfModificationConfigSchema.parse({ deployed: {} })).toThrow(
-      "eve/self-modification/deployed",
+      "eve/self-modification/remote",
     );
   });
 
