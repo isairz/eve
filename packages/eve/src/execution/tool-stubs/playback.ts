@@ -26,7 +26,7 @@ export async function withStubPlayback<T>(
     playback = new StubPlayback(scope.rules);
   } catch (error) {
     await publishStubFailureStep(
-      error instanceof Error ? error.message : "Could not compile tool stub matchers.",
+      error instanceof Error ? error.message : "Could not create tool stub validators.",
     );
     throw error;
   }
