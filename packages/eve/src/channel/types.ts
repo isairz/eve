@@ -333,7 +333,10 @@ export interface SubagentInputRequestHookPayload {
   readonly subagentName: string;
 }
 
-/** Responder-specific lifecycle event forwarded from a delegated child. */
+/**
+ * Lifecycle event forwarded from a delegated child: responder and sign-in progress, and the
+ * resolution of its requests. The parent relays it unchanged.
+ */
 export type SubagentAuthorizationEvent = Extract<
   UnstampedMessageStreamEvent,
   {
@@ -341,7 +344,8 @@ export type SubagentAuthorizationEvent = Extract<
       | "approval.candidate"
       | "approval.settled"
       | "authorization.required"
-      | "authorization.completed";
+      | "authorization.completed"
+      | "input.resolved";
   }
 >;
 

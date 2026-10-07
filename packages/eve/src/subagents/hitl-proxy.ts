@@ -4,7 +4,7 @@ import { resolveInputOutcome } from "#harness/input-request-resolution.js";
 import { firstOpenInput } from "#harness/open-input-request.js";
 import { storedProjection } from "#harness/session-machine/view.js";
 import type { StepCoordinates as PendingInputBatchEvent } from "#harness/session-machine/view.js";
-import { getProxyInputRequests } from "#harness/proxy-input-requests.js";
+import { getProxyInputRequests, resolvedByChild } from "#harness/proxy-input-requests.js";
 import type { WorkflowAskRoute, ProxyInputRequest } from "#harness/proxy-input-requests.js";
 import type { SessionStateMap } from "#harness/types.js";
 import type { InputResolution } from "#protocol/message.js";
@@ -164,9 +164,10 @@ export function routeDeliverPayload(input: {
       routes,
     }): RoutedChildDelivery => {
       const responseIds = new Set(parentRequestIds);
-      // The child decides an approval: its response policy can refuse the responder, which
-      // leaves the approval open. Its route retires when the child's `approval.settled` arrives.
-      const decided = (requestId: string) => entries.get(requestId)?.kind !== "tool-approval";
+      const decided = (requestId: string) => {
+        const kind = entries.get(requestId)?.kind;
+        return kind === undefined || !resolvedByChild(kind);
+      };
       const retireRequestIds = new Set([...responseIds].filter(decided));
 
       // A fully-answered approval batch retires its sibling requests

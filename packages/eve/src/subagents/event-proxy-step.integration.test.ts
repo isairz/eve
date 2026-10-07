@@ -181,7 +181,31 @@ describe("proxied stream hooks", () => {
     ]);
   });
 
-  it("keeps a relayed approval answerable until the child settles it", async () => {
+  const at = { sequence: 7, stepIndex: 2, turnId: "child-turn" };
+  it.each([
+    [
+      "settles it as a responder",
+      {
+        data: {
+          ...at,
+          outcome: "approved",
+          requestId: "approval-1",
+          responderPrincipalId: "alice",
+        },
+        type: "approval.settled",
+      },
+    ],
+    [
+      "resolves it",
+      {
+        data: {
+          ...at,
+          resolutions: [{ kind: "tool-approval", outcome: "approved", requestId: "approval-1" }],
+        },
+        type: "input.resolved",
+      },
+    ],
+  ] as const)("closes a relayed approval when the child %s", async (_, event) => {
     const f = fixture();
     const approval = {
       action: { callId: "deploy-1", input: {}, kind: "tool-call" as const, toolName: "deploy" },
@@ -199,34 +223,21 @@ describe("proxied stream hooks", () => {
     });
     const parked = relayed.sessionState.snapshot.session;
     const answer = { payload: { message: "approve" }, resolveMessage: true };
+    expect(routeDeliverPayload({ ...answer, state: parked.state }).forChildren).toHaveLength(1);
 
-    // A forwarded answer leaves the route: the child's response policy may refuse it.
-    expect(
-      routeDeliverPayload({ ...answer, state: parked.state }).forChildren[0]?.resolved.resolutions,
-    ).toEqual([]);
-
-    const settled = await emitProxiedSubagentEvent({
+    const closed = await emitProxiedSubagentEvent({
       ...f,
       durableSession: parked,
       hookPayload: {
         callId: "child-call",
         childSessionId: "child-session",
-        event: {
-          data: {
-            outcome: "approved",
-            requestId: "approval-1",
-            responderPrincipalId: "alice",
-            sequence: 7,
-            stepIndex: 2,
-            turnId: "child-turn",
-          },
-          type: "approval.settled",
-        },
+        event,
         kind: "subagent-authorization-event",
         subagentName: "child",
       },
     });
-    const after = settled.sessionState.snapshot.session.state;
+    expect(f.events.at(-1)).toMatchObject({ data: event.data, type: event.type });
+    const after = closed.sessionState.snapshot.session.state;
     expect(getProxyInputRequests(after).has("approval-1")).toBe(false);
     expect(routeDeliverPayload({ ...answer, state: after })).toMatchObject({
       forChildren: [],

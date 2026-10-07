@@ -39,6 +39,7 @@ import {
   positionState,
   withOpenTurn,
   withParkedStep,
+  withPublished,
   withQueuedInput,
 } from "#internal/testing/session-machine.js";
 import type { HarnessSession, StepFn, StepResult } from "#harness/types.js";
@@ -58,6 +59,7 @@ import {
   createDurableSessionValues,
   type DurableSessionState,
   readDurableSession,
+  replaceDurableSessionSnapshot,
 } from "#execution/durable-session-store.js";
 import { buildRuntimeIdentity, createExecutionNodeStep } from "#execution/node-step.js";
 import { defineTool } from "#tools/definition.js";
@@ -499,6 +501,83 @@ describe("routeProxiedDeliverStep", () => {
     expect(result).toMatchObject({
       kind: "continue",
       remainder: { payloads: [{ message: "approve" }] },
+    });
+  });
+
+  describe("a forwarded subagent approval", () => {
+    const auth = {
+      attributes: {},
+      authenticator: "test",
+      principalId: "bob",
+      principalType: "user",
+    };
+    const approvalRoute = {
+      childContinuationToken: "child-token",
+      event: REQUEST_EVENT,
+      kind: "tool-approval" as const,
+      reply: { options: [{ id: "approve", label: "Approve" }] },
+    };
+    function parkedOn(requestIds: readonly string[]) {
+      const relayed = createInputRequestedEvent({
+        ...REQUEST_EVENT,
+        callId: "child-call",
+        requests: requestIds.map((requestId) => ({
+          action: { callId: requestId, input: {}, kind: "tool-call", toolName: "deploy" },
+          kind: "tool-approval",
+          options: approvalRoute.reply.options,
+          prompt: "Approve deploy?",
+          requestId,
+        })),
+      });
+      const session = upsertProxyInputRequests({
+        entries: requestIds.map((requestId) => [requestId, approvalRoute] as const),
+        forChildContinuationToken: "child-token",
+        session: withPublished(withOpenTurn(createStubSession(), REQUEST_EVENT), [relayed]),
+      });
+      // Read back what each step persists, so a later step sees the routes it left.
+      vi.mocked(readDurableSession).mockImplementation((state) => state.snapshot!.session);
+      return replaceDurableSessionSnapshot({ session, state: createStubSessionState() });
+    }
+    async function approveFirst(sessionState: DurableSessionState) {
+      workflowWritesByNamespace.clear();
+      const result = await runSessionStateStep(
+        {
+          serializedContext: createSerializedContext(),
+          delivery: { auth, kind: "deliver" as const, payloads: [{ message: "approve" }] },
+          sessionWritable: createTestWritable(),
+          sessionState,
+        },
+        routeProxiedDeliverStep,
+      );
+      const writes = workflowWritesByNamespace.get(DEFAULT_WORKFLOW_STREAM_NAMESPACE) ?? [];
+      const types = writes.map(
+        (chunk) => JSON.parse(new TextDecoder().decode(chunk as Uint8Array)).type,
+      );
+      return { result, types };
+    }
+
+    it("stays answerable until the subagent closes it", async () => {
+      // The child's response policy may refuse Bob, so a second reply still reaches it.
+      const first = await approveFirst(parkedOn(["approval-1"]));
+      await approveFirst(first.result.sessionState);
+
+      expect(resumeHookMock).toHaveBeenCalledTimes(2);
+      for (const [, delivery] of resumeHookMock.mock.calls) {
+        expect(delivery).toMatchObject({
+          payloads: [{ inputResponses: [{ optionId: "approve", requestId: "approval-1" }] }],
+        });
+      }
+      expect(first.types).not.toContain("input.resolved");
+    });
+
+    it("holds the open turn while another approval still waits on a person", async () => {
+      const { types } = await approveFirst(parkedOn(["approval-1", "approval-2"]));
+      expect(types).toContain("turn.waiting");
+    });
+
+    it("does not hold the open turn on the approval it just forwarded", async () => {
+      const { types } = await approveFirst(parkedOn(["approval-1"]));
+      expect(types).not.toContain("turn.waiting");
     });
   });
 

@@ -15,7 +15,6 @@ import {
 } from "#execution/session/state-delta.js";
 import {
   getProxyInputRequests,
-  retireProxyInputRequests,
   toProxyInputRequestEntries,
   upsertProxyInputRequests,
 } from "#harness/proxy-input-requests.js";
@@ -96,13 +95,6 @@ export async function emitProxiedSubagentEvent(
       return routes;
     },
     updateSession(session, routes) {
-      // The child settled a relayed approval, which nobody can answer anymore.
-      if (
-        hookPayload.kind === "subagent-authorization-event" &&
-        hookPayload.event.type === "approval.settled"
-      ) {
-        return { session: retireProxyInputRequests(session, [hookPayload.event.data.requestId]) };
-      }
       if (routes === undefined || hookPayload.kind !== "subagent-input-request") {
         return { session };
       }

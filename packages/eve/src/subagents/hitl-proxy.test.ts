@@ -504,18 +504,6 @@ describe("routeDeliverPayload message resolution", () => {
     ]);
   });
 
-  it("keeps a subagent's approval answerable until the subagent settles it", () => {
-    const session = childPromptSession([childPrompt("approve-1", "tool-approval")]);
-    const reply = { payload: { message: "approve" }, resolveMessage: true, state: session.state };
-
-    // Bob's reply goes down, and the child's response policy may refuse him.
-    expect(routeDeliverPayload(reply).forChildren[0]?.resolved.resolutions).toEqual([]);
-    // Alice can still answer the same approval by text.
-    expect(routeDeliverPayload(reply).forChildren[0]?.payload.inputResponses).toEqual([
-      { optionId: "approve", requestId: "approve-1" },
-    ]);
-  });
-
   it.each([
     ["continue", undefined],
     ["stop", { kind: "cancel-turn" }],
