@@ -38,7 +38,7 @@ import {
   enterSessionProjection,
   saveSessionProjection,
 } from "#harness/session-machine/current.js";
-import { dropClosedRecords } from "#harness/session-machine/commit.js";
+import { dropClosedRecords, sessionView } from "#harness/session-machine/commit.js";
 import {
   sessionStartedForResolvers,
   turnStartedForResolvers,
@@ -59,7 +59,6 @@ import { derivePendingState } from "#execution/session/pending-turn-state.js";
 import {
   CallbackBaseUrlKey,
   clearPendingAuthorization,
-  getPendingAuthorization,
   PendingAuthorizationResultKey,
 } from "#harness/authorization.js";
 import { resolveWorkflowCallbackBaseUrl } from "#execution/workflow-callback-url.js";
@@ -132,7 +131,8 @@ async function runSessionStep(input: TurnStepInput): Promise<DurableStepResult> 
     // Outside a workflow context (e.g. tests) — getHookUrl will return undefined.
   }
 
-  const pendingAuth = getPendingAuthorization(durableSession.state);
+  const signIns = sessionView(currentProjection(ctx), durableSession.state).signIns;
+  const pendingAuth = signIns.length === 0 ? undefined : { challenges: signIns };
   let completedAuths: ReturnType<typeof matchAuthorizationCallbacks>["matches"] | undefined;
   if (pendingAuth && delivery !== undefined) {
     const { matches, remainingPayloads } = matchAuthorizationCallbacks(

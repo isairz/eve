@@ -6,10 +6,6 @@ import {
   setPendingAuthorization,
   type AuthorizationChallenge,
 } from "#harness/authorization.js";
-import {
-  clearProxyInputRequestsWhere,
-  getProxyInputRequests,
-} from "#harness/proxy-input-requests.js";
 import { validateHarnessModelMessages } from "#harness/messages.js";
 import type { HarnessSession, HarnessSessionBase, SessionStateMap } from "#harness/types.js";
 import type { UnstampedMessageStreamEvent } from "#protocol/message.js";
@@ -52,10 +48,7 @@ export function sessionView(
   const turn = withLegacyApprovalAudit(readTurnState(state), state);
   return {
     projection,
-    relayedRequestIds: new Set([
-      ...getProxyInputRequests(state).keys(),
-      ...Object.keys(turn.relayedRoutes ?? {}),
-    ]),
+    relayedRequestIds: new Set(Object.keys(turn.relayedRoutes ?? {})),
     signIns: getPendingAuthorization(state)?.challenges ?? [],
     turn,
     usage: getSessionUsage({ state }),
@@ -76,7 +69,7 @@ const READS_HISTORY: ReadonlySet<string> = new Set([
  * Publishes a transition's events, then saves what it changed. A transition that changes history
  * needs a session restored with it.
  */
-export async function applyTransition<T extends HarnessSessionBase>(
+export async function applyTransition<T extends Pick<HarnessSessionBase, "state" | "limits">>(
   session: T,
   transition: Transition,
   publish: Publish,
@@ -115,8 +108,14 @@ export function dropClosedRecords<T extends HarnessSessionBase>(
   session: T,
   projection: SessionProjection,
 ): T {
-  return clearProxyInputRequestsWhere(session, (_route, requestId) => {
-    const input = projection.inputs[requestId];
-    return input === undefined || input.status === "settled";
-  });
+  const turn = readTurnState(session.state);
+  const relayedRoutes = Object.fromEntries(
+    Object.entries(turn.relayedRoutes ?? {}).filter(([id]) => {
+      const input = projection.inputs[id];
+      return input !== undefined && input.status !== "settled";
+    }),
+  );
+  return writeTurnState(session, { ...turn, relayedRoutes });
 }
+
+export { hydrateMachineState } from "./hydrate.js";

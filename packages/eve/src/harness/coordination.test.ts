@@ -1,3 +1,5 @@
+import { readTurnState } from "#harness/session-machine/state.js";
+import { hydrateMachineState } from "#harness/session-machine/hydrate.js";
 import { describe, expect, it } from "vitest";
 import { createPresentedRuntimeActionRequestFromToolCall } from "#harness/action-presentation.js";
 import {
@@ -14,7 +16,7 @@ import {
 } from "#harness/workflow-tool-runs.js";
 
 import { toolOutput } from "#tools/model-output.js";
-import { getProxyInputRequests, upsertProxyInputRequests } from "#harness/proxy-input-requests.js";
+import { upsertProxyInputRequests } from "#harness/proxy-input-requests.js";
 import { setTurnUsageState } from "#harness/turn-tag-state.js";
 import type { HarnessSession } from "#harness/types.js";
 import { isRuntimeWorkflowToolAction } from "#shared/action-types.js";
@@ -370,7 +372,7 @@ describe("runtime results", () => {
     });
 
     const finished = forgetFinishedRuns(
-      session,
+      hydrateMachineState(session),
       [{ callId: "call-1", kind: "tool-result", output: { deployed: true }, toolName: "deploy" }],
       "turn_0",
     );
@@ -456,3 +458,8 @@ describe("resolveToolCallInputObject", () => {
   });
 });
 import { jsonSchema } from "ai";
+
+// Thin selector adapter: the machine owns the routes formerly stored by the proxy map.
+function getProxyInputRequests(state: HarnessSession["state"]) {
+  return new Map(Object.entries(readTurnState(state).relayedRoutes ?? {}));
+}

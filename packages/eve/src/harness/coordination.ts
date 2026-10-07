@@ -8,7 +8,7 @@ import type {
 } from "#shared/action-types.js";
 import { markRuntimeWorkflowToolAction } from "#shared/action-types.js";
 import { parseJsonObject, type JsonObject } from "#shared/json.js";
-import { getProxyInputRequests } from "#harness/proxy-input-requests.js";
+import { relayedRoutes } from "#harness/session-machine/view.js";
 import {
   findBlockingWorkflowToolRun,
   removeBlockingWorkflowToolRuns,
@@ -49,7 +49,7 @@ export function forgetFinishedRuns(
     if (result.kind !== "tool-result") continue;
     const record = findBlockingWorkflowToolRun(next.state, result.callId, turnId);
     if (record === undefined) continue;
-    for (const [requestId, route] of getProxyInputRequests(next.state)) {
+    for (const [requestId, route] of Object.entries(relayedRoutes(next.state))) {
       if (route.runId === record.address.runId) requestIds.push(requestId);
     }
     next = removeBlockingWorkflowToolRuns(next, turnId, record.callId);

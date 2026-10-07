@@ -1,4 +1,3 @@
-import { getPendingAuthorization } from "#harness/authorization.js";
 import { sessionView } from "#harness/session-machine/commit.js";
 import { ownOpenRequestIds } from "#harness/session-machine/transitions.js";
 import { runtimeWait } from "#harness/session-machine/view.js";
@@ -23,13 +22,13 @@ export function derivePendingState(
   readonly pendingCoordinationCallIds?: readonly string[];
   readonly pendingTaskToolCalls?: readonly TaskToolCall[];
 } {
-  const pendingAuth = getPendingAuthorization(session.state);
+  const view = sessionView(projection, session.state);
   const base = {
-    authorizationAttemptIds: pendingAuth?.challenges.flatMap((challenge) =>
+    authorizationAttemptIds: view.signIns.flatMap((challenge) =>
       challenge.attemptId === undefined ? [] : [challenge.attemptId],
     ),
     hasPendingAuthorization: openSignIns(projection).length > 0,
-    hasPendingInputBatch: ownOpenRequestIds(sessionView(projection, session.state)).size > 0,
+    hasPendingInputBatch: ownOpenRequestIds(view).size > 0,
   };
   const waiting = runtimeWait(session.state);
   if (waiting === undefined) return base;

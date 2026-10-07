@@ -1,3 +1,8 @@
+import {
+  hydrateMachineState,
+  sessionView as routingView,
+} from "#harness/session-machine/commit.js";
+import { storedProjection as routingProjection } from "#harness/session-machine/view.js";
 import { toProxyInputRequestEntries } from "#harness/proxy-input-requests.js";
 import { describe, expect, it } from "vitest";
 
@@ -22,7 +27,7 @@ import { createRuntimeAdapterRegistry } from "#runtime/channels/registry.js";
 import type { RuntimeCompiledArtifactsSource } from "#runtime/compiled-artifacts-source.js";
 import { createRuntimeHookRegistry } from "#runtime/hooks/registry.js";
 import type { ResolvedChannelDefinition } from "#runtime/types.js";
-import { routeDeliverPayload } from "#subagents/hitl-proxy.js";
+import { routeDeliverPayload as routeDecision } from "#subagents/hitl-proxy.js";
 
 /**
  * Integration coverage for subagent HITL proxy emission and routing.
@@ -480,3 +485,16 @@ describe("subagent HITL proxy → concurrent-descendant routing", () => {
     });
   });
 });
+
+// Thin input adapter: migration precedes pure dispatch in the production session boundary.
+function routeDeliverPayload(
+  input: Omit<Parameters<typeof routeDecision>[0], "view"> & {
+    readonly state?: Record<string, unknown>;
+  },
+) {
+  const session = hydrateMachineState({ state: input.state });
+  return routeDecision({
+    ...input,
+    view: routingView(routingProjection(session.state), session.state),
+  });
+}

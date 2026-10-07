@@ -47,6 +47,7 @@ export function relay(
       relayed(
         createInputRequestedEvent({
           ...at,
+          callId: input.callId,
           requests,
           ...(input.taskId !== undefined && { taskId: input.taskId }),
         }),

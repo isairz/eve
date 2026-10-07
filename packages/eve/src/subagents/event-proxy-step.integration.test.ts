@@ -1,3 +1,8 @@
+import {
+  hydrateMachineState,
+  sessionView as routingView,
+} from "#harness/session-machine/commit.js";
+import { storedProjection as routingProjection } from "#harness/session-machine/view.js";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ChannelAdapter } from "#channel/adapter.js";
@@ -16,7 +21,7 @@ import { openSessionEventPublisher } from "#execution/publish-session-events.js"
 import { enterSessionProjection } from "#harness/session-machine/current.js";
 import { positionOf, withOpenTurn } from "#internal/testing/session-machine.js";
 import { createSessionLimitContinuationRequest } from "#harness/hitl/budget-request.js";
-import { getProxyInputRequests } from "#harness/proxy-input-requests.js";
+
 import { createAuthorizationRequiredEvent, type MessageStreamEvent } from "#protocol/message.js";
 import type { HookContext } from "#public/definitions/hook.js";
 import { createRuntimeHookRegistry } from "#runtime/hooks/registry.js";
@@ -26,7 +31,7 @@ import {
   type CompiledBundle,
 } from "#runtime/sessions/runtime-context-keys.js";
 import { emitProxiedSubagentEvent } from "#subagents/event-proxy-step.js";
-import { routeDeliverPayload } from "#subagents/hitl-proxy.js";
+import { routeDeliverPayload as routeDecision } from "#subagents/hitl-proxy.js";
 
 function fixture() {
   const order: string[] = [];
@@ -529,3 +534,25 @@ describe("proxied stream hooks", () => {
     expect(f.sessionWritable.locked).toBe(false);
   });
 });
+
+// Thin input adapter: migration precedes pure dispatch in the production session boundary.
+function routeDeliverPayload(
+  input: Omit<Parameters<typeof routeDecision>[0], "view"> & {
+    readonly state?: Record<string, unknown>;
+  },
+) {
+  const session = hydrateMachineState({ state: input.state });
+  return routeDecision({
+    ...input,
+    view: routingView(routingProjection(session.state), session.state),
+  });
+}
+
+function getProxyInputRequests(state: Record<string, unknown> | undefined) {
+  const session = hydrateMachineState({ state });
+  return new Map(
+    Object.entries(
+      routingView(routingProjection(session.state), session.state).turn.relayedRoutes ?? {},
+    ),
+  );
+}

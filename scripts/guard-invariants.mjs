@@ -501,8 +501,9 @@ function checkRule47(posix, lines, violations) {
 // ---------- Rule 50: the human-in-the-loop lifecycle has one seam ----------
 
 const HUMAN_INPUT_DIR = "packages/eve/src/harness/hitl/";
+// Migration is the pure hydration seam for step-side checkpoint readers.
 const HUMAN_INPUT_PRIVATE_IMPORT_RE =
-  /["'](?:#harness\/|(?:\.\.?\/)+)hitl\/(?!(?:index|approval-prompt|approved-call-callers|budget-request)\.js["'])/;
+  /["'](?:#harness\/|(?:\.\.?\/)+)hitl\/(?!(?:index|approval-prompt|approved-call-callers|budget-request|migration)\.js["'])/;
 
 /** @param {string} posix @param {string[]} lines @param {Violation[]} violations */
 function checkRule50(posix, lines, violations) {

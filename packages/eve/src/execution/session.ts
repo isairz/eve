@@ -1,3 +1,4 @@
+import { hydrateMachineState } from "#harness/session-machine/commit.js";
 import type { DurableSession } from "#execution/durable-session-store.js";
 import { formatAvailableSkillsSection } from "#execution/skills/instructions.js";
 import type {
@@ -269,7 +270,7 @@ export function hydrateDurableSession(input: {
     session.sandboxState = durable.sandboxState;
   }
   if (durable.state !== undefined) {
-    session.state = durable.state;
+    session.state = hydrateMachineState(durable).state;
   }
   return session;
 }

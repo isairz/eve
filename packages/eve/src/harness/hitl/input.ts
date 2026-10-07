@@ -145,6 +145,7 @@ export type FromRelay =
    */
   | {
       readonly type: "relayed.requested";
+      readonly callId?: string;
       readonly at: RequestAt;
       readonly requests: readonly InputRequest[];
       readonly route: RelayRoute;

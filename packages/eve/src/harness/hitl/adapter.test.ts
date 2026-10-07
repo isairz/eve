@@ -23,6 +23,7 @@ import {
   stepResponse,
 } from "#internal/testing/hitl.js";
 import { adaptHumanInput } from "./adapter.js";
+import { HumanInput } from "./human-input.js";
 import { beforeStep, afterStep, type HumanInputDecision } from "./decisions.js";
 import { legacyProjection, projectHumanInput } from "./projection.js";
 import { LEGACY_BATCH_KEY, LEGACY_GRANTS_KEY, STATE_KEY } from "./state.js";
@@ -610,5 +611,49 @@ describe("HumanInput adapter", () => {
       ),
     ).toEqual([]);
     expect(cleanup.turn.suspended).toEqual([]);
+  });
+  it("includes a new message immediately after a cancelled approval turn (#4396)", async () => {
+    const initial = view();
+    const parked = afterStep(initial, approvalsRequested([approval("deploy")]));
+    const waiting = { ...initial, turn: parked.turn };
+    const cancelled = adaptHumanInput(waiting, beforeStep(waiting, [{ type: "cancel.requested" }]));
+    let projection = initial.projection;
+    const saved = await applyTransition(session(), cancelled.transition, async (event) => {
+      projection = foldSession(projection, event);
+    });
+    const input = HumanInput.fromView(sessionView(projection, saved.state));
+    expect(input.next()).toEqual({ run: "model" });
+    expect(input.acceptInput({ message: "Answer this in the first step." })).toEqual({
+      input: { message: "Answer this in the first step." },
+    });
+    expect(readTurnState(saved.state).readsResults).toBeUndefined();
+  });
+
+  it("keeps approved work ahead of the next message, unlike a cancelled approval (#4396)", () => {
+    const initial = view();
+    const parked = afterStep(initial, approvalsRequested([approval("deploy")]));
+    const waiting = { ...initial, turn: parked.turn };
+    const approved = beforeStep(waiting, [answer("approve", "deploy")]);
+    const input = HumanInput.fromView({ ...waiting, turn: approved.turn });
+    expect(input.next()).toEqual({ run: "approved" });
+    expect(input.approverOfRequest("deploy")?.principalId).toBe("alice");
+  });
+
+  it("cancellation retires active candidates as stale, with the cancel's reason", () => {
+    const v = view();
+    const opened = afterStep(
+      v,
+      approvalsRequested([approval("deploy")], {
+        responsePolicyRequestIds: ["deploy"],
+      }),
+    );
+    const waiting = { ...v, turn: opened.turn };
+    const pending = beforeStep(waiting, [answer("approve", "deploy")], () => undefined);
+    expect(Object.keys(pending.turn.audit?.activeCandidates ?? {})).toHaveLength(1);
+    const cancelled = beforeStep({ ...waiting, turn: pending.turn }, [{ type: "cancel.requested" }]);
+    expect(cancelled.turn.audit?.activeCandidates).toEqual({});
+    expect(cancelled.turn.audit?.candidateHistory).toEqual([
+      expect.objectContaining({ status: "stale", reason: "Cancelled." }),
+    ]);
   });
 });

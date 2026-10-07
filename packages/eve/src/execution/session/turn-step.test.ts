@@ -1,3 +1,4 @@
+import { hydrateMachineState } from "#harness/session-machine/commit.js";
 import { createTestSessionState } from "#internal/testing/session-state.js";
 import type { ModelMessage } from "ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -175,7 +176,7 @@ function installSessionStoreMocks(
     if (!next) {
       throw new Error("No session prepared for readDurableSession");
     }
-    return next;
+    return hydrateMachineState(next);
   });
 }
 

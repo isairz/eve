@@ -154,3 +154,8 @@ export type {
   Settlement,
   RelayRoute,
 } from "./human-input-types.js";
+
+/** The routes owned by the machine, for workflow-side dispatch selectors. */
+export function relayedRoutes(state: SessionStateMap | undefined) {
+  return readTurnState(state).relayedRoutes ?? {};
+}

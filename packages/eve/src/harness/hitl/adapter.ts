@@ -80,7 +80,18 @@ export function adaptHumanInput(
         break;
       case "cancelTurn":
       case "declineBudget":
-        if (!cancelled) {
+        // A step can already have cancelled the turn before its owner settles it. Its
+        // session.waiting checkpoint prunes ended turns, so do not infer an open turn
+        // merely from the absence of an explicit cancelled turn in the projection.
+        if (
+          !cancelled &&
+          (projection.activeTurnId !== undefined ||
+            view.turn.suspended.length > 0 ||
+            view.turn.limitRequest !== undefined ||
+            signIns.length > 0 ||
+            view.relayedRequestIds.size > 0 ||
+            Object.values(projection.inputs).some((input) => input.status !== "settled"))
+        ) {
           // Every lens already decided its closures. Do not let the machine cancel invent
           // duplicate withdrawals for another lens whose resolution is later in this batch.
           const closedProjection = decision.commands.reduce(

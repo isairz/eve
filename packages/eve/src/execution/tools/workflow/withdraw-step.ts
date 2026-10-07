@@ -1,20 +1,12 @@
-import { readDurableSession } from "#execution/durable-session-store.js";
-import {
-  relaySessionEvents,
-  type PublishedSessionEvents,
-  type SessionStepState,
+import type {
+  PublishedSessionEvents,
+  SessionStepState,
 } from "#execution/publish-session-events.js";
 import {
   withSessionStateDelta,
   type SessionStateTransition,
 } from "#execution/session/state-delta.js";
-import type { WorkflowToolRunControlMessage } from "#execution/tools/workflow/messages.js";
-import { ignoreGoneTarget } from "#execution/tasks/workflow-target.js";
-import { resumeHook } from "#internal/workflow/runtime.js";
-import { getProxyInputRequests, type ProxyInputRequest } from "#harness/proxy-input-requests.js";
-import { sessionView } from "#harness/session-machine/commit.js";
-import { finishRun } from "#harness/session-machine/transitions.js";
-import { storedProjection } from "#harness/session-machine/view.js";
+import { commitSessionStep } from "#execution/session/human-input-step.js";
 
 /**
  * Decides a run's request to withdraw a question. A question the session
@@ -39,18 +31,14 @@ type WithdrawQuestionInput = SessionStepState & {
 async function withdrawWorkflowToolRunQuestion(
   input: WithdrawQuestionInput,
 ): Promise<PublishedSessionEvents> {
-  const decision: WorkflowToolRunControlMessage = {
-    kind: "withdrawn",
-    requestId: input.requestId,
-  };
-  await ignoreGoneTarget(resumeHook(input.control, decision));
-  return await relayWithdrawnRequests(
-    input,
-    (requestId, route) =>
-      requestId === input.requestId &&
-      route.workflowAsk !== undefined &&
-      route.runId === input.runId,
-  );
+  return await commitSessionStep(input, [
+    {
+      type: "relayed.withdrawn",
+      control: input.control,
+      requestId: input.requestId,
+      runId: input.runId,
+    },
+  ]);
 }
 
 /**
@@ -62,22 +50,6 @@ export async function withdrawFinishedRunQuestionsStep(
 ): Promise<SessionStateTransition> {
   "use step";
   return await withSessionStateDelta(input, (target) =>
-    relayWithdrawnRequests(target, (_requestId, route) => route.runId === target.runId),
+    commitSessionStep(target, [{ type: "run.ended", runId: target.runId }]),
   );
-}
-
-/**
- * Withdraws the relayed requests `select` picks through the machine's `finishRun`, for a step
- * that owns the session. Their routes drop with the save, once the projection shows them closed.
- */
-export async function relayWithdrawnRequests(
-  input: SessionStepState,
-  select: (requestId: string, route: ProxyInputRequest) => boolean,
-): Promise<PublishedSessionEvents> {
-  const session = readDurableSession(input.sessionState);
-  const requestIds = [...getProxyInputRequests(session.state)]
-    .filter(([requestId, route]) => select(requestId, route))
-    .map(([requestId]) => requestId);
-  const view = sessionView(storedProjection(session.state), session.state);
-  return await relaySessionEvents(input, finishRun(view, { requestIds }).events);
 }

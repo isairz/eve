@@ -8,6 +8,10 @@
 import type { ModelMessage } from "ai";
 
 import type { SessionStateMap, StepInput } from "#harness/types.js";
+import { getProxyInputRequests } from "#harness/proxy-input-requests.js";
+import { createInputRequestedEvent, type UnstampedMessageStreamEvent } from "#protocol/message.js";
+import type { SessionProjection } from "#protocol/session-projection.js";
+import type { InputRequest } from "#shared/input.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 
 import { adoptCandidateAuthorizations } from "./approval-candidate.js";
@@ -101,4 +105,65 @@ function isEmpty(state: HumanInputState): boolean {
     state.audit === undefined &&
     Object.keys(state.relayedAuthorizations ?? {}).length === 0
   );
+}
+
+/** Upgrade keys are inspected only at hydration; the replacement is saved as one state map. */
+export const LEGACY_PARKING_KEYS = [
+  STATE_KEY,
+  LEGACY_BATCH_KEY,
+  LEGACY_GRANTS_KEY,
+  "eve.runtime.proxyInputRequests",
+  "eve.runtime.hitl.approvalState",
+] as const;
+
+export function hasLegacyParkingState(state: SessionStateMap | undefined): boolean {
+  return LEGACY_PARKING_KEYS.some((key) => state !== undefined && Object.hasOwn(state, key));
+}
+
+/** Removing keys and installing their replacement must be part of the same checkpoint write. */
+export function clearLegacyParkingState(
+  state: SessionStateMap | undefined,
+): SessionStateMap | undefined {
+  const next = { ...state };
+  for (const key of LEGACY_PARKING_KEYS) delete next[key];
+  return Object.keys(next).length === 0 ? undefined : next;
+}
+
+/** Restore routing facts absent from older checkpoints, without republishing their requests. */
+export function legacyRequestedEvents(
+  state: SessionStateMap | undefined,
+  projection: SessionProjection,
+): readonly UnstampedMessageStreamEvent[] {
+  const events: UnstampedMessageStreamEvent[] = [];
+  for (const open of Object.values(readState(state).requests)) {
+    if (open.kind === "authorization" || projection.inputs[open.request.requestId] !== undefined)
+      continue;
+    events.push(createInputRequestedEvent({ ...open.at, requests: [open.request] }));
+  }
+  for (const [requestId, route] of getProxyInputRequests(state)) {
+    if (
+      projection.inputs[requestId] !== undefined ||
+      events.some(
+        (event) =>
+          event.type === "input.requested" &&
+          event.data.requests.some((request) => request.requestId === requestId),
+      )
+    )
+      continue;
+    // The old routing record kept question metadata, not the original action. This synthetic
+    // request is routing-only: it is never republished or treated as an owned approval.
+    const request: InputRequest = {
+      action: { kind: "tool-call", callId: requestId, toolName: "", input: {} },
+      kind: route.kind,
+      prompt: "",
+      requestId,
+      allowFreeform: (route.workflowAsk?.question ?? route.question)?.allowFreeform,
+      options:
+        (route.workflowAsk?.question ?? route.question)?.options === undefined
+          ? undefined
+          : [...((route.workflowAsk?.question ?? route.question)?.options ?? [])],
+    };
+    events.push(createInputRequestedEvent({ ...route.event, requests: [request] }));
+  }
+  return events;
 }

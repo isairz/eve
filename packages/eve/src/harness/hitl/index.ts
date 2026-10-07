@@ -18,7 +18,6 @@ import {
 } from "./approval-prompt.js";
 import { grantedApprovalKeys, hasRunnableQueue } from "./approvals.js";
 import { checkSessionUsageLimit } from "./budget.js";
-import { retireActiveCandidates } from "./candidates.js";
 import { applyHumanInputDecision } from "./effects.js";
 import { approvalsRequested } from "./approval.js";
 import { beforeStep, afterStep } from "./decisions.js";
@@ -216,14 +215,10 @@ function currentRequester(step: Step): SessionAuthContext | null {
   return step.ctx?.get(AuthKey) ?? step.ctx?.get(SessionKey)?.auth.current ?? null;
 }
 
-/** The cancelled turn's responders stop checking its approvals: their candidates stale. */
-export function retireCancelledCandidates<T extends HarnessSessionBase>(session: T): T {
-  return {
-    ...session,
-    state: retireActiveCandidates(session.state, { completedAt: Date.now(), reason: "Cancelled." }),
-  };
-}
-
 export { beforeStep, afterStep } from "./decisions.js";
 
 export { applyHumanInputDecision } from "./effects.js";
+
+export { adaptHumanInput, type EffectCommand } from "./adapter.js";
+export { dispatchHumanInputEffects, effectHandlers } from "./effects.js";
+export type { BeforeStepArrival } from "./decisions.js";

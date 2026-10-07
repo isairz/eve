@@ -25,7 +25,6 @@ import { ignoreGoneTarget } from "#execution/tasks/workflow-target.js";
 import { countRunUsage } from "#execution/agent-sessions/usage.js";
 import {
   publishSessionEvents,
-  relaySessionEvents,
   type PublishedSessionEvents,
   type SessionStepState,
 } from "#execution/publish-session-events.js";
@@ -39,9 +38,10 @@ import type {
   WorkflowToolRunOutcomeMessage,
 } from "#execution/tools/workflow/messages.js";
 import { workflowToolRunFailureOutput } from "#execution/tools/workflow/owner-inbox.js";
-import { getProxyInputRequests } from "#harness/proxy-input-requests.js";
+import { commitSessionStep } from "#execution/session/human-input-step.js";
+import type { BeforeStepArrival } from "#harness/hitl/index.js";
 import { sessionView } from "#harness/session-machine/commit.js";
-import { finishRun, settleTask } from "#harness/session-machine/transitions.js";
+import { settleTask } from "#harness/session-machine/transitions.js";
 import { storedProjection } from "#harness/session-machine/view.js";
 import { resumeHook } from "#internal/workflow/runtime.js";
 import type { TaskCancelReason, UnstampedMessageStreamEvent } from "#protocol/message.js";
@@ -73,7 +73,7 @@ async function applyTaskRunMessage(
   }
   let table = readTaskTable(session.state);
   const events: UnstampedMessageStreamEvent[] = [];
-  let withdrawn: readonly UnstampedMessageStreamEvent[] = [];
+  const withdrawals: BeforeStepArrival[] = [];
   switch (message.kind) {
     case "started": {
       const started = markTaskRunStarted(table, taskId, message.from.runId);
@@ -101,16 +101,13 @@ async function applyTaskRunMessage(
       events.push(...taskSettledEvents(session, record, settled.settled, outcome));
       table = finishTaskRun(settled.table, taskId, message.from.runId);
       // Nobody can answer what a finished run relayed, so channels stop offering it.
-      withdrawn = finishRun(viewOf(session), {
-        requestIds: runRequestIds(session, message.from.runId),
-        taskId,
-      }).events;
+      withdrawals.push({ type: "run.ended", runId: message.from.runId });
       break;
     }
   }
-  const relayed = await relaySessionEvents(
+  const relayed = await commitSessionStep(
     { ...input, sessionState: saveTable(input.sessionState, session, table) },
-    withdrawn,
+    withdrawals,
   );
   return await publishSessionEvents({ ...input, ...relayed }, events);
 }
@@ -140,8 +137,7 @@ async function cancelTasks(
   const session = readDurableSession(input.sessionState);
   let table = readTaskTable(session.state);
   const events: UnstampedMessageStreamEvent[] = [];
-  const view = viewOf(session);
-  const withdrawn: UnstampedMessageStreamEvent[] = [];
+  const withdrawals: BeforeStepArrival[] = [];
   const outcome: TaskOutcome = { reason: input.reason, status: "cancelled" };
   for (const taskId of input.taskIds) {
     const record = findTask(table, taskId);
@@ -151,14 +147,13 @@ async function cancelTasks(
     if (cancelled.send === undefined) continue;
     // A `task()` run's cancel settles what it relayed; a `serve()` run withdraws its own.
     if (record?.resumable === false) {
-      const requestIds = runRequestIds(session, cancelled.send.run.runId);
-      withdrawn.push(...finishRun(view, { requestIds, taskId }).events);
+      withdrawals.push({ type: "run.ended", runId: cancelled.send.run.runId });
     }
     await sendTaskRunCommands(cancelled.send);
   }
-  const relayed = await relaySessionEvents(
+  const relayed = await commitSessionStep(
     { ...input, sessionState: saveTable(input.sessionState, session, table) },
-    withdrawn,
+    withdrawals,
   );
   return await publishSessionEvents({ ...input, ...relayed }, events);
 }
@@ -230,13 +225,6 @@ function countTaskRunUsage(
     session: countRunUsage(session, message.usage, run.usage),
     table: recordTaskRunUsage(table, taskId, message.usage),
   };
-}
-
-/** The requests a run relayed: its own questions and those of the sessions it opened. */
-function runRequestIds(session: DurableSession, runId: string): readonly string[] {
-  return [...getProxyInputRequests(session.state)]
-    .filter(([, route]) => route.runId === runId)
-    .map(([requestId]) => requestId);
 }
 
 function viewOf(session: DurableSession) {

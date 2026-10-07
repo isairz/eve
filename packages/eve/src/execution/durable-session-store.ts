@@ -1,13 +1,25 @@
 import type { HarnessModelMessage } from "#harness/messages.js";
-import { hasProxyInputRequests } from "#harness/proxy-input-requests.js";
+import { hydrateMachineState } from "#harness/session-machine/hydrate.js";
+import { relayedRoutes } from "#harness/session-machine/view.js";
 import type { HarnessSession, HarnessSessionBase, SessionStateMap } from "#harness/types.js";
 import { projectToDurableSession } from "#execution/session.js";
 import type { SandboxState } from "#sandbox/state.js";
 import type { JsonObject } from "#shared/json.js";
 
-import { DURABLE_SESSION_VERSION } from "#execution/durable-session-read.js";
+import {
+  DURABLE_SESSION_VERSION,
+  readDurableSession as readCheckpointSession,
+} from "#execution/durable-session-read.js";
 
-export { DURABLE_SESSION_VERSION, readDurableSession } from "#execution/durable-session-read.js";
+export { DURABLE_SESSION_VERSION } from "#execution/durable-session-read.js";
+
+/**
+ * Reads the embedded checkpoint and upgrades legacy parking state. Step code only: the
+ * migration is too heavy for workflow bodies, which use `#execution/durable-session-read.js`.
+ */
+export function readDurableSession(state: DurableSessionState): DurableSession {
+  return hydrateMachineState(readCheckpointSession(state));
+}
 
 /**
  * Serializable handle to a durable session.
@@ -98,9 +110,10 @@ export function replaceDurableSessionSnapshot(input: {
 }
 
 function projectDurableSessionState(session: DurableSession): DurableSessionState {
+  session = hydrateMachineState(session);
   return {
     continuationToken: session.continuationToken,
-    hasProxyInputRequests: hasProxyInputRequests(session.state),
+    hasProxyInputRequests: Object.keys(relayedRoutes(session.state)).length > 0,
     sessionId: session.sessionId,
     version: DURABLE_SESSION_VERSION,
     snapshot: { session },

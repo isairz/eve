@@ -1,8 +1,10 @@
+import { hydrateMachineState, sessionView } from "#harness/session-machine/commit.js";
+import { storedProjection } from "#harness/session-machine/view.js";
 import { describe, expect, it } from "vitest";
 
 import { upsertProxyInputRequests } from "#harness/proxy-input-requests.js";
 import type { HarnessSession } from "#harness/types.js";
-import { routeDeliverPayload } from "#subagents/hitl-proxy.js";
+import { routeDeliverPayload as routeDecision } from "#subagents/hitl-proxy.js";
 
 const REQUEST_EVENT = { sequence: 0, stepIndex: 0, turnId: "turn_0" };
 
@@ -414,3 +416,16 @@ describe("routeDeliverPayload message resolution", () => {
     ]);
   });
 });
+
+// Thin input adapter: production hydration has already migrated the old route fixtures.
+function routeDeliverPayload(
+  input: Omit<Parameters<typeof routeDecision>[0], "view"> & {
+    readonly state?: HarnessSession["state"];
+  },
+) {
+  const session = hydrateMachineState({ state: input.state });
+  return routeDecision({
+    ...input,
+    view: sessionView(storedProjection(session.state), session.state),
+  });
+}

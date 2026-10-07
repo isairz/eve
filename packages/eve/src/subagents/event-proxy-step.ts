@@ -13,14 +13,10 @@ import {
   withSessionStateDelta,
   type SessionStateTransition,
 } from "#execution/session/state-delta.js";
-import {
-  getProxyInputRequests,
-  toProxyInputRequestEntries,
-  upsertProxyInputRequests,
-} from "#harness/proxy-input-requests.js";
-import { currentProjection } from "#harness/session-machine/current.js";
 import { applyTransition, sessionView } from "#harness/session-machine/commit.js";
-import { relay } from "#harness/session-machine/transitions.js";
+import { currentProjection } from "#harness/session-machine/current.js";
+import { adaptHumanInput } from "#harness/hitl/index.js";
+import { beforeStep, type BeforeStepArrival } from "#harness/hitl/index.js";
 import type { WorkflowAskRoute } from "#harness/proxy-input-requests.js";
 
 type SubagentEventHookPayload =
@@ -68,51 +64,41 @@ export async function emitProxiedSubagentEvent(
         : undefined,
     async publish(emit, session) {
       const view = sessionView(currentProjection(ctx), session.state);
-      const routes =
+      const arrival: BeforeStepArrival =
         hookPayload.kind === "subagent-input-request"
-          ? toProxyInputRequestEntries(hookPayload)
-          : undefined;
-      // A child's fresh batch replaces its prior one, whose routes stop working, so readers
-      // must stop offering what it held.
-      const incoming = new Set(routes?.map(([requestId]) => requestId));
-      const replaced =
-        hookPayload.kind !== "subagent-input-request"
-          ? []
-          : [...getProxyInputRequests(session.state)]
-              .filter(
-                ([requestId, route]) =>
-                  route.childContinuationToken === hookPayload.childContinuationToken &&
-                  route.inputSource === hookPayload.inputSource &&
-                  !incoming.has(requestId),
-              )
-              .map(([requestId]) => requestId);
-      // A relay changes no execution state, only what the session reports.
-      await applyTransition(
-        session,
-        relay(view, { payload: hookPayload, replacedRequestIds: replaced }),
-        emit,
-      );
-      return routes;
+          ? {
+              type: "relayed.requested",
+              callId: hookPayload.callId,
+              at: {
+                sequence: hookPayload.event.sequence,
+                stepIndex: hookPayload.event.stepIndex,
+                turnId: hookPayload.event.turnId,
+              },
+              requests: hookPayload.event.requests,
+              taskId: hookPayload.event.taskId,
+              route: {
+                childContinuationToken: hookPayload.childContinuationToken,
+                ...(hookPayload.childSessionInbox?.sessionId === hookPayload.childSessionId && {
+                  childSessionInbox: hookPayload.childSessionInbox,
+                }),
+                remote: hookPayload.remote,
+                inputSource: hookPayload.inputSource,
+                runId,
+                control: workflowAsk?.control,
+              },
+            }
+          : {
+              type: "relayed.authorization",
+              event: hookPayload.event,
+              runId: runId ?? hookPayload.childSessionId,
+            };
+      const adapted = adaptHumanInput(view, beforeStep(view, [arrival]));
+      if (adapted.effects.length !== 0)
+        throw new TypeError("Relaying a child event must not send transport effects.");
+      return await applyTransition(session, adapted.transition, emit);
     },
-    updateSession(session, routes) {
-      if (routes === undefined || hookPayload.kind !== "subagent-input-request") {
-        return { session };
-      }
-      return {
-        session: upsertProxyInputRequests({
-          entries: routes.map(([requestId, route]) => [
-            requestId,
-            {
-              ...route,
-              ...(workflowAsk !== undefined && { workflowAsk }),
-              ...(runId !== undefined && { runId }),
-            },
-          ]),
-          forChildContinuationToken: hookPayload.childContinuationToken,
-          inputSource: hookPayload.inputSource,
-          session,
-        }),
-      };
+    updateSession(_session, applied) {
+      return { session: applied };
     },
   });
   return published;

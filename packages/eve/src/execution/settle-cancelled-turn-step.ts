@@ -8,9 +8,10 @@ import {
   withSessionStateDelta,
   type WithSessionStateDelta,
 } from "#execution/session/state-delta.js";
-import { retireCancelledCandidates } from "#harness/hitl/index.js";
 import type { HarnessModelMessage } from "#harness/messages.js";
-import { cancel } from "#harness/session-machine/transitions.js";
+import { adaptHumanInput } from "#harness/hitl/index.js";
+import { beforeStep } from "#harness/hitl/index.js";
+import { dispatchHumanInputEffects, effectHandlers } from "#harness/hitl/index.js";
 import { applyTransition, sessionView } from "#harness/session-machine/commit.js";
 import { currentProjection } from "#harness/session-machine/current.js";
 import { runtimeWait, storedProjection } from "#harness/session-machine/view.js";
@@ -57,17 +58,18 @@ export async function settleCancelledTurn(
     runtimeWait(durableState)?.event.turnId ?? storedProjection(durableState).activeTurnId ?? "";
   const { published, result: usage } = await publishFromSessionStep(step, {
     origin: "own",
-    publish: (emit, session) =>
-      applyTransition(
-        session,
-        cancel(sessionView(currentProjection(step.ctx), session.state)),
-        emit,
-      ),
+    async publish(emit, session) {
+      const view = sessionView(currentProjection(step.ctx), session.state);
+      const adapted = adaptHumanInput(view, beforeStep(view, [{ type: "cancel.requested" }]));
+      const cancelled = await applyTransition(session, adapted.transition, emit);
+      await dispatchHumanInputEffects(adapted.effects, effectHandlers({ context: step.ctx }));
+      return cancelled;
+    },
     updateSession(_session, cancelled) {
       // The cancel reported every request and call it closed and committed the steps it stopped;
       // what remains is private: its runs are forgotten, and its responders stop.
       const cancelledSession = removeBlockingWorkflowToolRuns(
-        retireCancelledCandidates({ ...cancelled, outputSchema: undefined }),
+        { ...cancelled, outputSchema: undefined },
         owningTurnId,
       );
       if (!input.reportUsage || getTurnUsageState(cancelled.state) === undefined) {

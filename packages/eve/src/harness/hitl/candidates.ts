@@ -407,6 +407,19 @@ function readActiveCandidates(
 }
 
 function readApprovalState(state: SessionStateMap | undefined): DurableApprovalState {
+  const audit = readTurnState(state).audit;
+  if (audit !== undefined)
+    return {
+      ...audit,
+      activeCandidates: Object.fromEntries(
+        Object.entries(audit.activeCandidates).map(([id, candidate]) => [
+          id,
+          { ...candidate, authorizationChallenges: candidate.authorizations },
+        ]),
+      ),
+      candidateHistory: audit.candidateHistory,
+      settlements: audit.settlements,
+    } as DurableApprovalState;
   const value = state?.[APPROVAL_STATE_KEY];
   if (typeof value !== "object" || value === null) {
     return {
@@ -447,7 +460,13 @@ function writeApprovalState(
   state: SessionStateMap | undefined,
   approvalState: DurableApprovalState,
 ): SessionStateMap {
-  return { ...state, [APPROVAL_STATE_KEY]: approvalState };
+  // Always into the turn's audit, never the legacy key: a write after hydration must not
+  // bring back the key the migration cleared.
+  const { [APPROVAL_STATE_KEY]: _legacy, ...rest } = state ?? {};
+  return (
+    writeTurnState({ state: rest }, { ...readTurnState(state), audit: approvalAudit(approvalState) })
+      .state ?? {}
+  );
 }
 
 /**
