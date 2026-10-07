@@ -6,7 +6,7 @@ import { ALICE as alice, AT, approval, stepResponse } from "#internal/testing/hi
 import { approversOf } from "./approved-call-callers.js";
 import { beforeStep } from "./decisions.js";
 import { storedProjection } from "#harness/session-machine/view.js";
-import { createApprovalCandidate, settleDirectApprovalResponse } from "./candidates.js";
+import { writeTurnState } from "#harness/session-machine/state.js";
 
 const at = { sequence: 1, stepIndex: 0, turnId: "t1" };
 const request = {
@@ -103,52 +103,96 @@ it("maps candidate challenges, retains history, and lets machine audit win dupli
           r2: { ...audit.settlements.r1, requestId: "r2" },
         },
         nextCandidateSequence: 99,
+        activeCandidates: { candidate: { ...candidate, expiresAt: 999 } },
+        candidateHistory: [
+          { ...history, candidateId: "older", reason: "legacy-only" },
+          { ...history, reason: "obsolete duplicate" },
+        ],
       },
     },
   });
   const merged = sessionView(initialSessionProjection(), mixed.state).turn.audit!;
   expect(merged.settlements.r1?.approver).toEqual(alice);
   expect(merged.settlements.r2?.approver).toEqual(alice);
-  expect(merged.candidateHistory).toEqual([history]);
+  expect(merged.activeCandidates.candidate?.expiresAt).toBe(100);
+  expect(merged.candidateHistory).toEqual([
+    { ...history, candidateId: "older", reason: "legacy-only" },
+    history,
+  ]);
   expect(merged.nextCandidateSequence).toBe(3);
   expect(hydrateMachineState(mixed)).toEqual(mixed);
 });
-it("never writes the old approval key back during a resumed turn", () => {
-  const resumed = hydrateMachineState(savedSession()).state;
-  const candidate = createApprovalCandidate({
-    candidateIdPrefix: "c",
-    createdAt: 200,
-    decision: "approve",
-    expiresAt: 1_000,
-    requestId: "r2",
-    responder: alice,
-    state: resumed,
+it("never restores the old approval key when resumed candidates expire", () => {
+  const gated = approval("deploy", "r2");
+  const resumed = hydrateMachineState({
+    state: {
+      "eve.harness.turnState": {
+        ...turn,
+        suspended: [{ ...turn.suspended[0], requests: [gated] }],
+      },
+      "eve.runtime.hitl.approvalState": {
+        ...audit,
+        activeCandidates: {
+          c: {
+            candidateId: "c",
+            createdAt: 200,
+            decision: "approve",
+            expiresAt: 1_000,
+            requestId: "r2",
+            responder: alice,
+            status: "pending",
+          },
+        },
+        settlements: {
+          ...audit.settlements,
+          r3: {
+            actor: alice,
+            approver: alice,
+            outcome: "allowed",
+            requestId: "r3",
+            settledAt: 300,
+          },
+        },
+      },
+    },
+  }).state;
+  const decision = beforeStep(sessionView(storedProjection(resumed), resumed), [
+    { type: "time", now: 1_001 },
+  ]);
+  const saved = writeTurnState({ state: resumed }, decision.turn).state;
+  expect(saved).not.toHaveProperty("eve.runtime.hitl.approvalState");
+  const upgraded = sessionView(storedProjection(saved), saved).turn.audit!;
+  expect(upgraded.activeCandidates).toEqual({});
+  expect(upgraded.candidateHistory).toEqual([
+    expect.objectContaining({ candidateId: "c", status: "timed-out" }),
+  ]);
+  expect(upgraded.settlements.r1?.approver).toEqual(alice);
+  expect(upgraded.settlements.r3?.approver).toEqual(alice);
+});
+it("defaults legacy candidates without decisions to Approve and derives missing sequences", () => {
+  const saved = hydrateMachineState({
+    state: {
+      "eve.runtime.hitl.approvalState": {
+        activeCandidates: {
+          c: {
+            candidateId: "c",
+            createdAt: 100,
+            expiresAt: 700,
+            requestId: "r2",
+            responder: alice,
+            status: "pending",
+          },
+        },
+        candidateHistory: [
+          { candidateId: "finished", requestId: "r1", status: "rejected", responder: alice },
+        ],
+        settlements: {},
+      },
+    },
   });
-  expect(candidate.changed).toBe(true);
-  expect(candidate.state).not.toHaveProperty("eve.runtime.hitl.approvalState");
-  const settled = settleDirectApprovalResponse({
-    actor: alice,
-    outcome: "allowed",
-    requestId: "r3",
-    settledAt: 300,
-    state: candidate.state,
-  });
-  expect(settled.state).not.toHaveProperty("eve.runtime.hitl.approvalState");
-  const audit = sessionView(initialSessionProjection(), settled.state).turn.audit!;
-  expect(audit.settlements.r1?.approver).toEqual(alice);
-  expect(audit.settlements.r3?.approver).toEqual(alice);
-  // A session with no turn state yet writes into the turn's audit too.
-  const fresh = settleDirectApprovalResponse({
-    actor: alice,
-    outcome: "allowed",
-    requestId: "r4",
-    settledAt: 400,
-    state: {},
-  });
-  expect(fresh.state).not.toHaveProperty("eve.runtime.hitl.approvalState");
-  expect(
-    sessionView(initialSessionProjection(), fresh.state).turn.audit?.settlements.r4?.approver,
-  ).toEqual(alice);
+  const upgraded = sessionView(storedProjection(saved.state), saved.state).turn.audit!;
+  expect(upgraded.activeCandidates.c?.decision).toBe("approve");
+  expect(upgraded.nextCandidateSequence).toBe(2);
 });
 it.each(["allowed", "cancelled"] as const)(
   "upgrades a %s settlement whose answer hadn't reached its step, once",

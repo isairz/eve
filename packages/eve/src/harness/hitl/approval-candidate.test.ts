@@ -1,3 +1,4 @@
+import { readState } from "./state-legacy.js";
 import { describe, expect, it } from "vitest";
 
 import type { SessionAuthContext } from "#channel/types.js";
@@ -292,5 +293,93 @@ describe("approval response policies", () => {
     // Only the turn's own authorizations are named to the model.
     expect(turn.reported("addNote")).toEqual([]);
     expect(turn.next()).toEqual({ run: "model" });
+  });
+});
+
+describe("durable response candidate audit", () => {
+  it("persists full active responder auth but narrows terminal history to identity", () => {
+    const responder = { ...BOB, attributes: { workspace: "T1", secret: "private" } };
+    const active = guarded().checked(answerAs(responder), {
+      kind: "threw",
+      challenges: [challenge("r1", { requester: responder, name: "reviewer" })],
+    });
+    const candidate = Object.values(readState(active.stored().state).audit!.activeCandidates)[0]!;
+    expect(candidate.responder).toEqual(responder);
+    const rejected = active.checked(callback("r1", "reviewer"), {
+      kind: "returned",
+      value: { status: "rejected", reason: "Permission required." },
+    });
+    const history = readState(rejected.state).audit!.candidateHistory;
+    expect(history[0]?.responder).toEqual({
+      authenticator: responder.authenticator,
+      issuer: responder.issuer,
+      principalId: responder.principalId,
+      principalType: responder.principalType,
+    });
+    expect(history[0]).toMatchObject({ status: "rejected", reason: "Permission required." });
+  });
+
+  it("keeps distinct responders active concurrently and expires only elapsed deadlines", () => {
+    const bob = bobMustAuthorize(guarded(), new Date(NOW + 60_000).toISOString());
+    const both = bob.checked(answerAs(CAROL), {
+      kind: "threw",
+      challenges: [challenge("r2", { requester: CAROL, principalId: "carol" })],
+    });
+    expect(
+      Object.values(readState(both.state).audit!.activeCandidates).map((c) => c.responder),
+    ).toEqual([BOB, CAROL]);
+    const expired = both.input({ type: "time", now: NOW + 60_000 });
+    const audit = readState(expired.state).audit!;
+    expect(Object.values(audit.activeCandidates).map((c) => c.responder)).toEqual([CAROL]);
+    expect(audit.candidateHistory).toEqual([
+      expect.objectContaining({
+        status: "timed-out",
+        responder: expect.objectContaining({ principalId: "bob" }),
+      }),
+    ]);
+  });
+
+  it("settled approvals ignore late candidates and late verdicts", () => {
+    const waiting = bobMustAuthorize();
+    const settled = waiting.checked(answerAs(CAROL), ALLOWED);
+    expect(settled.checks(answerAs(BOB))).toEqual([]);
+    expect(settled.input(answerAs(BOB)).events).toEqual([]);
+    expect(settled.input(callback("r1", "reviewer")).events).toEqual([]);
+    expect(readState(settled.state).audit!.settlements.deploy?.approver).toEqual(CAROL);
+  });
+
+  it("an allowed Cancel stales competing approvals without replacing its settlement", () => {
+    const waiting = bobMustAuthorize();
+    const cancelled = waiting.checked(answerAs(CAROL, "cancel"), ALLOWED);
+    const late = cancelled.input(callback("r1", "reviewer"));
+    const audit = readState(late.state).audit!;
+    expect(audit.activeCandidates).toEqual({});
+    expect(audit.candidateHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "stale",
+          responder: expect.objectContaining({ principalId: "bob" }),
+        }),
+      ]),
+    );
+    expect(audit.settlements.deploy).toMatchObject({ outcome: "cancelled" });
+    expect(audit.settlements.deploy?.approver).toBeUndefined();
+    expect(late.events).toEqual([]);
+  });
+
+  it("settling one request keeps another request's candidate active", () => {
+    const turn = Turn.idle().input(
+      approvalsRequested([approval("deploy"), approval("publish")], {
+        responsePolicyRequestIds: ["deploy", "publish"],
+      }),
+    );
+    const waiting = turn.checked(answer("approve", "publish", BOB), {
+      kind: "threw",
+      challenges: [challenge("r1", { requester: BOB })],
+    });
+    const settled = waiting.checked(answerAs(CAROL), ALLOWED);
+    expect(Object.values(readState(settled.state).audit!.activeCandidates)).toEqual([
+      expect.objectContaining({ requestId: "publish", responder: BOB }),
+    ]);
   });
 });

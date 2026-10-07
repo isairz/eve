@@ -12,11 +12,8 @@ import type { Step } from "#harness/step/context.js";
 import type { HarnessSessionBase, HarnessToolMap, StepResult } from "#harness/types.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 import type { InputRequest } from "#shared/input.js";
-import {
-  renderPendingApprovalsSnippet,
-  renderPendingApprovalsInstruction,
-} from "./approval-prompt.js";
-import { grantedApprovalKeys, hasRunnableQueue } from "./approvals.js";
+import { renderPendingApprovalsSnippet, renderPendingApprovalsInstruction } from "./approval.js";
+import { grantedApprovalKeys, hasRunnableQueue } from "./projection.js";
 import { checkSessionUsageLimit } from "./budget.js";
 import { applyHumanInputDecision } from "./effects.js";
 import { approvalsRequested } from "./approval.js";
@@ -39,7 +36,7 @@ export {
   type HumanInputIntake,
 } from "./intake.js";
 export { extractToolApprovalInputRequests } from "#harness/input-extraction.js";
-export { hasRunnableQueue } from "./approvals.js";
+export { hasRunnableQueue } from "./projection.js";
 
 /**
  * A model step made calls that need a person's approval: the step parks on them beside any
@@ -222,3 +219,9 @@ export { applyHumanInputDecision } from "./effects.js";
 export { adaptHumanInput, type EffectCommand } from "./adapter.js";
 export { dispatchHumanInputEffects, effectHandlers } from "./effects.js";
 export type { BeforeStepArrival } from "./decisions.js";
+
+export {
+  isPendingApprovalsSnippet,
+  renderPendingApprovalsSnippet,
+  renderPendingApprovalsInstruction,
+} from "./approval.js";

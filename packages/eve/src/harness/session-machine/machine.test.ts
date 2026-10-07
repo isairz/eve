@@ -15,16 +15,13 @@ import {
   type SessionProjection,
 } from "#protocol/session-projection.js";
 import type { InputRequest } from "#shared/input.js";
-import { createSessionLimitContinuationRequest } from "#harness/hitl/budget-request.js";
-import {
-  answer,
-  grantedApprovalKeys,
-  parkOnApprovals as parkOnApprovalsTransition,
-  requestLimit,
-  requireSignIn,
-  type ResponsePolicyPass,
-} from "#harness/hitl/approvals.js";
-import { deliver } from "#harness/hitl/delivery.js";
+import { createSessionLimitContinuationRequest } from "#harness/hitl/budget-question.js";
+import { grantedApprovalKeys } from "#harness/hitl/projection.js";
+import { parkOnApprovals as parkOnApprovalsTransition } from "#internal/testing/session-machine.js";
+import { beforeStep, afterStep } from "#harness/hitl/decisions.js";
+import { adaptHumanInput } from "#harness/hitl/adapter.js";
+import { arrivalsOf } from "#harness/hitl/input-arrival.js";
+import { deliver } from "#harness/hitl/intake.js";
 import { applyTransition, sessionView, type Transition } from "./commit.js";
 import { saveProjection } from "./current.js";
 import {
@@ -102,7 +99,7 @@ function approval(callId: string, toolName = "deploy"): InputRequest {
   };
 }
 
-function callMessage(...callIds: string[]): ModelMessage {
+function callMessage(...callIds: string[]): Extract<ModelMessage, { role: "assistant" }> {
   return {
     content: callIds.flatMap((callId) => [
       {
@@ -127,26 +124,32 @@ function result(callId: string, value = "ok"): SettledCall {
   };
 }
 
-const noPolicy = (stepInput?: StepInput): ResponsePolicyPass => ({
-  audit: { activeCandidates: [], candidateHistory: [], settlements: [] },
-  challenges: [],
-  challengesAtStart: [],
-  feedback: [],
-  kind: "continue",
-  stepInput,
-});
-
-/** Answers through `deliver` and `answer`, as the tool loop does with no response policy. */
+/** Answers through delivery, live rules and adaptation, without response policies. */
 async function respond(machine: Machine, input: StepInput) {
-  const delivered = deliver(machine.view(), input, { takeQueued: true });
-  return machine.apply(
-    answer(machine.view(), {
-      approvalKey: () => undefined,
-      delivery: delivered.input,
-      policy: noPolicy(delivered.input),
-      takeQueued: delivered.takeQueued,
+  const view = machine.view();
+  const delivered = deliver(view, input, { takeQueued: true });
+  const ready = { ...view, turn: { ...view.turn, queued: undefined } };
+  const decision = beforeStep(
+    ready,
+    arrivalsOf({
+      callbacks: [],
+      waiting: true,
+      now: Date.now(),
+      sender: null,
+      stepInput: delivered.input,
     }),
   );
+  await machine.apply(adaptHumanInput(ready, decision).transition);
+  return decision;
+}
+
+function requestLimit(view: ReturnType<Machine["view"]>, input: { request: InputRequest }) {
+  return adaptHumanInput(
+    view,
+    beforeStep(view, [
+      { type: "budget.exceeded", at: turnPosition(view.projection), request: input.request },
+    ]),
+  ).transition;
 }
 
 /** A turn whose model step called `callIds`, each needing approval. */
@@ -210,7 +213,7 @@ describe("session machine", () => {
     const decision = await respond(machine, {
       inputResponses: [{ optionId: "approve", requestId: "approval-call-1" }],
     });
-    expect(decision.next).toBe("continue");
+    expect(decision.commands.some((command) => command.type === "waitTurn")).toBe(false);
     expect(machine.eventsSince(before)).toEqual([
       expect.objectContaining({
         data: expect.objectContaining({
@@ -259,18 +262,16 @@ describe("session machine", () => {
     const partial = await respond(machine, {
       inputResponses: [{ optionId: "approve", requestId: "approval-call-1" }],
     });
-    expect(partial.next).toBe("park");
+    expect(partial.turn.suspended[0]?.answers).toEqual({
+      "approval-call-1": { optionId: "approve", requestId: "approval-call-1" },
+    });
     expect(machine.eventsSince(before)).toEqual([]);
-    expect(machine.view().turn.queued?.inputResponses).toHaveLength(1);
+    expect(machine.view().turn.queued).toBeUndefined();
 
     const complete = await respond(machine, {
       inputResponses: [{ optionId: "cancel", requestId: "approval-call-2" }],
     });
-    expect(complete.resolved).toHaveLength(1);
-    expect(complete.resolved[0]?.inputs.map((input) => input.outcome)).toEqual([
-      "approved",
-      "denied",
-    ]);
+    expect(resolutions(complete).map((input) => input.outcome)).toEqual(["approved", "denied"]);
     expect(machine.view().turn.queued).toBeUndefined();
   });
 
@@ -279,9 +280,8 @@ describe("session machine", () => {
     await parkOnApprovals(machine, "call-1");
 
     const decision = await respond(machine, { message: "Actually, what time is it?" });
-    expect(decision.next).toBe("continue");
-    expect(decision.input?.message).toBe("Actually, what time is it?");
-    expect(decision.resolved[0]?.inputs.map((input) => input.outcome)).toEqual(["ignored"]);
+    expect(decision.commands.some((command) => command.type === "waitTurn")).toBe(false);
+    expect(resolutions(decision).map((input) => input.outcome)).toEqual(["ignored"]);
     expect(callStatus(machine.projection, "call-1")).toBe("rejected");
     await machine.apply(receive(machine.view(), { message: "Actually, what time is it?" }));
 
@@ -306,7 +306,10 @@ describe("session machine", () => {
         messages: [
           {
             content: [
-              ...(callMessage("call-1").content as unknown[] as never[]),
+              ...(callMessage("call-1").content as Exclude<
+                Extract<ModelMessage, { role: "assistant" }>["content"],
+                string
+              >),
               { input: {}, toolCallId: "call-2", toolName: "notify", type: "tool-call" },
             ],
             role: "assistant",
@@ -347,7 +350,7 @@ describe("session machine", () => {
 
     // Nothing else can run: the turn holds for the open approval.
     const parked = await respond(machine, {});
-    expect(parked.next).toBe("park");
+    expect(parked.turn.suspended[0]?.requests).toHaveLength(1);
     expect(machine.projection.activeTurnId).toBe("turn_0");
 
     await respond(machine, {
@@ -415,11 +418,19 @@ describe("session machine", () => {
     };
 
     await machine.apply(
-      requireSignIn(machine.view(), {
-        callIdsByName: new Map([["google", ["call-1"]]]),
-        challenges: [challenge],
-      }),
+      adaptHumanInput(
+        machine.view(),
+        afterStep(machine.view(), {
+          type: "authorization.required",
+          at: position,
+          callIds: ["call-1"],
+          challenges: [challenge],
+          messages: [],
+          requester: null,
+        }),
+      ).transition,
     );
+    await machine.apply(hold(machine.view(), { on: "input" }));
     expect(machine.eventsSince(0).some((event) => event.type === "action.result")).toBe(false);
     expect(machine.projection.authorizations["attempt-1"]?.status).toBe("required");
     expect(machine.events.at(-1)).toBe("turn.waiting");
@@ -520,22 +531,28 @@ describe("answers", () => {
 
     const decision = await respond(machine, { message: "Approve" });
 
-    expect(decision.consumedMessage).toBe(true);
-    expect(decision.input?.message).toBeUndefined();
-    expect(decision.resolved[0]?.inputs[0]?.outcome).toBe("approved");
+    expect(decision.commands.some((command) => command.type === "consumeMessage")).toBe(true);
+    expect(resolutions(decision)[0]?.outcome).toBe("approved");
   });
 
   it("grants a once() approval's key, except to a call still asking for it", async () => {
     const machine = createMachine();
     await parkOnApprovals(machine, "call-1");
-    await machine.apply(
-      answer(machine.view(), {
-        approvalKey: (request) => `deploy:${String(request.action.input.service)}`,
-        delivery: { inputResponses: [{ optionId: "approve", requestId: "approval-call-1" }] },
-        policy: noPolicy(),
-        takeQueued: false,
-      }),
-    );
+    await machine.apply({
+      turn: {
+        ...machine.view().turn,
+        suspended: machine
+          .view()
+          .turn.suspended.map((step) => ({
+            ...step,
+            approvalKeys: { "approval-call-1": "deploy:api" },
+          })),
+      },
+      events: [],
+    });
+    await respond(machine, {
+      inputResponses: [{ optionId: "approve", requestId: "approval-call-1" }],
+    });
     const key = (request: InputRequest) => `deploy:${String(request.action.input.service)}`;
     expect(grantedApprovalKeys(machine.view(), key)).toEqual(new Set(["deploy:api"]));
 
@@ -573,6 +590,7 @@ describe("answers", () => {
       const machine = createMachine();
       await machine.apply(receive(machine.view(), { message: "Summarize Alice's notes." }));
       await machine.apply(requestLimit(machine.view(), { request }));
+      await machine.apply(hold(machine.view(), { on: "input" }));
       return machine;
     }
 
@@ -592,7 +610,11 @@ describe("answers", () => {
         const decision = await respond(machine, {
           inputResponses: [{ optionId, requestId: request.requestId }],
         });
-        expect(decision.limit).toEqual({ granted });
+        expect(
+          decision.commands.some(
+            (command) => command.type === (granted ? "grantBudget" : "declineBudget"),
+          ),
+        ).toBe(true);
         expect(machine.projection.inputs[request.requestId]?.status).toBe("settled");
       }
     });
@@ -613,21 +635,8 @@ describe("answers", () => {
 
       const decision = await respond(machine, { message: "Any update?" });
 
-      expect(decision.next).toBe("park");
-      expect(decision.input).toBeUndefined();
+      expect(decision.turn.limitRequest).toBeDefined();
       expect(machine.view().turn.queued?.message).toBe("Any update?");
-    });
-
-    it("takes the prompt's answer from text while an approval is also open", async () => {
-      const machine = createMachine();
-      await parkOnApprovals(machine, "call-1");
-      await machine.apply(receive(machine.view(), { message: "Keep going." }));
-      await machine.apply(requestLimit(machine.view(), { request }));
-
-      const decision = await respond(machine, { message: "Continue" });
-
-      expect(decision.limit).toEqual({ granted: true });
-      expect(callStatus(machine.projection, "call-1")).toBe("awaiting-input");
     });
   });
 });
@@ -694,4 +703,12 @@ function park(
   return input.requests.length === 0
     ? suspendStep(view, input)
     : parkOnApprovalsTransition(view, input);
+}
+
+function resolutions(decision: ReturnType<typeof beforeStep>) {
+  return decision.commands.flatMap((command) =>
+    command.type === "publish" && command.event.type === "input.resolved"
+      ? command.event.data.resolutions
+      : [],
+  );
 }

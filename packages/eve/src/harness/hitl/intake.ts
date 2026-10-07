@@ -1,8 +1,18 @@
+import type { UserContent } from "ai";
+import { coalesceTurnInputs } from "#harness/messages.js";
+import {
+  staleAnswersAsText,
+  dropStaleSessionLimitContinuationResponses,
+} from "./input-stale-answer.js";
+import { attachClientContext, readClientContext } from "#internal/client-context.js";
+import { ownOpenRequestIds } from "#harness/session-machine/transitions.js";
+import type { SessionView, TurnState } from "#harness/session-machine/view.js";
+import type { Transition } from "#harness/session-machine/commit.js";
 import { pendingPolicyChecks } from "./approval-candidate.js";
 import { typedAnswers } from "./input-typed-reply.js";
 import { projectHumanInput } from "./projection.js";
 import { readAnswerText } from "#internal/input-text.js";
-import { resolveInputOutcome } from "#harness/input-request-resolution.js";
+import { outcomeOf } from "./approval.js";
 import { AuthKey, SessionKey } from "#context/keys.js";
 import { buildResponseAuthorizationTools } from "#context/build-dynamic-tools.js";
 import { collectDeferredCalls } from "#harness/coordination.js";
@@ -12,9 +22,8 @@ import { approvedCalls } from "#harness/session-machine/transitions.js";
 import type { SuspendedStep } from "#harness/session-machine/view.js";
 import { type Step } from "#harness/step/context.js";
 import type { HarnessToolMap, StepInput, StepResult } from "#harness/types.js";
-import { grantedApprovalKeys, deferInput } from "./approvals.js";
+import { grantedApprovalKeys } from "./projection.js";
 import { runApprovedCalls } from "./approved-calls.js";
-import { deliver, turnInputOnly, withoutTurnInput, withoutResponses } from "./delivery.js";
 import { approversOf, setApprovedCallCallers } from "./approved-call-callers.js";
 import type { InstrumentationAttempt } from "#instrumentation/runtime.js";
 import { beforeStep, afterStep, policyChecksBeforeStep } from "./decisions.js";
@@ -246,7 +255,12 @@ export async function acceptHumanInput(
                 {
                   request,
                   response: resolution.response,
-                  outcome: resolveInputOutcome(request.kind, resolution.response),
+                  outcome:
+                    request.kind === "tool-approval"
+                      ? outcomeOf(resolution.response)
+                      : resolution.response === undefined
+                        ? "ignored"
+                        : "answered",
                 },
               ];
         }),
@@ -490,4 +504,110 @@ function held(step: Step): StepResult {
 function hasTurnInput(input: StepInput | undefined): boolean {
   if (input === undefined) return false;
   return input.message !== undefined || (input.inputResponses?.length ?? 0) > 0;
+}
+
+/**
+ * Approved calls run before the delivery's own input, as the AI SDK ran them: the model reads
+ * their results first. The input waits in the queue, unreceived, for the step after.
+ */
+export function deferInput(view: SessionView, input: StepInput): Transition {
+  return { events: [], turn: withQueued(view.turn, input) };
+}
+
+function withQueued(turn: TurnState, queued: StepInput | undefined): TurnState {
+  if (queued === undefined || isEmptyInput(queued)) return turn;
+  return {
+    ...turn,
+    queued: turn.queued === undefined ? queued : coalesceTurnInputs(turn.queued, queued),
+  };
+}
+
+/**
+ * The delivery a step answers with: input queued behind earlier work joins it, unless the
+ * runtime still runs calls (queued input waits for them). A stale answer, to a request that
+ * already closed, never authorizes anything: a stale session-limit answer is dropped, and
+ * any other becomes plain text the model reads.
+ */
+export function deliver(
+  view: SessionView,
+  input: StepInput | undefined,
+  options: { readonly takeQueued: boolean },
+): {
+  readonly input?: StepInput;
+  readonly displayMessage?: string | UserContent;
+  readonly takeQueued: boolean;
+} {
+  const queued = options.takeQueued ? view.turn.queued : undefined;
+  const merged =
+    queued === undefined ? input : input === undefined ? queued : coalesceTurnInputs(queued, input);
+  // An approval settles on its own answer, before its batch resolves: the answer still counts
+  // while its batch waits for the rest.
+  const pendingRequestIds = new Set([
+    ...ownOpenRequestIds(view),
+    ...view.turn.suspended.flatMap((step) => step.requests.map((request) => request.requestId)),
+  ]);
+  const known = new Map(
+    Object.values(view.projection.inputs).map((entry) => [entry.request.requestId, entry.request]),
+  );
+  const converted = staleAnswersAsText(
+    dropStaleSessionLimitContinuationResponses({ pendingRequestIds, stepInput: merged }),
+    pendingRequestIds,
+    known,
+  );
+  return { ...converted, takeQueued: options.takeQueued };
+}
+
+export type ResolvedStepInput = StepInput & { readonly messageConsumed?: boolean };
+
+function isEmptyInput(input: StepInput): boolean {
+  return Object.keys(compactInput(input)).length === 0;
+}
+
+export function withoutResponses(input: ResolvedStepInput | undefined): StepInput | undefined {
+  if (input === undefined) return undefined;
+  const {
+    attributedInputResponses: _attributed,
+    inputResponses: _responses,
+    messageConsumed: _consumed,
+    ...rest
+  } = input;
+  return rest;
+}
+
+/** The turn's own input: the message a plain-text answer didn't consume, and its context. */
+export function turnInputOnly(input: ResolvedStepInput | undefined): StepInput | undefined {
+  if (input === undefined) return undefined;
+  const result: { context?: StepInput["context"]; message?: StepInput["message"] } = {};
+  if ((input.context?.length ?? 0) > 0) result.context = input.context;
+  if (input.message !== undefined && input.messageConsumed !== true) result.message = input.message;
+  const turnInput = attachClientContext(result, readClientContext(input));
+  return isEmptyInput(turnInput) ? undefined : turnInput;
+}
+
+/** What of the input isn't the turn's: answers, and the output the session asks for. */
+export function withoutTurnInput(input: ResolvedStepInput | undefined): ResolvedStepInput {
+  const result: {
+    inputResponses?: StepInput["inputResponses"];
+    outputSchema?: StepInput["outputSchema"];
+  } = {};
+  if ((input?.inputResponses?.length ?? 0) > 0) result.inputResponses = input!.inputResponses;
+  if (input?.outputSchema !== undefined) result.outputSchema = input.outputSchema;
+  return result;
+}
+
+function compactInput(input: ResolvedStepInput | undefined): ResolvedStepInput {
+  if (input === undefined) return {};
+  const result: {
+    context?: StepInput["context"];
+    inputResponses?: StepInput["inputResponses"];
+    message?: StepInput["message"];
+    messageConsumed?: boolean;
+    outputSchema?: StepInput["outputSchema"];
+  } = {};
+  if ((input.context?.length ?? 0) > 0) result.context = input.context;
+  if ((input.inputResponses?.length ?? 0) > 0) result.inputResponses = input.inputResponses;
+  if (input.message !== undefined) result.message = input.message;
+  if (input.messageConsumed === true) result.messageConsumed = true;
+  if (input.outputSchema !== undefined) result.outputSchema = input.outputSchema;
+  return attachClientContext(result, readClientContext(input));
 }

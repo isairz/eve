@@ -2,7 +2,7 @@ import { hydrateMachineState, sessionView } from "#harness/session-machine/commi
 import { storedProjection } from "#harness/session-machine/view.js";
 import { describe, expect, it } from "vitest";
 
-import { upsertProxyInputRequests } from "#harness/proxy-input-requests.js";
+import { seedRelaySession } from "#internal/testing/relay-routing.js";
 import type { HarnessSession } from "#harness/types.js";
 import { routeDeliverPayload as routeDecision } from "#internal/testing/relay-routing.js";
 
@@ -25,7 +25,7 @@ function createSession(state?: Record<string, unknown>): HarnessSession {
 
 describe("routeDeliverPayload", () => {
   it("keeps original child inboxes separate when they share a continuation alias", () => {
-    const session = upsertProxyInputRequests({
+    const session = seedRelaySession({
       entries: [
         [
           "req-a",
@@ -75,7 +75,7 @@ describe("routeDeliverPayload", () => {
   });
 
   it("routes responses to matching descendants and keeps unknown ones on forSelf", () => {
-    const session = upsertProxyInputRequests({
+    const session = seedRelaySession({
       entries: [
         [
           "req-a",
@@ -83,7 +83,7 @@ describe("routeDeliverPayload", () => {
         ],
       ],
       forChildContinuationToken: "child-a",
-      session: upsertProxyInputRequests({
+      session: seedRelaySession({
         entries: [
           [
             "req-b",
@@ -132,7 +132,7 @@ describe("routeDeliverPayload", () => {
   });
 
   it("returns forSelf as undefined when every response routes to a descendant", () => {
-    const session = upsertProxyInputRequests({
+    const session = seedRelaySession({
       entries: [
         [
           "req-a",
@@ -155,7 +155,7 @@ describe("routeDeliverPayload", () => {
   });
 
   it("asks the parent to cancel after routing Stop to a descendant session-limit request", () => {
-    const session = upsertProxyInputRequests({
+    const session = seedRelaySession({
       entries: [
         [
           "req-limit",
@@ -198,7 +198,7 @@ describe("routeDeliverPayload source coordinates", () => {
   it("keeps distinct input batches for one remote session separate", () => {
     let session = createSession();
     for (const [index, name] of ["alice", "bob"].entries()) {
-      session = upsertProxyInputRequests({
+      session = seedRelaySession({
         entries: [
           [
             `ask-${name}`,
@@ -263,7 +263,7 @@ describe("routeDeliverPayload message resolution", () => {
   ): HarnessSession {
     let session = createSession();
     for (const [requestId, question] of questions) {
-      session = upsertProxyInputRequests({
+      session = seedRelaySession({
         entries: [
           [
             requestId,
@@ -354,7 +354,7 @@ describe("routeDeliverPayload message resolution", () => {
   });
 
   it("does not answer a question while a subagent question is also pending", () => {
-    const session = upsertProxyInputRequests({
+    const session = seedRelaySession({
       entries: [
         [
           "child-ask",

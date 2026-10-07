@@ -1,11 +1,11 @@
+import { getProxyInputRequests as getRelayedRequests } from "./state-legacy.js";
 import { describe, expect, it } from "vitest";
 
 import {
-  getProxyInputRequests,
-  hasProxyInputRequests,
-  toProxyInputRequestEntries,
-  upsertProxyInputRequests,
-} from "#harness/proxy-input-requests.js";
+  hasRelayedRequests,
+  legacyRelayEntries,
+  seedLegacyRelaySession,
+} from "#internal/testing/relay-routing.js";
 import type { SubagentInputRequestHookPayload } from "#channel/types.js";
 import type { InputRequest, InputRequestKind } from "#shared/input.js";
 import type { HarnessSession } from "#harness/types.js";
@@ -36,10 +36,10 @@ function createRequest(requestId: string, kind: InputRequestKind): InputRequest 
   };
 }
 
-describe("upsertProxyInputRequests", () => {
+describe("seedLegacyRelaySession", () => {
   it("records a fresh batch of proxy entries", () => {
     const session = createSession();
-    const next = upsertProxyInputRequests({
+    const next = seedLegacyRelaySession({
       entries: [
         ["req-1", { childContinuationToken: "child-a", event: REQUEST_EVENT, kind: "question" }],
       ],
@@ -47,8 +47,8 @@ describe("upsertProxyInputRequests", () => {
       session,
     });
 
-    expect(hasProxyInputRequests(next.state)).toBe(true);
-    expect(getProxyInputRequests(next.state).get("req-1")).toEqual({
+    expect(hasRelayedRequests(next.state)).toBe(true);
+    expect(getRelayedRequests(next.state).get("req-1")).toEqual({
       childContinuationToken: "child-a",
       event: REQUEST_EVENT,
       kind: "question",
@@ -56,7 +56,7 @@ describe("upsertProxyInputRequests", () => {
   });
 
   it("replaces prior entries for the same child continuation token", () => {
-    let session = upsertProxyInputRequests({
+    let session = seedLegacyRelaySession({
       entries: [
         ["req-1", { childContinuationToken: "child-a", event: REQUEST_EVENT, kind: "question" }],
       ],
@@ -64,7 +64,7 @@ describe("upsertProxyInputRequests", () => {
       session: createSession(),
     });
 
-    session = upsertProxyInputRequests({
+    session = seedLegacyRelaySession({
       entries: [
         ["req-2", { childContinuationToken: "child-a", event: REQUEST_EVENT, kind: "question" }],
       ],
@@ -72,7 +72,7 @@ describe("upsertProxyInputRequests", () => {
       session,
     });
 
-    const entries = getProxyInputRequests(session.state);
+    const entries = getRelayedRequests(session.state);
     expect(entries.size).toBe(1);
     expect(entries.get("req-1")).toBeUndefined();
     expect(entries.get("req-2")).toEqual({
@@ -83,7 +83,7 @@ describe("upsertProxyInputRequests", () => {
   });
 
   it("keeps independent questions at the same answer destination", () => {
-    let session = upsertProxyInputRequests({
+    let session = seedLegacyRelaySession({
       entries: [
         [
           "alice",
@@ -99,7 +99,7 @@ describe("upsertProxyInputRequests", () => {
       inputSource: "workflow-alice",
       session: createSession(),
     });
-    session = upsertProxyInputRequests({
+    session = seedLegacyRelaySession({
       entries: [
         [
           "bob",
@@ -116,7 +116,7 @@ describe("upsertProxyInputRequests", () => {
       session,
     });
 
-    expect([...getProxyInputRequests(session.state).keys()]).toEqual(["alice", "bob"]);
+    expect([...getRelayedRequests(session.state).keys()]).toEqual(["alice", "bob"]);
   });
 
   it("preserves remote response coordinates through a durable proxy snapshot", () => {
@@ -135,13 +135,13 @@ describe("upsertProxyInputRequests", () => {
       remote,
       subagentName: "research",
     };
-    const session = upsertProxyInputRequests({
-      entries: toProxyInputRequestEntries(payload),
+    const session = seedLegacyRelaySession({
+      entries: legacyRelayEntries(payload),
       forChildContinuationToken: payload.childContinuationToken,
       session: createSession(),
     });
     expect(
-      getProxyInputRequests(JSON.parse(JSON.stringify(session.state))).get("req-remote"),
+      getRelayedRequests(JSON.parse(JSON.stringify(session.state))).get("req-remote"),
     ).toMatchObject({
       remote,
       childContinuationToken: "remote-reply",
@@ -149,7 +149,7 @@ describe("upsertProxyInputRequests", () => {
   });
 
   it("drops a prior child's batch when its request ID is claimed by another child", () => {
-    let session = upsertProxyInputRequests({
+    let session = seedLegacyRelaySession({
       entries: [
         ["req-1", { childContinuationToken: "child-a", event: REQUEST_EVENT, kind: "question" }],
         ["req-2", { childContinuationToken: "child-a", event: REQUEST_EVENT, kind: "question" }],
@@ -158,7 +158,7 @@ describe("upsertProxyInputRequests", () => {
       session: createSession(),
     });
 
-    session = upsertProxyInputRequests({
+    session = seedLegacyRelaySession({
       entries: [
         [
           "req-1",
@@ -169,14 +169,14 @@ describe("upsertProxyInputRequests", () => {
       session,
     });
 
-    expect(Object.fromEntries(getProxyInputRequests(session.state))).toEqual({
+    expect(Object.fromEntries(getRelayedRequests(session.state))).toEqual({
       "req-1": { childContinuationToken: "child-b", event: REQUEST_EVENT, kind: "tool-approval" },
       "req-2": { childContinuationToken: "child-a", event: REQUEST_EVENT, kind: "question" },
     });
   });
 
   it("keeps entries from other children when upserting", () => {
-    let session = upsertProxyInputRequests({
+    let session = seedLegacyRelaySession({
       entries: [
         ["req-a", { childContinuationToken: "child-a", event: REQUEST_EVENT, kind: "question" }],
       ],
@@ -184,7 +184,7 @@ describe("upsertProxyInputRequests", () => {
       session: createSession(),
     });
 
-    session = upsertProxyInputRequests({
+    session = seedLegacyRelaySession({
       entries: [
         [
           "req-b",
@@ -195,7 +195,7 @@ describe("upsertProxyInputRequests", () => {
       session,
     });
 
-    const entries = getProxyInputRequests(session.state);
+    const entries = getRelayedRequests(session.state);
     expect(entries.size).toBe(2);
     expect(entries.get("req-a")).toEqual({
       childContinuationToken: "child-a",
@@ -210,10 +210,10 @@ describe("upsertProxyInputRequests", () => {
   });
 });
 
-describe("toProxyInputRequestEntries", () => {
+describe("legacyRelayEntries", () => {
   it("persists the original child's inbox through a session snapshot round trip", () => {
     const childSessionInbox = { sessionId: "original-child", version: 1 };
-    const entries = toProxyInputRequestEntries({
+    const entries = legacyRelayEntries({
       callId: "call-1",
       childContinuationToken: "reusable-alias",
       childSessionId: "original-child",
@@ -227,13 +227,13 @@ describe("toProxyInputRequestEntries", () => {
       kind: "subagent-input-request",
       subagentName: "delegate",
     });
-    const session = upsertProxyInputRequests({
+    const session = seedLegacyRelaySession({
       entries,
       forChildContinuationToken: "reusable-alias",
       session: createSession(),
     });
 
-    expect(getProxyInputRequests(JSON.parse(JSON.stringify(session.state))).get("req-1")).toEqual(
+    expect(getRelayedRequests(JSON.parse(JSON.stringify(session.state))).get("req-1")).toEqual(
       expect.objectContaining({ childSessionInbox }),
     );
   });
@@ -252,7 +252,7 @@ describe("toProxyInputRequestEntries", () => {
       subagentName: "delegate",
     } satisfies SubagentInputRequestHookPayload;
 
-    expect(toProxyInputRequestEntries(payload)).toEqual([
+    expect(legacyRelayEntries(payload)).toEqual([
       [
         "question-1",
         {
@@ -282,9 +282,9 @@ describe("toProxyInputRequestEntries", () => {
   });
 });
 
-describe("getProxyInputRequests type safety", () => {
+describe("getRelayedRequests type safety", () => {
   it("returns an empty map when the session carries no proxy state", () => {
-    const entries = getProxyInputRequests(createSession().state);
+    const entries = getRelayedRequests(createSession().state);
     expect(entries.size).toBe(0);
   });
 
@@ -297,7 +297,7 @@ describe("getProxyInputRequests type safety", () => {
         "req-4": { childContinuationToken: "child-d", event: REQUEST_EVENT, kind: "question" },
       },
     });
-    const entries = getProxyInputRequests(session.state);
+    const entries = getRelayedRequests(session.state);
     expect(entries.size).toBe(1);
     expect(entries.get("req-4")).toEqual({
       childContinuationToken: "child-d",
@@ -310,7 +310,7 @@ describe("getProxyInputRequests type safety", () => {
     const session = createSession({
       "eve.runtime.proxyInputRequests": [{ requestId: "req-1" }],
     });
-    expect(getProxyInputRequests(session.state).size).toBe(0);
+    expect(getRelayedRequests(session.state).size).toBe(0);
   });
 
   it("keeps legacy routes and ignores malformed optional batch metadata", () => {
@@ -326,7 +326,7 @@ describe("getProxyInputRequests type safety", () => {
       },
     });
 
-    expect([...getProxyInputRequests(session.state)]).toEqual([
+    expect([...getRelayedRequests(session.state)]).toEqual([
       ["legacy", { childContinuationToken: "child-a", event: REQUEST_EVENT, kind: "question" }],
       [
         "malformed",

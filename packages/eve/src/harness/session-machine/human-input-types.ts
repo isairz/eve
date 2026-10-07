@@ -1,3 +1,4 @@
+import type { InputOption } from "#shared/input.js";
 import type { SessionAuthContext } from "#channel/types.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
 import type { ApprovalCandidateOutcome } from "#protocol/message.js";
@@ -69,4 +70,21 @@ export interface ApprovalAudit {
   readonly candidateHistory: readonly FinishedCandidate[];
   readonly nextCandidateSequence: number;
   readonly settlements: Readonly<Record<string, Settlement>>;
+}
+
+/**
+ * Marks a request as a workflow tool run's `ctx.ask()` question, rather than a
+ * child session's. Its answer goes to the run's control hook, which carries
+ * every decision the session makes for the run, in order.
+ */
+export interface WorkflowAskRoute {
+  readonly control: string;
+  /** What a plain-text message may answer. */
+  readonly question: ProxyInputQuestion;
+}
+
+/** The parts of a `ctx.ask()` request a plain-text message is resolved against. */
+export interface ProxyInputQuestion {
+  readonly allowFreeform?: boolean;
+  readonly options?: readonly InputOption[];
 }

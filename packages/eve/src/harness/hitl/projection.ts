@@ -1,3 +1,7 @@
+import { readClientContext } from "#internal/client-context.js";
+import { openInputs } from "#protocol/session-projection.js";
+import { isApprovalRequest } from "#harness/input-request-class.js";
+import type { InputRequest } from "#shared/input.js";
 import type {
   SessionView,
   StepCoordinates,
@@ -9,7 +13,7 @@ import type { AuthorizationChallenge } from "#harness/authorization.js";
 import type { HumanInputState, HeldStep, OpenApproval } from "./state.js";
 import { readState } from "./state-legacy.js";
 import { LEGACY_BATCH_KEY, LEGACY_GRANTS_KEY, STATE_KEY } from "./state.js";
-import { getProxyInputRequests } from "#harness/proxy-input-requests.js";
+import { getProxyInputRequests } from "./state-legacy.js";
 import type { SessionStateMap } from "#harness/types.js";
 
 export function sameStep(left: StepCoordinates, right: StepCoordinates): boolean {
@@ -260,4 +264,46 @@ export function legacyProjection(
       ? projectedSignIns(view, { grants: [], requests: {} }, legacy)
       : view.signIns,
   };
+}
+
+/** Queued input that can run now, rather than wait for more answers. */
+export function hasRunnableQueue(view: SessionView): boolean {
+  const queued = view.turn.queued;
+  if (queued === undefined) return false;
+  if (
+    queued.message !== undefined ||
+    (queued.context?.length ?? 0) > 0 ||
+    readClientContext(queued) !== undefined ||
+    queued.outputSchema !== undefined ||
+    (queued.runtimeActionResults?.length ?? 0) > 0
+  ) {
+    return true;
+  }
+  const responses = [
+    ...(queued.inputResponses ?? []),
+    ...(queued.attributedInputResponses ?? []).map(({ response }) => response),
+  ];
+  if (responses.length === 0) return false;
+  const answered = new Set(responses.map((response) => response.requestId));
+  const limit = openInputs(view.projection).find((open) => open.request.kind === "session-limit");
+  if (limit !== undefined) return answered.has(limit.request.requestId);
+  return view.turn.suspended.some(
+    (step) =>
+      step.requests.length > 0 && step.requests.every((request) => answered.has(request.requestId)),
+  );
+}
+
+/** Keys `once()` approvals granted, except those a pending approval still asks about. */
+export function grantedApprovalKeys(
+  view: SessionView,
+  approvalKey: (request: InputRequest) => string | undefined,
+): ReadonlySet<string> {
+  const granted = new Set(view.turn.grants);
+  for (const step of view.turn.suspended) {
+    for (const request of step.requests) {
+      if (isApprovalRequest(request))
+        granted.delete(approvalKey(request) ?? request.action.toolName);
+    }
+  }
+  return granted;
 }

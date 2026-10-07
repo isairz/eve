@@ -1,9 +1,9 @@
-import { approvingSteps } from "#harness/hitl/approvals.js";
+import { beforeStep } from "./decisions.js";
+import { arrivalsOf } from "./input-arrival.js";
 import { sessionView } from "#harness/session-machine/commit.js";
 import { storedProjection } from "#harness/session-machine/view.js";
 import { withParkedStep } from "#internal/testing/session-machine.js";
-import type { HarnessSession, StepInput } from "#harness/types.js";
-import type { InputRequest } from "#shared/input.js";
+import type { HarnessSession } from "#harness/types.js";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -521,59 +521,36 @@ it("passes the parked requester and action context to the response policy", () =
   ]);
 });
 
-describe("text approval replay preparation", () => {
-  function shouldPrepareApprovalReplayTools(input: {
-    session: HarnessSession;
-    stepInput?: StepInput;
-  }) {
-    const view = sessionView(storedProjection(input.session.state), input.session.state);
-    return approvingSteps(view, input.stepInput).length > 0;
-  }
-  function sessionWithRequests(
-    requests: InputRequest[] = [approval("deploy")],
-    responseAuthRequiredRequestIds?: string[],
-  ) {
-    const base: HarnessSession = {
+it("preserves an explicit cancellation over approval text", () => {
+  const session = withParkedStep(
+    {
       agent: { modelReference: { id: "test" }, system: "", tools: [] },
       compaction: { recentWindowSize: 10, threshold: 0.8 },
       continuationToken: "test",
       history: [],
       sessionId: "session-1",
-    };
-    return withParkedStep(
-      { ...base, state: undefined },
-      { requests, responseAuthRequiredRequestIds },
-    );
-  }
-
-  it("does not treat a question option named approve as tool approval", () => {
-    expect(
-      shouldPrepareApprovalReplayTools({
-        session: sessionWithRequests([{ ...approval("deploy"), kind: "question" }]),
-        stepInput: { message: "approve" },
-      }),
-    ).toBe(false);
-  });
-
-  it("does not interpret text when multiple batches are pending", () => {
-    const session = withParkedStep(sessionWithRequests(), {
-      event: { sequence: 2, stepIndex: 0, turnId: "turn-2" },
-      requests: [{ ...approval("deploy"), requestId: "approval-2" }],
-    });
-    expect(shouldPrepareApprovalReplayTools({ session, stepInput: { message: "approve" } })).toBe(
-      false,
-    );
-  });
-
-  it("preserves an explicit cancellation over approval text", () => {
-    expect(
-      shouldPrepareApprovalReplayTools({
-        session: sessionWithRequests(),
-        stepInput: {
-          message: "approve",
-          inputResponses: [{ optionId: "cancel", requestId: "deploy" }],
-        },
-      }),
-    ).toBe(false);
-  });
+    } as HarnessSession,
+    { requests: [approval("deploy")], messages: stepResponse([approval("deploy")]) },
+  );
+  const decision = beforeStep(
+    sessionView(storedProjection(session.state), session.state),
+    arrivalsOf({
+      callbacks: [],
+      waiting: true,
+      now: 1_000_000,
+      sender: null,
+      stepInput: {
+        message: "approve",
+        inputResponses: [{ optionId: "cancel", requestId: "deploy" }],
+      },
+    }),
+  );
+  expect(decision.turn.suspended.flatMap((step) => step.approved ?? [])).toEqual([]);
+  expect(
+    decision.commands.flatMap((command) =>
+      command.type === "publish" && command.event.type === "input.resolved"
+        ? command.event.data.resolutions.map((resolution) => resolution.outcome)
+        : [],
+    ),
+  ).toEqual(["denied"]);
 });

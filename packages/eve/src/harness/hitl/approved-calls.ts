@@ -11,7 +11,7 @@ import { createRuntimeToolResultFromValue } from "#harness/action-result-helpers
 import { isInlineAuthorizationToolResult } from "#harness/inline-tool-authorization.js";
 import { projectDeltaPresentation, projectResultPresentation } from "#harness/tool-presentation.js";
 import { buildToolSet, recheckApprovedCall } from "#harness/tools.js";
-import { TOOL_EXECUTION_DENIED_MESSAGE } from "#harness/input-request-resolution.js";
+import { TOOL_EXECUTION_DENIED_MESSAGE } from "#harness/resolved-input.js";
 import { throwIfTurnAborted } from "#harness/turn-cancellation.js";
 import type { HarnessToolMap } from "#harness/types.js";
 import { emitNestedToolActions } from "#harness/nested-actions.js";

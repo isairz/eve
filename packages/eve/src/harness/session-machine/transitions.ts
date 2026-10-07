@@ -61,7 +61,7 @@ import {
 // The session's lifecycle. Every transition reads a `SessionView` and returns the events that
 // report what changed with the execution state that follows; `applyTransition` publishes and
 // saves them, and nothing else builds a lifecycle event or writes `TurnState`. Approvals,
-// the session-limit prompt, and sign-ins are in `approvals.ts`.
+// the session-limit prompt, and sign-ins are in the human-input rules.
 //
 // Transitions are pure: what they need from effects (model responses, tool results, the
 // requests a session relays) arrives in their input.

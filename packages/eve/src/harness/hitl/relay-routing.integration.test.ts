@@ -3,7 +3,7 @@ import {
   sessionView as routingView,
 } from "#harness/session-machine/commit.js";
 import { storedProjection as routingProjection } from "#harness/session-machine/view.js";
-import { toProxyInputRequestEntries } from "#harness/proxy-input-requests.js";
+import { legacyRelayEntries } from "#internal/testing/relay-routing.js";
 import { describe, expect, it } from "vitest";
 
 import type { ChannelAdapter, ChannelAdapterContext } from "#channel/adapter.js";
@@ -19,7 +19,7 @@ import { applyTransition, sessionView } from "#harness/session-machine/commit.js
 import { relay } from "#harness/session-machine/transitions.js";
 import { storedProjection } from "#harness/session-machine/view.js";
 import { withOpenTurn } from "#internal/testing/session-machine.js";
-import { hasProxyInputRequests, upsertProxyInputRequests } from "#harness/proxy-input-requests.js";
+import { hasRelayedRequests, seedRelaySession } from "#internal/testing/relay-routing.js";
 import type { HarnessEmitFn, HarnessSession } from "#harness/types.js";
 import type { UnstampedMessageStreamEvent } from "#protocol/message.js";
 import type { InputRequest } from "#shared/input.js";
@@ -185,12 +185,12 @@ function buildOpenTurnSession(continuationToken: string, sessionId: string): Har
 /** Relays a child's batch through the parent's machine, returning the routes it leaves. */
 async function emitProxiedInputRequest(input: {
   readonly emit: HarnessEmitFn;
-  readonly hookPayload: Parameters<typeof toProxyInputRequestEntries>[0];
+  readonly hookPayload: Parameters<typeof legacyRelayEntries>[0];
   readonly session: HarnessSession;
 }) {
   const view = sessionView(storedProjection(input.session.state), input.session.state);
   await applyTransition(input.session, relay(view, { payload: input.hookPayload }), input.emit);
-  return toProxyInputRequestEntries(input.hookPayload);
+  return legacyRelayEntries(input.hookPayload);
 }
 
 /**
@@ -331,7 +331,7 @@ describe("subagent HITL proxy → Slack-style text-approve regression (Finding #
     // The resolved responses now flow through the proxy router. With
     // the child's proxy entry recorded on the parent session, the
     // response routes back down to the right descendant.
-    const parkedSession = upsertProxyInputRequests({
+    const parkedSession = seedRelaySession({
       entries,
       forChildContinuationToken: hookPayload.childContinuationToken,
       session: buildEmptySession("parent-token", "sess-parent"),
@@ -428,18 +428,18 @@ describe("subagent HITL proxy → concurrent-descendant routing", () => {
     // entries (what the parent runtime would accumulate across the
     // two proxy steps).
     let parkedSession = buildEmptySession("parent-token", "sess-parent");
-    parkedSession = upsertProxyInputRequests({
+    parkedSession = seedRelaySession({
       entries: entriesA,
       forChildContinuationToken: payloadA.childContinuationToken,
       session: parkedSession,
     });
-    parkedSession = upsertProxyInputRequests({
+    parkedSession = seedRelaySession({
       entries: entriesB,
       forChildContinuationToken: payloadB.childContinuationToken,
       session: parkedSession,
     });
 
-    expect(hasProxyInputRequests(parkedSession.state)).toBe(true);
+    expect(hasRelayedRequests(parkedSession.state)).toBe(true);
 
     // One inbound deliver carrying responses for both descendants.
     // Simulates a UI that lets the user answer both prompts before

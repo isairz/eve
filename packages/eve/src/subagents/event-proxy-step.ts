@@ -17,7 +17,7 @@ import { applyTransition, sessionView } from "#harness/session-machine/commit.js
 import { currentProjection } from "#harness/session-machine/current.js";
 import { adaptHumanInput } from "#harness/hitl/index.js";
 import { beforeStep, type BeforeStepArrival } from "#harness/hitl/index.js";
-import type { WorkflowAskRoute } from "#harness/proxy-input-requests.js";
+import type { WorkflowAskRoute } from "#harness/session-machine/human-input-types.js";
 
 type SubagentEventHookPayload =
   | SubagentAuthorizationEventHookPayload

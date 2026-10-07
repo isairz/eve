@@ -2,7 +2,7 @@ import type { SessionAuthContext } from "#channel/types.js";
 import { runAsCaller } from "#context/caller-scope.js";
 import { contextStorage } from "#context/container.js";
 import { ContextKey } from "#context/key.js";
-import { legacyApprovalAudit, mergeApprovalAudits } from "./candidates.js";
+import { legacyApprovalAudit, mergeApprovalAudits } from "./state-legacy.js";
 import type { SessionView, TurnState } from "#harness/session-machine/view.js";
 import type { SessionStateMap } from "#harness/types.js";
 import type { InputRequest } from "#shared/input.js";

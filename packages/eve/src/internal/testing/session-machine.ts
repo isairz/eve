@@ -1,7 +1,13 @@
 import type { ModelMessage } from "ai";
 
 import { contextStorage } from "#context/container.js";
-import { grantedApprovalKeys, parkOnApprovals } from "#harness/hitl/approvals.js";
+import { grantedApprovalKeys } from "#harness/hitl/projection.js";
+import { afterStep } from "#harness/hitl/decisions.js";
+import { adaptHumanInput } from "#harness/hitl/adapter.js";
+import { renderPendingApprovalsSnippet } from "#harness/hitl/index.js";
+import { createFrameworkUserMessage } from "#harness/messages.js";
+import type { Transition } from "#harness/session-machine/commit.js";
+import type { SessionView } from "#harness/session-machine/view.js";
 import { suspendStep } from "#harness/session-machine/transitions.js";
 import { withoutApprovalParts } from "#harness/step/after-model.js";
 import { sessionView } from "#harness/session-machine/commit.js";
@@ -171,4 +177,48 @@ export function grantedKeys(
     sessionView(storedProjection(session.state), session.state),
     approvalKey,
   );
+}
+
+/** Parks a fixture through the same live decision and adapter as the model-step seam. */
+export function parkOnApprovals(
+  view: SessionView,
+  input: {
+    readonly event: StepCoordinates;
+    readonly messages: readonly ModelMessage[];
+    readonly requests: readonly InputRequest[];
+    readonly tasks: readonly RuntimeWorkflowTaskRequest[];
+    readonly responseAuthRequiredRequestIds?: readonly string[];
+    readonly requester?: SuspendedStep["requester"];
+  },
+): Transition {
+  const pendingStart = input.messages.findIndex((message) => message.role !== "tool");
+  const committed = pendingStart === -1 ? input.messages : input.messages.slice(0, pendingStart);
+  const messages = input.messages.slice(committed.length);
+  const snippet = renderPendingApprovalsSnippet(input.requests);
+  const decision = afterStep(view, {
+    at: input.event,
+    inputs: [
+      {
+        type: "approval.requested",
+        at: input.event,
+        messages,
+        requests: input.requests,
+        requester: input.requester ?? null,
+        approvalKeys: {},
+        responsePolicyRequestIds: input.responseAuthRequiredRequestIds ?? [],
+      },
+      ...(input.tasks.length === 0
+        ? []
+        : [{ type: "actions.dispatched" as const, at: input.event, messages, tasks: input.tasks }]),
+    ],
+  });
+  const transition = adaptHumanInput(view, decision).transition;
+  return {
+    ...transition,
+    commit: [
+      ...committed,
+      ...(snippet === undefined ? [] : [createFrameworkUserMessage("context.state", snippet)]),
+      ...(transition.commit ?? []),
+    ],
+  };
 }

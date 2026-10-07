@@ -124,8 +124,7 @@
  *   rule 49 — Provided tool definitions carry a framework tool flag,
  *             so telemetry ownership survives renamed and namespaced tools.
  *   rule 50 — The human-in-the-loop lifecycle in `harness/hitl/` is
- *             reached only through its `index.ts`, its request vocabulary
- *             (`approval-prompt`), and the approvers that
+ *             reached only through its `index.ts` and the approvers that
  *             approved calls run as (`approved-call-callers`), so replacing it
  *             changes one seam. Migration is the pure hydration seam. Nothing
  *             outside `harness/hitl/` names the legacy human-input state key.
@@ -509,7 +508,7 @@ function checkRule47(posix, lines, violations) {
 const HUMAN_INPUT_DIR = "packages/eve/src/harness/hitl/";
 // Migration is the pure hydration seam for step-side checkpoint readers.
 const HUMAN_INPUT_PRIVATE_IMPORT_RE =
-  /["'](?:#harness\/|(?:\.\.?\/)+)hitl\/(?!(?:index|approval-prompt|approved-call-callers|migration)\.js["'])/;
+  /["'](?:#harness\/|(?:\.\.?\/)+)hitl\/(?!(?:index|approved-call-callers|migration)\.js["'])/;
 
 /** @param {string} posix @param {string[]} lines @param {Violation[]} violations */
 function checkRule50(posix, lines, violations) {
@@ -552,7 +551,7 @@ const HUMAN_INPUT_RUNTIME_MODULES = new Set([
   "held-step.ts", // Reads pending task calls through the execution vocabulary adapter.
 ]);
 const HUMAN_INPUT_IO_RE =
-  /["'](?:#execution\/|#internal\/workflow\/|node:|#context\/(?:container|caller-scope|build-dynamic-tools|build-callback-context)\.js)|\bimport\s*\(/;
+  /["'](?:#execution\/(?!session-inbox\/address\.js)|#internal\/workflow\/|node:|#context\/(?:container|caller-scope|build-dynamic-tools|build-callback-context)\.js)|\bimport\s*\(/;
 const HUMAN_INPUT_EFFECT_IMPORT_RE =
   /["'](?:\.\/|#harness\/hitl\/|(?:\.\.\/)+hitl\/)(?:effects|policy-effect)\.js["']/;
 

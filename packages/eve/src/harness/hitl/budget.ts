@@ -8,7 +8,7 @@
  * machine's `answer`: a grant bumps the runtime limits with
  * {@link bumpSessionRuntimeUsageLimits}; a decline cancels the turn tree.
  */
-import { createSessionLimitContinuationRequest } from "#harness/hitl/budget-request.js";
+import { createSessionLimitContinuationRequest } from "#harness/hitl/budget-question.js";
 import {
   getSessionUsageLimitViolation,
   getSessionTokenUsage,

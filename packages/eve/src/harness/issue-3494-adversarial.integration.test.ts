@@ -2,10 +2,10 @@ import { jsonSchema, simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { afterAll, expect, it, vi } from "vitest";
 import type { ApprovalResponsePolicy } from "#approval/definition.js";
-import {
-  getApprovalAuditState,
-  markApprovalCandidateAuthorizationRequired,
-} from "#harness/hitl/candidates.js";
+import { sessionView } from "#harness/session-machine/commit.js";
+import { writeTurnState } from "#harness/session-machine/state.js";
+import type { AuthorizationChallenge } from "#harness/authorization.js";
+import type { SessionStateMap } from "#harness/types.js";
 import { setPendingAuthorization } from "#harness/authorization.js";
 import { z } from "zod";
 import { ContextContainer, contextStorage } from "#context/container.js";
@@ -570,7 +570,7 @@ it.each(["rejected", "failed", "timed-out"] as const)(
     expect(refused.held).toEqual({ kind: "request" });
     expect(events.at(-1)).toMatchObject({ data: { on: "input" }, type: "turn.waiting" });
     expect(events.some((event) => event.type === "turn.started")).toBe(false);
-    expect(getApprovalAuditState(f.session.state).candidateHistory.at(-1)?.status).toBe(outcome);
+    expect(approvalAuditSnapshot(f.session.state).candidateHistory.at(-1)?.status).toBe(outcome);
     expect(f.pending()).toHaveLength(1);
     expect(f.executions).toEqual([]);
 
@@ -600,7 +600,7 @@ it("keeps the turn held while a responder signs in, and fails the sign-in on exp
       },
     })),
   });
-  const candidate = getApprovalAuditState(f.session.state).activeCandidates[0]!;
+  const candidate = approvalAuditSnapshot(f.session.state).activeCandidates[0]!;
   const challenges = [
     {
       candidateId: candidate.candidateId,
@@ -613,7 +613,7 @@ it("keeps the turn held while a responder signs in, and fails the sign-in on exp
   f.updateSession((session) => ({
     ...session,
     state: setPendingAuthorization(
-      markApprovalCandidateAuthorizationRequired({
+      withCandidateAuthorizations({
         state: session.state,
         candidateId: candidate.candidateId,
         authorizationChallenges: challenges,
@@ -665,10 +665,10 @@ it("announces a candidate's sign-in with the attempt its completion will name", 
       },
     })),
   });
-  const candidate = getApprovalAuditState(f.session.state).activeCandidates[0]!;
+  const candidate = approvalAuditSnapshot(f.session.state).activeCandidates[0]!;
   f.updateSession((session) => ({
     ...session,
-    state: markApprovalCandidateAuthorizationRequired({
+    state: withCandidateAuthorizations({
       state: session.state,
       candidateId: candidate.candidateId,
       authorizationChallenges: [
@@ -690,3 +690,41 @@ it("announces a candidate's sign-in with the attempt its completion will name", 
     data: { attemptId: "attempt_alice", candidateId: candidate.candidateId, name: "notes" },
   });
 });
+
+/** Observe the current machine audit, including full responders while active. */
+function approvalAuditSnapshot(state: SessionStateMap | undefined) {
+  const audit = sessionView(storedProjection(state), state).turn.audit;
+  return {
+    activeCandidates: Object.values(audit?.activeCandidates ?? {}),
+    candidateHistory: audit?.candidateHistory ?? [],
+    settlements: Object.values(audit?.settlements ?? {}),
+  };
+}
+
+/** An explicit current checkpoint fixture awaiting the provider's sign-in. */
+function withCandidateAuthorizations(input: {
+  readonly state: SessionStateMap | undefined;
+  readonly candidateId: string;
+  readonly authorizationChallenges: readonly AuthorizationChallenge[];
+}) {
+  const turn = sessionView(storedProjection(input.state), input.state).turn;
+  const audit = turn.audit!;
+  const candidate = audit.activeCandidates[input.candidateId]!;
+  return writeTurnState(
+    { state: input.state },
+    {
+      ...turn,
+      audit: {
+        ...audit,
+        activeCandidates: {
+          ...audit.activeCandidates,
+          [input.candidateId]: {
+            ...candidate,
+            authorizations: input.authorizationChallenges,
+            status: "authorization-required",
+          },
+        },
+      },
+    },
+  ).state;
+}

@@ -29,7 +29,7 @@ import {
   publishInputResolutions,
   type CreateInstrumentationHandleEventInput,
 } from "#instrumentation/native-events.js";
-import type { ResolvedInputBatch } from "#harness/input-request-resolution.js";
+import type { ResolvedInputBatch } from "#harness/resolved-input.js";
 import type { HandleEventFn } from "#harness/types.js";
 import {
   instrumentChannelDelivery,

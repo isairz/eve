@@ -13,7 +13,7 @@ import {
   writeTaskTable,
   type TaskTable,
 } from "#execution/tasks/table.js";
-import { upsertProxyInputRequestState } from "#harness/proxy-input-requests.js";
+import { seedRelayState } from "#internal/testing/relay-routing.js";
 import type { HarnessSession } from "#harness/types.js";
 import { withPublished } from "#internal/testing/session-machine.js";
 import { createInputRequestedEvent } from "#protocol/message.js";
@@ -215,7 +215,7 @@ function withQuestion(session: DurableSession, runId: string): DurableSession {
       ...REQUEST_EVENT,
     }),
   ]);
-  const state = upsertProxyInputRequestState({
+  const state = seedRelayState({
     entries: [
       [
         requestId,

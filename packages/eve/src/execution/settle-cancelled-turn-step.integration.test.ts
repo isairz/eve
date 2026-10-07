@@ -4,10 +4,10 @@ import type { HarnessSession, SessionStateMap } from "#harness/types.js";
 import { readDurableSession } from "#execution/durable-session-store.js";
 import { settleCancelledTurnStep } from "#execution/settle-cancelled-turn-step.js";
 import {
-  getProxyInputRequests,
-  upsertProxyInputRequestState,
-  type ProxyInputRequest,
-} from "#harness/proxy-input-requests.js";
+  getRelayedRequests,
+  seedRelayState,
+  type LegacyRelayFixture,
+} from "#internal/testing/relay-routing.js";
 import { filterEventsByType } from "#internal/testing/events.js";
 import { createInputRequestedEvent, type MessageStreamEvent } from "#protocol/message.js";
 import type { InputRequest } from "#shared/input.js";
@@ -138,7 +138,7 @@ describe("settleCancelledTurnStep", () => {
       [{ kind: "question", outcome: "cancelled", requestId: "deploy-run-ask-1" }],
       [{ kind: "tool-approval", outcome: "cancelled", requestId: "reviewer-approval-1" }],
     ]);
-    expect(getProxyInputRequests(readDurableSession(result.sessionState).state).size).toBe(0);
+    expect(getRelayedRequests(readDurableSession(result.sessionState).state).size).toBe(0);
   });
 });
 
@@ -146,7 +146,7 @@ describe("settleCancelledTurnStep", () => {
 function relay(
   state: SessionStateMap | undefined,
   requestId: string,
-  route: Pick<ProxyInputRequest, "kind" | "runId" | "workflowAsk">,
+  route: Pick<LegacyRelayFixture, "kind" | "runId" | "workflowAsk">,
 ): SessionStateMap | undefined {
   const event = { sequence: 2, stepIndex: 0, turnId: "turn_1" };
   const request: InputRequest = {
@@ -158,7 +158,7 @@ function relay(
   const published = withPublished({ ...openSession, state }, [
     createInputRequestedEvent({ callId: `${requestId}-served`, requests: [request], ...event }),
   ]);
-  return upsertProxyInputRequestState({
+  return seedRelayState({
     entries: [[requestId, { ...route, childContinuationToken: requestId, event }]],
     forChildContinuationToken: requestId,
     state: published.state,

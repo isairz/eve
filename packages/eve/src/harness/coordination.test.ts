@@ -16,7 +16,7 @@ import {
 } from "#harness/workflow-tool-runs.js";
 
 import { toolOutput } from "#tools/model-output.js";
-import { upsertProxyInputRequests } from "#harness/proxy-input-requests.js";
+import { seedRelaySession } from "#internal/testing/relay-routing.js";
 import { setTurnUsageState } from "#harness/turn-tag-state.js";
 import type { HarnessSession } from "#harness/types.js";
 import { isRuntimeWorkflowToolAction } from "#shared/action-types.js";
@@ -341,7 +341,7 @@ describe("runtime results", () => {
       address: { runId: "run-1", hookToken: "eve:workflow-tool-run:op-1" },
     });
     const answerToken = "eve:workflow-tool-run-answer:run-1:0";
-    const session = upsertProxyInputRequests({
+    const session = seedRelaySession({
       entries: [
         [
           "other-request",
@@ -353,7 +353,7 @@ describe("runtime results", () => {
         ],
       ],
       forChildContinuationToken: CHILD_CONTINUATION_TOKEN,
-      session: upsertProxyInputRequests({
+      session: seedRelaySession({
         entries: [
           [
             answerToken,
@@ -379,7 +379,7 @@ describe("runtime results", () => {
 
     expect(getBlockingWorkflowToolRuns(finished.session.state)).toEqual([]);
     expect(finished.requestIds).toEqual([answerToken]);
-    expect([...getProxyInputRequests(finished.session.state).keys()]).toContain("other-request");
+    expect([...getRelayedRequests(finished.session.state).keys()]).toContain("other-request");
   });
 
   it("projects a workflow tool's result through its toModelOutput", async () => {
@@ -460,6 +460,6 @@ describe("resolveToolCallInputObject", () => {
 import { jsonSchema } from "ai";
 
 // Thin selector adapter: the machine owns the routes formerly stored by the proxy map.
-function getProxyInputRequests(state: HarnessSession["state"]) {
+function getRelayedRequests(state: HarnessSession["state"]) {
   return new Map(Object.entries(readTurnState(state).relayedRoutes ?? {}));
 }

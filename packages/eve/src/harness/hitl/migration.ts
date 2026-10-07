@@ -1,4 +1,4 @@
-import { legacyApprovalAudit, mergeApprovalAudits } from "./candidates.js";
+import { legacyApprovalAudit, mergeApprovalAudits } from "./state-legacy.js";
 import type { AuthorizationChallenge } from "#harness/authorization.js";
 import type { SessionStateMap } from "#harness/types.js";
 import { getSessionUsage } from "#harness/turn-tag-state.js";

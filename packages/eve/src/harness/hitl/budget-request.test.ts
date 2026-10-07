@@ -2,10 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   createSessionLimitContinuationRequest,
-  isSessionLimitContinuationRequest,
   isSessionLimitContinuationRequestId,
-  resolveSessionLimitContinuation,
-} from "#harness/hitl/budget-request.js";
+} from "#harness/hitl/budget-question.js";
 
 const VIOLATION = { kind: "input", limit: 40_000_000, usedTokens: 40_120_500 } as const;
 
@@ -110,56 +108,11 @@ describe("createSessionLimitContinuationRequest", () => {
     expect(later.requestId).not.toBe(createTestRequest().requestId);
   });
 
-  it("is recognized by isSessionLimitContinuationRequest", () => {
-    expect(isSessionLimitContinuationRequest(createTestRequest())).toBe(true);
-  });
-
   it("mints ids recognized by isSessionLimitContinuationRequestId", () => {
     expect(isSessionLimitContinuationRequestId(createTestRequest().requestId)).toBe(true);
     expect(isSessionLimitContinuationRequestId("sess-test:0:limit:output:12")).toBe(true);
     expect(isSessionLimitContinuationRequestId("sess-test:0:limit:token-cost:1.5123")).toBe(true);
     expect(isSessionLimitContinuationRequestId("approval-1")).toBe(false);
     expect(isSessionLimitContinuationRequestId("sess-test:0:limit:input:")).toBe(false);
-  });
-});
-
-describe("resolveSessionLimitContinuation", () => {
-  const request = createTestRequest();
-
-  it("grants on the continue option", () => {
-    expect(
-      resolveSessionLimitContinuation({
-        requests: [request],
-        responses: [{ optionId: "continue", requestId: request.requestId }],
-      }),
-    ).toEqual({ granted: true });
-  });
-
-  it("declines on the stop option", () => {
-    expect(
-      resolveSessionLimitContinuation({
-        requests: [request],
-        responses: [{ optionId: "stop", requestId: request.requestId }],
-      }),
-    ).toEqual({ granted: false });
-  });
-
-  it("treats an unanswered or unrecognized response as ignored", () => {
-    expect(resolveSessionLimitContinuation({ requests: [request], responses: [] })).toBeUndefined();
-    expect(
-      resolveSessionLimitContinuation({
-        requests: [request],
-        responses: [{ requestId: request.requestId, text: "hmm" }],
-      }),
-    ).toBeUndefined();
-  });
-
-  it("returns undefined when the batch has no continuation request", () => {
-    expect(
-      resolveSessionLimitContinuation({
-        requests: [],
-        responses: [{ optionId: "continue", requestId: "other" }],
-      }),
-    ).toBeUndefined();
   });
 });

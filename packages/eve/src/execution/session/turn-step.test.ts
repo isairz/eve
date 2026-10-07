@@ -33,7 +33,7 @@ import { deserializeContext, serializeContext } from "#context/serialize.js";
 import { startWorkflowTask } from "#execution/tools/workflow/start.js";
 import { TurnCancelledError } from "#harness/turn-cancellation.js";
 import { getPendingAuthorization, setPendingAuthorization } from "#harness/authorization.js";
-import { upsertProxyInputRequests } from "#harness/proxy-input-requests.js";
+import { seedRelaySession } from "#internal/testing/relay-routing.js";
 import {
   positionOf,
   positionState,
@@ -361,7 +361,7 @@ describe("routeProxiedDeliverStep", () => {
   });
 
   it("drops a consumed question reply's context but keeps channel state", async () => {
-    const session = upsertProxyInputRequests({
+    const session = seedRelaySession({
       entries: [
         [
           "ask-1",
@@ -411,7 +411,7 @@ describe("routeProxiedDeliverStep", () => {
   });
 
   it("replies to the saved child inbox after its continuation alias changes", async () => {
-    const session = upsertProxyInputRequests({
+    const session = seedRelaySession({
       entries: [
         [
           "request-1",
@@ -475,7 +475,7 @@ describe("routeProxiedDeliverStep", () => {
   });
 
   it("answers a root question once when one delivery carries several messages", async () => {
-    const session = upsertProxyInputRequests({
+    const session = seedRelaySession({
       entries: [
         [
           "ask-1",
@@ -529,7 +529,7 @@ describe("routeProxiedDeliverStep", () => {
       },
     ],
   ])("does not answer a delegated %s question from steering text", async (_, serializedContext) => {
-    const session = upsertProxyInputRequests({
+    const session = seedRelaySession({
       entries: [
         [
           "ask-1",
@@ -574,7 +574,7 @@ describe("routeProxiedDeliverStep", () => {
       principalId: "user-1",
       principalType: "user",
     };
-    const session = upsertProxyInputRequests({
+    const session = seedRelaySession({
       entries: [
         [
           "request-1",
@@ -633,7 +633,7 @@ describe("routeProxiedDeliverStep", () => {
       replyTo: { kind: "hook" as const, token: "parent-turn" },
       subagentName: "research",
     };
-    const session = upsertProxyInputRequests({
+    const session = seedRelaySession({
       entries: [
         [
           "child-a",
@@ -645,7 +645,7 @@ describe("routeProxiedDeliverStep", () => {
         ],
       ],
       forChildContinuationToken: "child-token-a",
-      session: upsertProxyInputRequests({
+      session: seedRelaySession({
         entries: [
           [
             "child-b",

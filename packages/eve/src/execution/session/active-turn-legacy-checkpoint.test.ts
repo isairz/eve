@@ -7,7 +7,7 @@ import {
   readDurableSession,
   type DurableSessionState,
 } from "#execution/durable-session-store.js";
-import { createSessionLimitContinuationRequest } from "#harness/hitl/budget-request.js";
+import { createSessionLimitContinuationRequest } from "#harness/hitl/budget-question.js";
 import { LEGACY_PARKING_KEYS } from "#harness/hitl/state-legacy.js";
 import { sessionView } from "#harness/session-machine/commit.js";
 import {

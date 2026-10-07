@@ -1,7 +1,20 @@
+import { foldSession } from "#protocol/session-projection.js";
+import { writeTurnState } from "#harness/session-machine/state.js";
+import { SESSION_PROJECTION_STATE_KEY } from "#harness/session-machine/view.js";
+import type { SubagentInputRequestHookPayload } from "#channel/types.js";
+import type { HarnessSessionBase, SessionStateMap } from "#harness/types.js";
+import type { InputRequestKind } from "#shared/input.js";
+import type { RemoteAgentBinding } from "#eve-channel/support.js";
+import { hydrateMachineState, sessionView } from "#harness/session-machine/commit.js";
+import { storedProjection } from "#harness/session-machine/view.js";
 import type { SessionInboxAddress } from "#execution/session-inbox/address.js";
 import type { DeliverPayload } from "#channel/types.js";
 import type { StepCoordinates as PendingInputBatchEvent } from "#harness/session-machine/view.js";
-import type { WorkflowAskRoute, ProxyInputRequest } from "#harness/proxy-input-requests.js";
+import type {
+  WorkflowAskRoute,
+  ProxyInputQuestion,
+  RelayRoute,
+} from "#harness/session-machine/human-input-types.js";
 import type { InputResolution } from "#protocol/message.js";
 import type { InputResponse } from "#shared/input.js";
 import { inputTextKey, readAnswerText } from "#internal/input-text.js";
@@ -15,7 +28,7 @@ import type { SessionView } from "#harness/session-machine/view.js";
 /** One proxied-child bucket of a routed deliver payload. */
 export interface RoutedChildDelivery {
   readonly workflowAsk?: WorkflowAskRoute;
-  readonly remote?: ProxyInputRequest["remote"];
+  readonly remote?: RelayRoute["remote"];
   readonly inputSource?: string;
   readonly childContinuationToken: string;
   readonly childSessionInbox?: SessionInboxAddress;
@@ -135,4 +148,232 @@ export function routeDeliverPayload(input: {
       ? { kind: "cancel-turn" }
       : undefined,
   };
+}
+
+const PROXY_INPUT_REQUESTS_KEY = "eve.runtime.proxyInputRequests";
+/** Routing and control metadata for one descendant-owned input request. */
+export interface LegacyRelayFixture {
+  readonly remote?: RemoteAgentBinding & { readonly sessionId: string };
+  readonly inputSource?: string;
+  readonly workflowAsk?: WorkflowAskRoute;
+  /**
+   * The workflow tool run that relayed the request: its own `ctx.ask()`
+   * question, or a request from a session it opened with `ctx.agent`. Nobody
+   * can answer the request once that run ends.
+   */
+  readonly runId?: string;
+  /** Batch semantics are optional so sessions written before this field remain routable. */
+  readonly batch?: LegacyRelayFixtureBatch;
+  readonly childContinuationToken: string;
+  readonly childSessionInbox?: SessionInboxAddress;
+  /**
+   * Coordinates of the `input.requested` this session emitted for the request;
+   * the `input.resolved` it emits once it routes the answer repeats them.
+   */
+  readonly event: PendingInputBatchEvent;
+  readonly kind: InputRequestKind;
+  /** Question metadata lets the human-facing parent resolve plain text before proxying by ID. */
+  readonly question?: ProxyInputQuestion;
+}
+
+interface LegacyRelayFixtureBatch {
+  readonly approvalRequestIds: readonly string[];
+  readonly requestIds: readonly string[];
+}
+
+/** `requestId → route` map stored on the parent session. */
+type LegacyRelayFixtureMap = Readonly<Record<string, LegacyRelayFixture>>;
+
+/**
+ * Returns true when the session is currently proxying one or more
+ * HITL requests on behalf of a descendant subagent.
+ */
+export function hasRelayedRequests(state: SessionStateMap | undefined): boolean {
+  for (const _ of getRelayedRequests(state).keys()) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Replaces prior entries for the destination and input source with the provided
+ * ones. A child raising a fresh batch overwrites its prior batch so the
+ * parent never keeps stale request metadata. Other sources' routes stay
+ * independently answerable.
+ */
+export function seedLegacyRelaySession<S extends HarnessSessionBase>(input: {
+  readonly inputSource?: string;
+  readonly entries: readonly (readonly [requestId: string, route: LegacyRelayFixture])[];
+  readonly forChildContinuationToken: string;
+  readonly session: S;
+}): S {
+  return {
+    ...input.session,
+    state: seedLegacyRelayState({
+      entries: input.entries,
+      forChildContinuationToken: input.forChildContinuationToken,
+      inputSource: input.inputSource,
+      state: input.session.state,
+    }),
+  };
+}
+
+/** Explicit old-key fixture builder for legacy-reader tests; never used by runtime. */
+export function seedLegacyRelayState(input: {
+  readonly inputSource?: string;
+  readonly entries: readonly (readonly [requestId: string, route: LegacyRelayFixture])[];
+  readonly forChildContinuationToken: string;
+  readonly state: SessionStateMap | undefined;
+}): SessionStateMap | undefined {
+  const next: Record<string, LegacyRelayFixture> = {};
+
+  for (const [requestId, route] of Object.entries(readLegacyRoutes(input.state))) {
+    if (
+      route.childContinuationToken !== input.forChildContinuationToken ||
+      route.inputSource !== input.inputSource
+    ) {
+      next[requestId] = route;
+    }
+  }
+
+  for (const [requestId, route] of input.entries) {
+    next[requestId] = route;
+  }
+
+  const state = { ...input.state };
+  if (Object.keys(next).length === 0) {
+    delete state[PROXY_INPUT_REQUESTS_KEY];
+  } else {
+    state[PROXY_INPUT_REQUESTS_KEY] = next;
+  }
+  return Object.keys(state).length > 0 ? state : undefined;
+}
+
+/**
+ * Projects a {@link SubagentInputRequestHookPayload} into the
+ * `(requestId, route)` tuples the session stores.
+ */
+export function legacyRelayEntries(
+  payload: SubagentInputRequestHookPayload,
+): readonly (readonly [requestId: string, route: LegacyRelayFixture])[] {
+  const batch: LegacyRelayFixtureBatch = {
+    approvalRequestIds: payload.event.requests.flatMap((request) =>
+      request.kind === "tool-approval" ? [request.requestId] : [],
+    ),
+    requestIds: payload.event.requests.map((request) => request.requestId),
+  };
+  const event: PendingInputBatchEvent = {
+    sequence: payload.event.sequence,
+    stepIndex: payload.event.stepIndex,
+    turnId: payload.event.turnId,
+  };
+  return payload.event.requests.map((request) => {
+    const route: {
+      readonly childContinuationToken: string;
+      readonly inputSource?: string;
+      readonly remote?: RemoteAgentBinding & { readonly sessionId: string };
+      childSessionInbox?: SessionInboxAddress;
+      readonly event: PendingInputBatchEvent;
+      readonly kind: InputRequestKind;
+      question?: ProxyInputQuestion;
+    } & { readonly batch: LegacyRelayFixtureBatch } = {
+      batch,
+      childContinuationToken: payload.childContinuationToken,
+      ...(payload.inputSource !== undefined && { inputSource: payload.inputSource }),
+      ...(payload.remote !== undefined && { remote: payload.remote }),
+      event,
+      kind: request.kind,
+    };
+    if (request.kind === "question") {
+      route.question = {
+        ...(request.allowFreeform !== undefined && { allowFreeform: request.allowFreeform }),
+        ...(request.options !== undefined && { options: [...request.options] }),
+      };
+    }
+    if (payload.childSessionInbox?.sessionId === payload.childSessionId) {
+      route.childSessionInbox = payload.childSessionInbox;
+    }
+
+    return [request.requestId, route] as const;
+  });
+}
+
+function readLegacyRoutes(state: SessionStateMap | undefined): LegacyRelayFixtureMap {
+  return (state?.[PROXY_INPUT_REQUESTS_KEY] as LegacyRelayFixtureMap | undefined) ?? {};
+}
+export function getRelayedRequests(state: SessionStateMap | undefined) {
+  const machine = hydrateMachineState({ state });
+  return new Map(
+    Object.entries(
+      sessionView(storedProjection(machine.state), machine.state).turn.relayedRoutes ?? {},
+    ),
+  );
+}
+
+/** Seed routing through the same live relay decision used for arriving child batches. */
+export function seedRelaySession<S extends HarnessSessionBase>(input: {
+  readonly inputSource?: string;
+  readonly entries: readonly (readonly [string, LegacyRelayFixture])[];
+  readonly forChildContinuationToken: string;
+  readonly session: S;
+}): S {
+  let session = hydrateMachineState(input.session);
+  const groups = Map.groupBy(input.entries, ([, route]) =>
+    JSON.stringify({
+      token: route.childContinuationToken,
+      inbox: route.childSessionInbox,
+      source: route.inputSource,
+      event: route.event,
+    }),
+  );
+  for (const entries of groups.values()) {
+    const route = entries[0]![1];
+    const view = sessionView(storedProjection(session.state), session.state);
+    const decision = beforeStep(view, [
+      {
+        type: "relayed.requested",
+        at: route.event,
+        requests: entries.map(([requestId, member]) => ({
+          requestId,
+          kind: member.kind,
+          prompt: "",
+          action: { kind: "tool-call", callId: requestId, toolName: "", input: {} },
+          allowFreeform: (member.workflowAsk?.question ?? member.question)?.allowFreeform,
+          options: (member.workflowAsk?.question ?? member.question)?.options?.slice(),
+        })),
+        route: {
+          childContinuationToken: route.childContinuationToken,
+          childSessionInbox: route.childSessionInbox,
+          remote: route.remote,
+          inputSource: route.inputSource,
+          runId: route.runId,
+          control: route.workflowAsk?.control,
+        },
+      },
+    ]);
+    const { transition } = adaptHumanInput(view, decision);
+    const projection = transition.events.reduce(foldSession, view.projection);
+    session = writeTurnState(
+      { ...session, state: { ...session.state, [SESSION_PROJECTION_STATE_KEY]: projection } },
+      transition.turn,
+    );
+  }
+  return session;
+}
+export function seedRelayState(input: {
+  readonly inputSource?: string;
+  readonly entries: readonly (readonly [string, LegacyRelayFixture])[];
+  readonly forChildContinuationToken: string;
+  readonly state: SessionStateMap | undefined;
+}) {
+  return seedRelaySession({
+    ...input,
+    session: {
+      agent: { system: "", tools: [], modelReference: { id: "fixture" } },
+      continuationToken: "fixture",
+      sessionId: "fixture",
+      compaction: { recentWindowSize: 10, threshold: 100000 },
+      state: input.state,
+    },
+  }).state;
 }

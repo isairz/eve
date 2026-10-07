@@ -11,14 +11,14 @@ import {
 import { turnStep } from "#execution/session/turn-step.js";
 import { runSessionStateStep } from "#internal/testing/session-state-step.js";
 import type { DurableStepResult, TurnStepPayload } from "#execution/session/turn-step-types.js";
-import {
-  getApprovalAuditState,
-  markApprovalCandidateAuthorizationRequired,
-} from "#harness/hitl/candidates.js";
+import { sessionView } from "#harness/session-machine/commit.js";
+import { writeTurnState } from "#harness/session-machine/state.js";
+import type { AuthorizationChallenge } from "#harness/authorization.js";
+import type { SessionStateMap } from "#harness/types.js";
 import { CallbackBaseUrlKey, setPendingAuthorization } from "#harness/authorization.js";
 import { ConnectionAuthorizationRequiredError } from "#connections/errors.js";
 import { defineInteractiveAuthorization } from "#shared/connection-types.js";
-import { suspendedSteps } from "#harness/session-machine/view.js";
+import { suspendedSteps, storedProjection } from "#harness/session-machine/view.js";
 import type { HarnessSession } from "#harness/types.js";
 import { defineOpenAPIConnection } from "#public/definitions/connections/openapi.js";
 import { getCompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
@@ -464,7 +464,7 @@ describe("turn connection approval restoration", () => {
     expect(fixture.fetch).not.toHaveBeenCalled();
     const state = readDurableSession(refused.sessionState).state;
     expect(suspendedSteps(state)[0]!.requests[0]!.requestId).toBe(request.requestId);
-    expect(getApprovalAuditState(state).candidateHistory).toEqual([
+    expect(approvalAuditSnapshot(state).candidateHistory).toEqual([
       expect.objectContaining({
         status: "rejected",
         reason: expect.stringContaining("cannot replay its approvalResponse callback"),
@@ -560,7 +560,7 @@ describe("turn connection approval restoration", () => {
         payloads: [{ inputResponses: [{ requestId: request.requestId, optionId: "approve" }] }],
       },
     });
-    const candidate = getApprovalAuditState(readDurableSession(ingested.sessionState).state)
+    const candidate = approvalAuditSnapshot(readDurableSession(ingested.sessionState).state)
       .activeCandidates[0]!;
     const challenges = [
       {
@@ -575,7 +575,7 @@ describe("turn connection approval restoration", () => {
     fixture.updateSession((session) => ({
       ...session,
       state: setPendingAuthorization(
-        markApprovalCandidateAuthorizationRequired({
+        withCandidateAuthorizations({
           state: session.state,
           candidateId: candidate.candidateId,
           authorizationChallenges: challenges,
@@ -637,13 +637,13 @@ describe("turn connection approval restoration", () => {
         },
       });
       expect(
-        getApprovalAuditState(readDurableSession(candidate.sessionState).state).activeCandidates,
+        approvalAuditSnapshot(readDurableSession(candidate.sessionState).state).activeCandidates,
       ).toHaveLength(1);
       if (cold) clearDurableDynamicCallbacks(sessionId);
       const resumed = await fixture.step();
       expect(fixture.response).toHaveBeenCalledOnce();
       expect(
-        getApprovalAuditState(readDurableSession(resumed.sessionState).state).settlements,
+        approvalAuditSnapshot(readDurableSession(resumed.sessionState).state).settlements,
       ).toEqual([expect.objectContaining({ outcome: "allowed", requestId: request.requestId })]);
       expect(fixture.fetch).toHaveBeenCalledOnce();
       // Bob approved Alice's call, so the approved request goes out as Bob.
@@ -706,7 +706,7 @@ describe("turn connection approval restoration", () => {
     const rejected = await fixture.step();
     expect(fixture.response).toHaveBeenCalledOnce();
     expect(
-      getApprovalAuditState(readDurableSession(rejected.sessionState).state).candidateHistory,
+      approvalAuditSnapshot(readDurableSession(rejected.sessionState).state).candidateHistory,
     ).toEqual([
       expect.objectContaining({ status: "rejected", reason: "Only the notes owner can approve." }),
     ]);
@@ -739,4 +739,42 @@ function callerHeader(call: readonly unknown[] | undefined): string | null {
   const [input, init] = (call ?? []) as [Request | string | URL, RequestInit | undefined];
   const headers = new Headers(input instanceof Request ? input.headers : init?.headers);
   return headers.get("x-caller");
+}
+
+/** Observe the current machine audit, including full responders while active. */
+function approvalAuditSnapshot(state: SessionStateMap | undefined) {
+  const audit = sessionView(storedProjection(state), state).turn.audit;
+  return {
+    activeCandidates: Object.values(audit?.activeCandidates ?? {}),
+    candidateHistory: audit?.candidateHistory ?? [],
+    settlements: Object.values(audit?.settlements ?? {}),
+  };
+}
+
+/** An explicit current checkpoint fixture awaiting the provider's sign-in. */
+function withCandidateAuthorizations(input: {
+  readonly state: SessionStateMap | undefined;
+  readonly candidateId: string;
+  readonly authorizationChallenges: readonly AuthorizationChallenge[];
+}) {
+  const turn = sessionView(storedProjection(input.state), input.state).turn;
+  const audit = turn.audit!;
+  const candidate = audit.activeCandidates[input.candidateId]!;
+  return writeTurnState(
+    { state: input.state },
+    {
+      ...turn,
+      audit: {
+        ...audit,
+        activeCandidates: {
+          ...audit.activeCandidates,
+          [input.candidateId]: {
+            ...candidate,
+            authorizations: input.authorizationChallenges,
+            status: "authorization-required",
+          },
+        },
+      },
+    },
+  ).state;
 }

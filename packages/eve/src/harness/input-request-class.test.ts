@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { isApprovalRequest } from "#harness/input-request-class.js";
-import { createSessionLimitContinuationRequest } from "#harness/hitl/budget-request.js";
+import { createSessionLimitContinuationRequest } from "#harness/hitl/budget-question.js";
 
 describe("isApprovalRequest", () => {
   const action = {
