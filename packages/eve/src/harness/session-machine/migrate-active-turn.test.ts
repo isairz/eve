@@ -1,3 +1,4 @@
+import { openLimit } from "#harness/session-machine/view.js";
 import { describe, expect, it } from "vitest";
 import type { SessionInboxPayload, SessionInboxReader } from "#execution/session-inbox/inbox.js";
 import type { SessionStateCursor } from "#execution/session/state-cursor.js";
@@ -158,6 +159,6 @@ describe("step-side reads of a legacy checkpoint", () => {
     const session = readDurableSession(parkedBudget);
     for (const key of LEGACY_PARKING_KEYS) expect(session.state?.[key]).toBeUndefined();
     const view = sessionView(storedProjection(session.state), session.state);
-    expect(view.turn.limitRequest?.request).toEqual(budget);
+    expect(openLimit(view)?.request).toEqual(budget);
   });
 });

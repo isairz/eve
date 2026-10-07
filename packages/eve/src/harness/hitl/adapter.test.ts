@@ -1,3 +1,4 @@
+import { openLimit } from "#harness/session-machine/view.js";
 import { describe, expect, it } from "vitest";
 import type { ModelMessage } from "ai";
 import type { HarnessSession } from "#harness/types.js";
@@ -342,11 +343,13 @@ describe("HumanInput adapter", () => {
     );
     const projected = projectHumanInput({
       ...v,
-      projection,
+      projection: foldSession(
+        projection,
+        createInputRequestedEvent({ ...AT, requests: [BUDGET_QUESTION] }),
+      ),
       signIns: [challenge("attempt")],
       turn: {
         ...v.turn,
-        limitRequest: { at: AT, request: BUDGET_QUESTION },
         hitl: {
           relayedRoutes: { relay: route },
           relayedAuthorizations: { child: { at: AT, name: "github", runId: "run" } },
@@ -485,6 +488,7 @@ describe("HumanInput adapter", () => {
     const asked = beforeStep(v, [{ type: "budget.exceeded", at: AT, request: BUDGET_QUESTION }]);
     const waiting = {
       ...v,
+      projection: adaptHumanInput(v, asked).transition.events.reduce(foldSession, v.projection),
       turn: {
         ...asked.turn,
         hitl: { readsResults: true as const },
@@ -494,7 +498,12 @@ describe("HumanInput adapter", () => {
     const answered = beforeStep(waiting, [message("approve")]);
     const adapted = adaptHumanInput(waiting, answered);
     expect(adapted.transition.grantBudget).toBe(true);
-    expect(adapted.transition.turn.limitRequest).toBeUndefined();
+    expect(
+      openLimit({
+        ...waiting,
+        projection: adapted.transition.events.reduce(foldSession, waiting.projection),
+      }),
+    ).toBeUndefined();
     expect(adapted.transition.turn.queued?.message).toBe("Answer this after continuing.");
   });
 

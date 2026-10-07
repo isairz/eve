@@ -188,7 +188,6 @@ export function fail(
     turn: {
       ...view.turn,
       suspended: view.turn.suspended.filter((step) => !stopped.includes(step)),
-      limitRequest: undefined,
       hitl: cleanupHitl(view.turn.hitl),
       queued: undefined,
     },
@@ -590,10 +589,7 @@ export function cancel(view: SessionView): Transition {
   if (turnId === undefined && latest?.status === "cancelled")
     return {
       events: [],
-      turn:
-        view.turn.limitRequest === undefined
-          ? view.turn
-          : { ...view.turn, limitRequest: undefined },
+      turn: view.turn,
     };
   const stopped = view.turn.suspended.filter(
     (step) =>
@@ -628,7 +624,6 @@ export function cancel(view: SessionView): Transition {
     turn: {
       ...view.turn,
       suspended: view.turn.suspended.filter((step) => !stopped.includes(step)),
-      limitRequest: undefined,
       hitl: cleanupHitl(view.turn.hitl),
       queued: undefined,
     },

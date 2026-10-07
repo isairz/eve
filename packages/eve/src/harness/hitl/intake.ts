@@ -1,3 +1,4 @@
+import { openLimit } from "#harness/session-machine/view.js";
 import type { UserContent } from "ai";
 import { coalesceTurnInputs } from "#harness/messages.js";
 import {
@@ -78,7 +79,7 @@ export async function acceptHumanInput(
   const takeQueued =
     options.takeQueued &&
     starting.turn.hitl?.readsResults !== true &&
-    starting.turn.limitRequest === undefined;
+    openLimit(starting) === undefined;
   const delivered = deliver(starting, input, { takeQueued });
   // The durable session boundary matched callbacks before entering the harness and removed
   // their challenges. Reconstruct the decision lens, without persisting an intermediate state.
@@ -158,7 +159,7 @@ export async function acceptHumanInput(
 
   const sender = ctx?.get(AuthKey) ?? ctx?.get(SessionKey)?.auth.current ?? null;
   const waiting =
-    starting.turn.limitRequest !== undefined ||
+    openLimit(starting) !== undefined ||
     starting.turn.hitl?.readsResults === true ||
     starting.turn.suspended.some((parked) => parked.requests.length > 0) ||
     view.signIns.length > 0;
@@ -322,11 +323,11 @@ export async function acceptHumanInput(
     (consumedMessage ? withoutTurnInput(delivered.input) : withoutResponses(delivered.input));
   const barrierQueued =
     starting.turn.hitl?.readsResults === true ||
-    (step.view().turn.limitRequest !== undefined && !consumedMessage);
+    (openLimit(step.view()) !== undefined && !consumedMessage);
   const turnInput =
     deferred !== undefined || barrierQueued ? withoutTurnInput(remaining) : remaining;
   const pending =
-    step.view().turn.limitRequest !== undefined ||
+    openLimit(step.view()) !== undefined ||
     step.view().signIns.length > 0 ||
     step.view().turn.suspended.some((parked) => parked.requests.length > 0);
   if (pending && !hasApprovedWork(step))

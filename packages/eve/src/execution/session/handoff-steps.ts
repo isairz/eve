@@ -1,3 +1,4 @@
+import { openLimit } from "#harness/session-machine/view.js";
 import { sessionView } from "#harness/session-machine/commit.js";
 import { storedProjection } from "#harness/session-machine/view.js";
 import { openInputs, openSignIns } from "#protocol/session-projection.js";
@@ -40,7 +41,7 @@ export function isSessionStateIdleForHandoff(input: {
     openSignIns(projection).length === 0 &&
     view.signIns.length === 0 &&
     view.turn.suspended.length === 0 &&
-    view.turn.limitRequest === undefined &&
+    openLimit(view) === undefined &&
     view.turn.queued === undefined &&
     view.relayedRequestIds.size === 0
   );

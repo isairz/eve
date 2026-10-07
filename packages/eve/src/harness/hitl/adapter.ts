@@ -1,3 +1,4 @@
+import { openLimit } from "#harness/session-machine/view.js";
 import { cleanupHitl } from "./record.js";
 import type { ModelMessage } from "ai";
 import type { Transition } from "#harness/session-machine/commit.js";
@@ -89,7 +90,7 @@ export function adaptHumanInput(
           !cancelled &&
           (projection.activeTurnId !== undefined ||
             view.turn.suspended.length > 0 ||
-            view.turn.limitRequest !== undefined ||
+            openLimit(view) !== undefined ||
             signIns.length > 0 ||
             view.relayedRequestIds.size > 0 ||
             Object.values(projection.inputs).some((input) => input.status !== "settled"))

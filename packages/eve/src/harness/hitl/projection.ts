@@ -44,19 +44,13 @@ export function projectHumanInput(view: SessionView, step?: SuspendedStep): Huma
   for (const challenge of view.signIns) {
     if (challenge.candidateId !== undefined) continue;
     const key = challenge.attemptId ?? challenge.name;
-    const at =
-      view.turn.authorizationCoordinates?.[key] ??
-      view.projection.authorizations[key] ??
-      turnPosition(view.projection);
+    const at = view.projection.authorizations[key] ?? turnPosition(view.projection);
     if (step !== undefined && !sameStep(at, step.event)) continue;
     if (step === undefined && view.turn.suspended.some((held) => sameStep(at, held.event)))
       continue;
     requests[key] = { kind: "authorization", at, challenge };
   }
   if (step === undefined) {
-    const limit = view.turn.limitRequest;
-    if (limit !== undefined)
-      requests[limit.request.requestId] = { kind: "session-limit", ...limit };
     for (const input of Object.values(view.projection.inputs)) {
       if (input.status === "settled") continue;
       const route = view.turn.hitl?.relayedRoutes?.[input.request.requestId];
@@ -67,7 +61,7 @@ export function projectHumanInput(view: SessionView, step?: SuspendedStep): Huma
           request: input.request,
           route,
         };
-      else if (input.request.kind === "session-limit" && limit === undefined) {
+      else if (input.request.kind === "session-limit") {
         requests[input.request.requestId] = {
           kind: "session-limit",
           at: input,
@@ -157,12 +151,6 @@ export function projectedTurn(
   for (const id of Object.keys(prior.audit?.activeCandidates ?? {})) delete activeCandidates[id];
   Object.assign(activeCandidates, state.audit?.activeCandidates);
   const audit = state.audit === undefined ? undefined : { ...state.audit, activeCandidates };
-  const authorizationCoordinates = { ...view.turn.authorizationCoordinates };
-  for (const [id, request] of Object.entries(prior.requests))
-    if (request.kind === "authorization") delete authorizationCoordinates[id];
-  for (const [id, request] of Object.entries(state.requests))
-    if (request.kind === "authorization") authorizationCoordinates[id] = request.at;
-  const limit = Object.values(state.requests).find((request) => request.kind === "session-limit");
   return {
     ...view.turn,
     suspended,
@@ -180,11 +168,6 @@ export function projectedTurn(
         relayedAuthorizations: state.relayedAuthorizations,
       }),
     },
-    authorizationCoordinates,
-    ...(at === undefined && {
-      limitRequest:
-        limit?.kind === "session-limit" ? { at: limit.at, request: limit.request } : undefined,
-    }),
   };
 }
 

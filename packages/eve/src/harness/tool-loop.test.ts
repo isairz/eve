@@ -1,3 +1,4 @@
+import { openLimit } from "#harness/session-machine/view.js";
 import { context as otelContext, trace } from "#compiled/@opentelemetry/api/index.js";
 import {
   type FilePart,
@@ -2141,7 +2142,7 @@ describe("createToolLoopHarness", () => {
         .size,
     ).toBe(0);
     expect(
-      sessionView(storedProjection(result.session.state), result.session.state).turn.limitRequest,
+      openLimit(sessionView(storedProjection(result.session.state), result.session.state)),
     ).toBeUndefined();
     expect(vi.mocked(ToolLoopAgent)).not.toHaveBeenCalled();
     expect(events.some((event) => event.type.endsWith(".failed"))).toBe(false);

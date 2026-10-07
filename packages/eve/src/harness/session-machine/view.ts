@@ -8,6 +8,7 @@ import type { SessionStateMap, StepInput } from "#harness/types.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 import {
   initialSessionProjection,
+  openInputs,
   turnCoordinates,
   type SessionProjection,
 } from "#protocol/session-projection.js";
@@ -158,4 +159,9 @@ export type {
 /** The routes owned by the machine, for workflow-side dispatch selectors. */
 export function relayedRoutes(state: SessionStateMap | undefined) {
   return readTurnState(state).hitl?.relayedRoutes ?? {};
+}
+
+/** The budget question is a lifecycle fact, not duplicated execution state. */
+export function openLimit(view: SessionView) {
+  return openInputs(view.projection).find((input) => input.request.kind === "session-limit");
 }

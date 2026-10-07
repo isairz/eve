@@ -1,3 +1,4 @@
+import { openLimit } from "#harness/session-machine/view.js";
 import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
 
@@ -541,12 +542,10 @@ describe("answers", () => {
     await machine.apply({
       turn: {
         ...machine.view().turn,
-        suspended: machine
-          .view()
-          .turn.suspended.map((step) => ({
-            ...step,
-            approvalKeys: { "approval-call-1": "deploy:api" },
-          })),
+        suspended: machine.view().turn.suspended.map((step) => ({
+          ...step,
+          approvalKeys: { "approval-call-1": "deploy:api" },
+        })),
       },
       events: [],
     });
@@ -627,15 +626,15 @@ describe("answers", () => {
       expect(machine.events.slice(saved)).toEqual([]);
       expect(machine.events.filter((type) => type === "turn.cancelled")).toHaveLength(1);
       expect(machine.events.filter((type) => type === "input.resolved")).toHaveLength(1);
-      expect(machine.view().turn.limitRequest).toBeUndefined();
+      expect(openLimit(machine.view())).toBeUndefined();
     });
 
     it("queues a message behind the budget question", async () => {
       const machine = await exhausted();
 
-      const decision = await respond(machine, { message: "Any update?" });
+      await respond(machine, { message: "Any update?" });
 
-      expect(decision.turn.limitRequest).toBeDefined();
+      expect(openLimit(machine.view())).toBeDefined();
       expect(machine.view().turn.queued?.message).toBe("Any update?");
     });
   });

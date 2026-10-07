@@ -1,3 +1,4 @@
+import { openLimit } from "#harness/session-machine/view.js";
 import { cleanupHitl } from "./record.js";
 import { applyRecordedSettlements } from "./approval.js";
 import { authorizationRequested } from "./authorization.js";
@@ -81,7 +82,7 @@ export function beforeStep(
         continue;
       if (
         arrival.type === "message.received" &&
-        (current.turn.hitl?.readsResults === true || current.turn.limitRequest !== undefined) &&
+        (current.turn.hitl?.readsResults === true || openLimit(current) !== undefined) &&
         typedAnswers(projectHumanInput(current), arrival.text, "own").length === 0
       ) {
         if (step === undefined)
@@ -101,7 +102,7 @@ export function beforeStep(
       if (
         current.turn.hitl?.readsResults === true &&
         arrival.type === "input.answered" &&
-        current.turn.limitRequest === undefined
+        openLimit(current) === undefined
       ) {
         if (step === undefined)
           current = {

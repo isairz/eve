@@ -53,8 +53,6 @@ export interface SuspendedStep {
 
 export interface TurnState {
   readonly hitl?: HitlRecord;
-  readonly authorizationCoordinates?: Readonly<Record<string, StepCoordinates>>;
-  readonly limitRequest?: { readonly at: StepCoordinates; readonly request: InputRequest };
   /** Input that arrived before it could run: a partial answer, or input behind a policy pass. */
   readonly queued?: StepInput;
   readonly suspended: readonly SuspendedStep[];
@@ -77,9 +75,7 @@ export function writeTurnState<T extends { readonly state?: SessionStateMap }>(
     turn.suspended.length === 0 &&
     turn.queued === undefined &&
     turn.grants.length === 0 &&
-    !hasHitlRecord(turn.hitl) &&
-    Object.keys(turn.authorizationCoordinates ?? {}).length === 0 &&
-    turn.limitRequest === undefined
+    !hasHitlRecord(turn.hitl)
   ) {
     delete state[TURN_STATE_KEY];
   } else {
