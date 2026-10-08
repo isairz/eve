@@ -135,23 +135,79 @@ describe("executeWebFetchTool", () => {
     expect(result.content).toContain("World");
   });
 
-  it("returns raw HTML when format is html", async () => {
-    const html = "<html><body><h1>Hello</h1></body></html>";
+  it.each(["markdown", "text"] as const)(
+    "converts headerless HTML to %s before applying the output budget",
+    async (format) => {
+      const html = `<!doctype html><html><head><script>${"/* telemetry */\n".repeat(5000)}</script>
+<title>Example guide</title></head><body><h1>Setup</h1>
+<p>Connect over Wi-Fi &amp; Bluetooth.</p></body></html>`;
+      requestPublicUrlMock.mockResolvedValueOnce(new Response(new TextEncoder().encode(html)));
 
+      const result = await executeWebFetchTool({ format, url: "https://example.com" });
+
+      expect(result.content).toContain(format === "markdown" ? "# Setup" : "Setup");
+      expect(result.content).toContain("Connect over Wi-Fi & Bluetooth.");
+      expect(result.content).not.toMatch(/telemetry|<script>/);
+      expect(result.contentType).toBe("");
+      expect(result.truncated).toBe(false);
+    },
+  );
+
+  it.each([undefined, ""])("converts an HTML root with Content-Type %s", async (contentType) => {
     requestPublicUrlMock.mockResolvedValueOnce(
-      new Response(html, {
-        headers: { "Content-Type": "text/html" },
-        status: 200,
-      }),
+      new Response(
+        new TextEncoder().encode(' \n<HTML lang="en"><body><h1>Setup</h1></body></HTML>'),
+        {
+          headers: contentType === undefined ? {} : { "Content-Type": contentType },
+        },
+      ),
     );
 
-    const result = (await executeWebFetchTool({
-      format: "html",
-      url: "https://example.com",
-    })) as { content: string };
+    const result = await executeWebFetchTool({ url: "https://example.com" });
 
-    expect(result.content).toBe(html);
+    expect(result.content).toBe("# Setup");
+    expect(result.contentType).toBe("");
   });
+
+  it("preserves the HTTP failure status when converting headerless HTML", async () => {
+    requestPublicUrlMock.mockResolvedValueOnce(
+      new Response(
+        new TextEncoder().encode(
+          "<!DOCTYPE html><html><body><h1>Service unavailable</h1><p>Try again later.</p></body></html>",
+        ),
+        { status: 503 },
+      ),
+    );
+
+    const result = await executeWebFetchTool({ url: "https://example.com" });
+
+    expect(result.content).toBe(
+      "Request failed with status code: 503\n\n# Service unavailable\n\nTry again later.",
+    );
+    expect(result.contentType).toBe("");
+    expect(result.truncated).toBe(false);
+  });
+
+  it.each(["text/html", ""])(
+    "returns raw HTML when format is html and Content-Type is %s",
+    async (contentType) => {
+      const html = "<html><body><h1>Hello</h1></body></html>";
+
+      requestPublicUrlMock.mockResolvedValueOnce(
+        new Response(html, {
+          headers: { "Content-Type": contentType },
+          status: 200,
+        }),
+      );
+
+      const result = (await executeWebFetchTool({
+        format: "html",
+        url: "https://example.com",
+      })) as { content: string };
+
+      expect(result.content).toBe(html);
+    },
+  );
 
   it("extracts plain text from HTML when format is text", async () => {
     const html = "<html><body><script>evil()</script><h1>Title</h1><p>Body text.</p></body></html>";
@@ -173,21 +229,24 @@ describe("executeWebFetchTool", () => {
     expect(result.content).not.toContain("evil");
   });
 
-  it("returns non-HTML content as-is regardless of format", async () => {
-    const json = '{"key": "value"}';
-
+  it.each([
+    { body: "<!doctype html><html>Source example</html>", contentType: "text/plain" },
+    { body: '{"example":"<html>source</html>"}', contentType: "application/json" },
+    { body: "Use <html> to start a document.", contentType: "" },
+    { body: "<htmlish>Not a document</htmlish>", contentType: "" },
+    { body: "<html-widget>Not a document</html-widget>", contentType: "" },
+    { body: "<p>An HTML fragment</p>", contentType: "" },
+  ])("returns non-HTML content as-is: $body", async ({ body, contentType }) => {
     requestPublicUrlMock.mockResolvedValueOnce(
-      new Response(json, {
-        headers: { "Content-Type": "application/json" },
-        status: 200,
+      new Response(new TextEncoder().encode(body), {
+        headers: { "Content-Type": contentType },
       }),
     );
 
-    const result = (await executeWebFetchTool({
-      url: "https://api.example.com/data",
-    })) as { content: string };
+    const result = await executeWebFetchTool({ url: "https://example.com" });
 
-    expect(result.content).toBe(json);
+    expect(result.content).toBe(body);
+    expect(result.contentType).toBe(contentType);
   });
 
   it("returns non-ok responses as plain-text failures", async () => {

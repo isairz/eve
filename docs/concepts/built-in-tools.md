@@ -153,6 +153,8 @@ export default disableTool();
 
 `web_fetch` fetches URLs from the app runtime. It follows up to ten redirects and checks every destination for SSRF safety. Non-success responses return plain text with the response body when available.
 
+The default `markdown` format and the `text` format convert HTML before applying the output limit. If `Content-Type` is missing or empty, conversion also recognizes documents starting with `<!doctype html>` or `<html>` after optional whitespace. Explicit non-HTML content types remain unchanged. The `html` format returns the source without conversion.
+
 ```sh
 eve add tool/web_fetch
 ```
