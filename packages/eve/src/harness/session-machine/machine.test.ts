@@ -252,6 +252,33 @@ describe("session machine", () => {
     });
   });
 
+  it("settles the specified suspended step when siblings reuse a call id", () => {
+    const base = createMachine().view();
+    const first = { turnId: "turn_1", sequence: 1, stepIndex: 0 };
+    const second = { ...first, stepIndex: 1 };
+    const view = {
+      ...base,
+      turn: {
+        ...base.turn,
+        suspended: [first, second].map((event) => ({
+          event,
+          messages: [callMessage("reused")],
+          requests: [],
+          tasks: [],
+        })),
+      },
+    };
+    const settled = settle(view, { results: [result("reused")] }, second);
+    expect(settled.turn.suspended).toEqual([view.turn.suspended[0]]);
+    expect(settled.commit).toEqual([
+      callMessage("reused"),
+      { role: "tool", content: [result("reused").part] },
+    ]);
+    expect(settle(view, { results: [result("reused")] }).turn.suspended).toEqual([
+      view.turn.suspended[1],
+    ]);
+  });
+
   it("holds a partial answer until the rest of its batch arrives", async () => {
     const machine = createMachine();
     await parkOnApprovals(machine, "call-1", "call-2");

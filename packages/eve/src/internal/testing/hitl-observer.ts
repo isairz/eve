@@ -10,7 +10,9 @@ import { projectHumanInput } from "#harness/hitl/projection.js";
 import { askedCallIds, grantedApprovalKeys } from "#harness/hitl/approval.js";
 import { candidateAuthorizationAttempts } from "#harness/hitl/approval-candidate.js";
 import type { Next } from "#harness/hitl/command.js";
-import { approvedCallsOf, heldCalls, type HeldCalls } from "#harness/hitl/held-step.js";
+import { pendingTaskToolCalls, type TaskToolCall } from "#execution/tasks/calls.js";
+import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
+import type { HeldStep } from "#harness/hitl/state.js";
 import type { RequestAt } from "#harness/hitl/input.js";
 import { relayedRequestIds } from "#harness/hitl/relay.js";
 import { awaitedAuthorizations } from "#harness/hitl/authorization.js";
@@ -179,4 +181,92 @@ export interface Steering {
    * waits for the step boundary that forwards it.
    */
   readonly interruptsGeneration: boolean;
+}
+
+/** What a call of the held step waits on: a person's answer, or runtime work. */
+export type HeldCallWait = "person" | "runtime";
+
+/**
+ * A call of the held step without a result. A call that asked for a
+ * authorization is never one: it leaves its step, and the model calls it again.
+ */
+export interface HeldCall {
+  readonly callId: string;
+  readonly toolName: string;
+  readonly waitsOn: HeldCallWait;
+}
+
+/** The held step as the runtime reads it. */
+export interface HeldCalls {
+  readonly at: RequestAt;
+  readonly calls: readonly HeldCall[];
+  /** The workflow runs its runtime calls without a result start. */
+  readonly tasks: readonly RuntimeWorkflowTaskRequest[];
+  readonly approvers?: Readonly<Record<string, SessionAuthContext>>;
+  /** Its task tool calls without a result, which the session answers. */
+  readonly taskToolCalls: readonly TaskToolCall[];
+}
+
+/**
+ * Reads the held step: each call that waits, tagged with what it waits
+ * on. `asked` names the calls whose approvals are open.
+ */
+export function heldCalls(
+  step: HeldStep | undefined,
+  asked: ReadonlySet<string>,
+): HeldCalls | undefined {
+  if (step === undefined) return undefined;
+  const answered = answeredCallIds(step.messages);
+  const tasks = (step.runtime?.tasks ?? []).filter((task) => !answered.has(task.callId));
+  const taskToolCalls = step.runtime === undefined ? [] : pendingTaskToolCalls(step.messages);
+  const unanswered = unansweredCalls(step.messages);
+  const toolNames = new Map(unanswered.map((call) => [call.toolCallId, call.toolName]));
+  const calls: HeldCall[] = [
+    ...tasks.map((task) => ({
+      callId: task.callId,
+      toolName: task.toolName,
+      waitsOn: "runtime" as const,
+    })),
+    ...taskToolCalls.map((call) => ({
+      callId: call.callId,
+      toolName: toolNames.get(call.callId) ?? call.kind,
+      waitsOn: "runtime" as const,
+    })),
+  ];
+  for (const call of unanswered) {
+    if (asked.has(call.toolCallId)) {
+      calls.push({ callId: call.toolCallId, toolName: call.toolName, waitsOn: "person" });
+    }
+  }
+  return { at: step.at, calls, taskToolCalls, tasks, approvers: step.runtime?.approvers };
+}
+
+export function unansweredCalls(
+  messages: readonly ModelMessage[],
+): { readonly toolCallId: string; readonly toolName: string }[] {
+  const answered = answeredCallIds(messages);
+  const calls: { toolCallId: string; toolName: string }[] = [];
+  for (const message of messages) {
+    if (message.role !== "assistant" || typeof message.content === "string") continue;
+    for (const part of message.content) {
+      if (part.type !== "tool-call" || part.providerExecuted === true) continue;
+      if (!answered.has(part.toolCallId)) calls.push(part);
+    }
+  }
+  return calls;
+}
+
+function answeredCallIds(messages: readonly ModelMessage[]): Set<string> {
+  const answered = new Set<string>();
+  for (const message of messages) {
+    if (typeof message.content === "string") continue;
+    for (const part of message.content) {
+      if (part.type === "tool-result") answered.add(part.toolCallId);
+    }
+  }
+  return answered;
+}
+
+function approvedCallsOf(step: HeldStep | undefined) {
+  return step?.approved?.length ? { at: step.at, requests: step.approved } : undefined;
 }

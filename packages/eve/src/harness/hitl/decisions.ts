@@ -7,8 +7,17 @@ import type { SessionView, StepCoordinates, TurnState } from "#harness/session-m
 import { foldSession } from "#protocol/session-projection.js";
 import type { Command, EffectCommand } from "./command.js";
 import type { Transition } from "#harness/session-machine/commit.js";
-import type { ModelMessage } from "ai";
-import { cancel, hold } from "#harness/session-machine/transitions.js";
+import type { ModelMessage, ToolResultPart } from "ai";
+import {
+  cancel,
+  hold,
+  suspend,
+  settle,
+  withoutApproved,
+  withResult,
+  stepCallIds,
+} from "#harness/session-machine/transitions.js";
+import { withoutCalls, assertUniqueCallIds } from "./held-step.js";
 import type { UnstampedMessageStreamEvent } from "#protocol/message.js";
 import type { FromStep, FromInbox, FromRelay, FromHost, PolicyCheck, PolicyRun } from "./input.js";
 import { typedAnswers } from "./input-typed-reply.js";
@@ -77,6 +86,7 @@ export function beforeStep(
       signIns: projectedSignIns(current, before, reduced.state),
     };
     commands.push(...reduced.events);
+    current = settleReady(current, commands, step.event);
   }
   const authorizations: Extract<FromHost, { readonly type: "authorization.resumed" }>[] = [];
   for (const step of [...view.turn.suspended, undefined]) {
@@ -172,6 +182,12 @@ export function beforeStep(
         signIns: projectedSignIns(current, before, reduced.state),
       };
       commands.push(...reduced.events);
+      if (
+        selected !== undefined &&
+        arrival.type !== "cancel.replayed" &&
+        arrival.type !== "cancel.requested"
+      )
+        current = settleReady(current, commands, selected.event);
     }
   }
   return finishDecision(
@@ -206,10 +222,122 @@ export function afterStep(
   for (const input of inputs) {
     if ("at" in input && !sameStep(input.at, response.at))
       throw new TypeError("A model response cannot contain another step's requests.");
-    const selected =
-      input.type === "budget.exceeded"
-        ? undefined
-        : current.turn.suspended.find((step) => sameStep(step.event, response.at));
+    let selected = current.turn.suspended.find((step) => sameStep(step.event, response.at));
+    if (input.type === "actions.dispatched") {
+      const tasks = [...(selected?.tasks ?? []), ...input.tasks];
+      assertUniqueCallIds(tasks);
+      const step = {
+        ...(selected ?? { event: response.at, messages: input.messages, requests: [] }),
+        tasks,
+        approvers: selected?.approvers,
+      };
+      current = {
+        ...current,
+        turn:
+          selected === undefined
+            ? suspend(current.turn, step)
+            : {
+                ...current.turn,
+                suspended: current.turn.suspended.map((candidate) =>
+                  candidate === selected ? step : candidate,
+                ),
+              },
+      };
+      continue;
+    }
+    if (input.type === "actions.settled") {
+      if (selected === undefined) {
+        commands.push(
+          ...input.results.map((message): Command => ({ type: "appendHistory", message })),
+        );
+      } else {
+        const stopped = new Set(input.authorizations?.callIds ?? []);
+        const parts = input.results.flatMap((message) =>
+          message.role === "tool"
+            ? message.content.filter((part): part is ToolResultPart => part.type === "tool-result")
+            : [],
+        );
+        const finished = new Set([
+          ...stopped,
+          ...(input.running ?? []).map((task) => task.callId),
+          ...parts.map((part) => part.toolCallId),
+          ...(input.approved === undefined
+            ? []
+            : (input.approved.callIds ??
+              selected.approved?.map((request) => request.action.callId) ??
+              [])),
+        ]);
+        const responseMessages = [
+          ...selected.messages,
+          ...input.results.filter((message) => message.role !== "tool"),
+        ];
+        const calls = stepCallIds({ messages: responseMessages });
+        const messages = parts
+          .filter((part) => !calls.has(part.toolCallId))
+          .reduce<ModelMessage[]>((messages, part) => withResult(messages, part), responseMessages);
+        const step = withoutApproved(
+          {
+            ...selected,
+            messages: withoutCalls(messages, stopped),
+            tasks: [...selected.tasks, ...(input.running ?? [])],
+            approvers: { ...selected.approvers, ...input.runningApprovers },
+            ...(input.approved?.following !== undefined && { following: input.approved.following }),
+          },
+          finished,
+        );
+        assertUniqueCallIds(step.tasks);
+        current = {
+          ...current,
+          turn: {
+            ...current.turn,
+            suspended: current.turn.suspended.map((candidate) =>
+              candidate === selected ? step : candidate,
+            ),
+          },
+        };
+        current = settleReady(
+          current,
+          commands,
+          response.at,
+          parts.filter((part) => calls.has(part.toolCallId)),
+        );
+      }
+      if (input.authorizations !== undefined) {
+        const before = projectHumanInput(current);
+        const reduced = reduce(
+          before,
+          {
+            type: "authorization.required",
+            at: response.at,
+            ...input.authorizations,
+            messages: [],
+            requester: null,
+          },
+          "post-step",
+          verdictsOf(input),
+        );
+        current = {
+          ...current,
+          turn: projectedTurn(current, reduced.state),
+          signIns: projectedSignIns(current, before, reduced.state),
+        };
+        commands.push(...reduced.events);
+      }
+      continue;
+    }
+    if (input.type === "approval.requested" && selected === undefined) {
+      current = {
+        ...current,
+        turn: suspend(current.turn, {
+          event: response.at,
+          messages: input.messages,
+          requests: [],
+          tasks: [],
+        }),
+      };
+      selected = current.turn.suspended.at(-1);
+    }
+    if (input.type === "budget.exceeded") selected = undefined;
     const before = projectHumanInput(current, selected);
     const reduced = reduce(
       before,
@@ -232,8 +360,39 @@ export function afterStep(
       signIns: projectedSignIns(current, before, reduced.state),
     };
     commands.push(...reduced.events);
+    if (selected !== undefined) current = settleReady(current, commands, response.at);
   }
   return finishDecision(view, { turn: current.turn, signIns: current.signIns, commands });
+}
+
+/** Settle one originating step without inspecting or committing a sibling's transcript. */
+function settleReady(
+  view: SessionView,
+  commands: Command[],
+  at: StepCoordinates,
+  parts: readonly ToolResultPart[] = [],
+): SessionView {
+  const step = view.turn.suspended.find((step) => sameStep(step.event, at));
+  if (step === undefined || ((step.approved?.length ?? 0) > 0 && stepCallIds(step).size === 0))
+    return view;
+  const next = settle(
+    { ...view, turn: { ...view.turn, suspended: [step] } },
+    { results: parts.map((part) => ({ part })) },
+    at,
+  );
+  commands.push(...next.commit.map((message): Command => ({ type: "appendHistory", message })));
+  const suspended = view.turn.suspended.flatMap((candidate) =>
+    candidate === step ? next.turn.suspended : [candidate],
+  );
+  return {
+    ...view,
+    turn: {
+      ...view.turn,
+      suspended,
+      ...(next.turn.suspended.length === 0 &&
+        step.following !== undefined && { queued: step.following }),
+    },
+  };
 }
 
 /** Pure dry run across the same originating-step lenses as the committed decision. */

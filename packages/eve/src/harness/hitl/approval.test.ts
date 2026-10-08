@@ -1,3 +1,4 @@
+import { CANCELLED_CALL_RESULT } from "#harness/session-machine/transitions.js";
 import { LEGACY_GRANTS_KEY } from "#harness/session-machine/migrate-legacy.js";
 import { beforeStep } from "./decisions.js";
 import { arrivalsOf } from "./input-arrival.js";
@@ -279,7 +280,12 @@ describe("tool approvals", () => {
     ]);
     expect(turn.appended()).toEqual([
       ...stepResponse([approval("deploy")]),
-      { content: [notRun("deploy", "Cancelled before anyone answered.")], role: "tool" },
+      {
+        content: [
+          { ...notRun("deploy", ""), output: { type: "text", value: CANCELLED_CALL_RESULT } },
+        ],
+        role: "tool",
+      },
     ]);
     expect(turn.storesNothing()).toBe(true);
   });
@@ -374,8 +380,8 @@ describe("tool approvals", () => {
 
     expect(turn.appended().at(-1)).toEqual({
       content: [
-        notRun("deploy", "Cancelled before anyone answered."),
-        notRun("lookup", "Cancelled before anyone answered."),
+        { ...notRun("deploy", ""), output: { type: "text", value: CANCELLED_CALL_RESULT } },
+        { ...notRun("lookup", ""), output: { type: "text", value: CANCELLED_CALL_RESULT } },
       ],
       role: "tool",
     });

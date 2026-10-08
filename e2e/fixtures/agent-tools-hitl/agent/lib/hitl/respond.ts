@@ -52,7 +52,9 @@ export function respond(request: MockModelRequest): MockModelResponse {
   const outcome = (id: string): string => {
     const found = result(id);
     if (found === undefined) return "missing";
-    return found.isError ? "not run" : `done ${JSON.stringify(found.output)}`;
+    return found.isError || found.output === "The turn was cancelled before this call finished."
+      ? "not run"
+      : `done ${JSON.stringify(found.output)}`;
   };
   const run = (calls: MockModelToolCall[], answer: () => string): MockModelResponse => {
     const missing = calls.filter((tool) => result(tool.id!) === undefined);

@@ -5,7 +5,6 @@ import {
   cancelApprovals,
   isPolicyGated,
   openApprovals,
-  settleCalls,
   steerPastApprovals,
 } from "./approval.js";
 import {
@@ -15,7 +14,6 @@ import {
   proposeCandidates,
   staleCandidates,
 } from "./approval-candidate.js";
-import { cancelStep, dispatchCalls, ranApproved, takeQueued } from "./held-step.js";
 import type { Phase } from "./host.js";
 import type { Input, PolicyCheck, PolicyRun } from "./input.js";
 import {
@@ -29,7 +27,6 @@ import {
 import {
   closeAuthorizations,
   completeAuthorization,
-  openAuthorizations,
   requireAuthorizations,
 } from "./authorization.js";
 import { type HumanInputState, type Reduced, isOpenRelayed } from "./state.js";
@@ -60,7 +57,7 @@ export function verdictsOf(input: Input): VerdictOf {
 
 export function reduce(
   state: HumanInputState,
-  input: Input,
+  input: Exclude<Input, { readonly type: "actions.dispatched" | "actions.settled" }>,
   phase: Phase,
   verdictOf: VerdictOf,
 ): Reduced {
@@ -124,29 +121,6 @@ export function reduce(
       );
     case "relayed.withdrawn":
       return withdrawAsk(state, input);
-    case "actions.dispatched":
-      return { events: [], state: dispatchCalls(state, input) };
-    case "actions.settled": {
-      const { authorizations } = input;
-      const at = state.held?.at;
-      const ran =
-        input.approved === undefined
-          ? state
-          : ranApproved(state, input.approved.following, input.approved.callIds);
-      const settled = settleCalls(
-        ran,
-        input.results,
-        input.running,
-        authorizations?.callIds,
-        input.runningApprovers,
-      );
-      if (authorizations === undefined || at === undefined) return settled;
-      // The approved calls that asked for an authorization left the step; their
-      // authorizations open at the step that asked, and the turn waits on them.
-      return then(settled, (next) =>
-        openAuthorizations(next, { at, challenges: authorizations.challenges, requester: null }),
-      );
-    }
     // A callback for an attempt no longer open completes nothing.
     case "authorization.completed": {
       const own = completeAuthorization(state, input);
@@ -159,8 +133,12 @@ export function reduce(
       return expireCandidates(state, input.now);
     case "context.cleared":
       return { events: [], state: clearedState(state) };
-    case "input.resumed":
-      return takeQueued(state);
+    case "input.resumed": {
+      const { queued, ...rest } = state;
+      return queued === undefined
+        ? { events: [], state }
+        : { events: [{ type: "resumeInput", input: queued }], state: rest };
+    }
     case "cancel.replayed":
       return carryCancel(state);
     default: {
@@ -179,7 +157,7 @@ export function reduce(
  */
 function cancel(state: HumanInputState, phase: Phase): Reduced {
   if (phase !== "parked") {
-    const closed = closeOwn(state, { step: true });
+    const closed = closeOwn(state);
     return {
       events: [...closed.events, { closed: "own", type: "cancelTurn" }],
       state: closed.state,
@@ -188,7 +166,7 @@ function cancel(state: HumanInputState, phase: Phase): Reduced {
   return then(
     staleCandidates(state, CANCELLED_REASON),
     (next) => withdrawRelayed(next),
-    (next) => closeOwn(next, { step: true }),
+    (next) => closeOwn(next),
   );
 }
 
@@ -199,18 +177,17 @@ function cancel(state: HumanInputState, phase: Phase): Reduced {
  * the parked settle to cancel with what the step left.
  */
 function carryCancel(state: HumanInputState): Reduced {
-  const closed = closeOwn(state, { step: false });
+  const closed = closeOwn(state);
   return { events: closed.events.filter((event) => event.type !== "publish"), state: closed.state };
 }
 
 /** Closes what the turn's own calls wait on, as cancelled: its step too, with `step`. */
-function closeOwn(state: HumanInputState, options: { readonly step: boolean }): Reduced {
+function closeOwn(state: HumanInputState): Reduced {
   return then(
     staleCandidates(state, CANCELLED_REASON),
     (next) => endRelayedAuthorizations(next),
     withdrawBudget,
     cancelApprovals,
-    (next) => (options.step ? cancelStep(next) : { events: [], state: next }),
     (next) => closeAuthorizations(next, { outcome: "declined", reason: CANCELLED_REASON }),
   );
 }

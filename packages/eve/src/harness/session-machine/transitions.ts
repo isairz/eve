@@ -256,11 +256,22 @@ export interface SettledCall {
  * Results reach the steps that made their calls. A step whose every call now has a result
  * commits to history, where the model reads it.
  */
-export function settle(view: SessionView, input: { readonly results: readonly SettledCall[] }) {
+export function settle(
+  view: SessionView,
+  input: { readonly results: readonly SettledCall[] },
+  at?: StepCoordinates,
+) {
   const events: UnstampedMessageStreamEvent[] = [];
   const steps = [...view.turn.suspended];
   for (const { part, result } of input.results) {
-    const index = steps.findIndex((step) => stepCallIds(step).has(part.toolCallId));
+    const index = steps.findIndex(
+      (step) =>
+        (at === undefined ||
+          (step.event.turnId === at.turnId &&
+            step.event.sequence === at.sequence &&
+            step.event.stepIndex === at.stepIndex)) &&
+        stepCallIds(step).has(part.toolCallId),
+    );
     const step = steps[index];
     if (step === undefined) continue;
     steps[index] = withoutApproved(

@@ -1,10 +1,7 @@
 export const STATE_KEY = "eve.harness.humanInput";
 export const LEGACY_BATCH_KEY = "eve.runtime.pendingCoordinationBatch";
 export const LEGACY_GRANTS_KEY = "eve.runtime.hitl.approvedTools";
-import type {
-  WorkflowAskRoute,
-  ProxyInputQuestion,
-} from "#harness/hitl/index.js";
+import type { WorkflowAskRoute, ProxyInputQuestion } from "#harness/hitl/index.js";
 import type { StepCoordinates as PendingInputBatchEvent } from "#harness/session-machine/view.js";
 import { inputOptionSchema, type InputOption, type InputRequestKind } from "#shared/input.js";
 import {
@@ -33,7 +30,7 @@ import type { InputRequest } from "#shared/input.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 
 import { adoptCandidateAuthorizations } from "#harness/hitl/approval-candidate.js";
-import { withMessages } from "#harness/hitl/held-step.js";
+import { withResult } from "./transitions.js";
 import type { RequestAt } from "#harness/hitl/input.js";
 import { parseState, type HeldStep, type HumanInputState } from "#harness/hitl/state.js";
 
@@ -54,7 +51,16 @@ export function readState(sessionState: SessionStateMap | undefined): HumanInput
   const { held } = state;
   const step: HeldStep = {
     at: held?.at ?? legacy.event,
-    messages: withMessages(legacy.responseMessages, held?.messages ?? []),
+    messages: (held?.messages ?? []).reduce<ModelMessage[]>(
+      (messages, message) =>
+        message.role === "tool"
+          ? message.content.reduce<ModelMessage[]>(
+              (joined, part) => (part.type === "tool-result" ? withResult(joined, part) : joined),
+              messages,
+            )
+          : [...messages, message],
+      [...legacy.responseMessages],
+    ),
     runtime: { tasks: [...(held?.runtime?.tasks ?? []), ...legacy.tasks] },
     ...(legacy.followingInput !== undefined && { following: legacy.followingInput }),
   };

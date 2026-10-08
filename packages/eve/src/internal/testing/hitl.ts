@@ -19,7 +19,7 @@ import { migrateSessionState } from "#harness/session-machine/migrate.js";
 import { projectHumanInput } from "#harness/hitl/projection.js";
 import { readTurnState } from "#harness/session-machine/state.js";
 import { foldSession } from "#protocol/session-projection.js";
-import type { UnstampedMessageStreamEvent } from "#protocol/message.js";
+import { createTurnStartedEvent, type UnstampedMessageStreamEvent } from "#protocol/message.js";
 import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 import type { InputRequest, InputResponse } from "#shared/input.js";
 
@@ -75,13 +75,18 @@ export class Turn {
 
   /** The turn after the session sees `input`. */
   input(input: Input): Turn {
-    const view = sessionView(storedProjection(this.state), this.state);
+    let view = sessionView(storedProjection(this.state), this.state);
     const post = [
       "approval.requested",
       "authorization.required",
       "actions.dispatched",
       "actions.settled",
     ].includes(input.type);
+    // Model steps execute inside an open turn, even when a rule fixture starts at the response.
+    if (post && view.projection.activeTurnId === undefined) {
+      const at = "at" in input ? input.at : AT;
+      view = { ...view, projection: foldSession(view.projection, createTurnStartedEvent(at)) };
+    }
     const decision = post
       ? afterStep(view, {
           ...input,

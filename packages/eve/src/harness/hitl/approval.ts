@@ -1,3 +1,4 @@
+import { withResult } from "#harness/session-machine/transitions.js";
 import { isApprovalRequest } from "#harness/input-request-class.js";
 import type { ModelMessage, ToolResultPart } from "ai";
 
@@ -11,21 +12,12 @@ import {
   type InputResolution,
 } from "#protocol/message.js";
 import type { HarnessToolMap } from "#harness/types.js";
-import type { RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 import type { InputRequest, InputResponse } from "#shared/input.js";
 
 import type { Command } from "./command.js";
 import type { Input, RequestAt } from "./input.js";
 import { EMPTY_AUDIT, type ApprovalAudit, type Reduced, type OpenApproval } from "./state.js";
-import {
-  heldCalls,
-  settleStep,
-  holdStep,
-  withMessages,
-  withoutCalls,
-  withResults,
-  type HeldStepState,
-} from "./held-step.js";
+import type { HeldStep } from "./state.js";
 
 // The tool approval rules. A model step's calls open one request each; the
 // step's approvals resolve together once each has an answer, or when the turn
@@ -34,7 +26,8 @@ import {
 // held out of history and settles once every call it made has a result.
 
 /** The state the approval rules read and change. */
-interface ApprovalState extends HeldStepState {
+interface ApprovalState {
+  readonly held?: HeldStep;
   readonly requests: Readonly<Record<string, { readonly kind: string }>>;
   readonly grants: readonly string[];
   readonly audit?: ApprovalAudit;
@@ -148,7 +141,7 @@ export function openApprovals<S extends ApprovalState>(
   }
   return {
     events: [publish(createInputRequestedEvent({ ...input.at, requests: input.requests }))],
-    state: holdStep({ ...state, requests }, input.at, input.messages),
+    state: { ...state, requests },
   };
 }
 
@@ -316,59 +309,6 @@ export function cancelApprovals<S extends ApprovalState>(state: S): Reduced<S> {
   return { events, state: { ...state, requests: withoutApprovals(state.requests) } };
 }
 
-/**
- * Calls of the held step settled: approved calls eve ran, or its runtime
- * calls. Their results join the step; `stopped`, the calls that asked for a
- * authorization, leave it, and `running`, approved calls that run as runtime work,
- * keep it waiting for their results. Once none of its calls waits, on a
- * person or on runtime work, the step joins history and the turn goes on.
- */
-export function settleCalls<S extends ApprovalState>(
-  state: S,
-  results: readonly ModelMessage[],
-  running: readonly RuntimeWorkflowTaskRequest[] = [],
-  stopped: readonly string[] = [],
-  approvers: Readonly<Record<string, SessionAuthContext>> = {},
-): Reduced<S> {
-  const { held } = state;
-  // A step parked before steps were held out of history has its calls there.
-  if (held === undefined) {
-    return { events: results.map((message) => ({ message, type: "appendHistory" })), state };
-  }
-  const joined = withMessages(held.messages, results);
-  // Calls that asked for an authorization leave the step; the model calls them again.
-  const messages = stopped.length === 0 ? joined : withoutCalls(joined, new Set(stopped));
-  const finished = new Set([
-    ...running.map((task) => task.callId),
-    ...stopped,
-    ...results.flatMap((message) =>
-      message.role === "tool"
-        ? message.content.flatMap((part) => (part.type === "tool-result" ? [part.toolCallId] : []))
-        : [],
-    ),
-  ]);
-  const approved = held.approved?.filter((request) => !finished.has(request.action.callId));
-  const tasks = [...(held.runtime?.tasks ?? []), ...running];
-  const settled = {
-    ...state,
-    held: {
-      ...held,
-      approved,
-      messages,
-      ...((held.runtime !== undefined || running.length > 0) && {
-        runtime: { tasks, approvers: { ...held.runtime?.approvers, ...approvers } },
-      }),
-    },
-  };
-  if (
-    (settled.held.approved?.length ?? 0) > 0 ||
-    (heldCalls(settled.held, askedCallIds(state))?.calls.length ?? 0) > 0
-  ) {
-    return { events: [], state: settled };
-  }
-  return settleStep(settled, []);
-}
-
 /** The calls whose approvals are open, which wait on a person. */
 export function askedCallIds(state: ApprovalState): ReadonlySet<string> {
   return new Set(openApprovalsOf(state).map((approval) => approval.request.action.callId));
@@ -440,15 +380,38 @@ function resolveApprovals<S extends ApprovalState>(state: S): Reduced<S> {
   ];
   const resolved = { ...state, grants: [...grants], requests: withoutApprovals(state.requests) };
   if (approved.length === 0) {
-    const settled = settleCalls(resolved, notRun.length === 0 ? [] : [notRunMessage(notRun)]);
-    return { events: [...events, ...settled.events], state: settled.state };
+    if (resolved.held === undefined)
+      return {
+        events: [...events, { type: "appendHistory", message: notRunMessage(notRun) }],
+        state: resolved,
+      };
+    return {
+      events,
+      state: {
+        ...resolved,
+        held: {
+          ...resolved.held,
+          messages: notRun.reduce<ModelMessage[]>(
+            (messages, part) => withResult(messages, part),
+            [...resolved.held.messages],
+          ),
+        },
+      },
+    };
   }
   // The host runs the approved calls (`approvedCalls`); the step stays held
   // until their results settle it. A step parked before
   // steps were held out of history has its calls there: it holds only the
   // results, which join history after them.
   const step = resolved.held ?? { at, messages: [] };
-  const held = { ...step, approved, messages: withResults(step.messages, notRun) };
+  const held = {
+    ...step,
+    approved,
+    messages: notRun.reduce<ModelMessage[]>(
+      (messages, part) => withResult(messages, part),
+      [...step.messages],
+    ),
+  };
   return { events, state: { ...resolved, held } };
 }
 
